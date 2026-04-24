@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+httpx
+anthropic
+python-dotenv
+openpyxl
+python-multipart
+bcrypt
