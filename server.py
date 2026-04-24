@@ -27,6 +27,14 @@ def health():
     return {"status": "ok", "service": "smartstore_auto", "version": "2.0"}
 
 
+@app.get("/myip")
+async def myip():
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get("https://api.ipify.org?format=json")
+        return r.json()
+
+
 @app.post("/register-products")
 async def register_products(request: Request, background_tasks: BackgroundTasks):
     """n8n → 상품 등록 트리거 (body에 excel_path 또는 최신 파일 자동 선택)"""
