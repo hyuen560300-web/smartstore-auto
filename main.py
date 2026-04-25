@@ -172,6 +172,71 @@ class NaverCommerceAPI:
             )
             return r.status_code == 200
 
+    async def list_products(self, page: int = 1, size: int = 50) -> dict:
+        """등록된 상품 목록 조회"""
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.get(
+                f"{NAVER_BASE}/v2/products/search",
+                headers=await self._headers(),
+                params={"page": page, "size": size, "orderType": "NO"}
+            )
+            r.raise_for_status()
+            return r.json()
+
+    async def set_product_status(self, product_id: str, status: str) -> bool:
+        """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)"""
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.put(
+                f"{NAVER_BASE}/v2/products/{product_id}",
+                headers=await self._headers(),
+                json={"originProduct": {"statusType": status}}
+            )
+            return r.status_code == 200
+
+    async def delete_product(self, product_id: str) -> bool:
+        """상품 삭제"""
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.delete(
+                f"{NAVER_BASE}/v2/products/{product_id}",
+                headers=await self._headers()
+            )
+            return r.status_code in (200, 204)
+
+    async def update_price(self, product_id: str, price: int) -> bool:
+        """상품 가격 수정"""
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.put(
+                f"{NAVER_BASE}/v2/products/{product_id}",
+                headers=await self._headers(),
+                json={"originProduct": {"salePrice": price}}
+            )
+            return r.status_code == 200
+
+    async def confirm_orders(self, product_order_ids: list) -> bool:
+        """주문 발주확인 처리"""
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/pay-order/seller/product-orders/confirm",
+                headers=await self._headers(),
+                json={"productOrderIds": product_order_ids}
+            )
+            return r.status_code == 200
+
+    async def get_all_orders(self, days: int = 7) -> list:
+        """최근 N일 주문 전체 조회"""
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        from_dt = (now - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00.000Z")
+        to_dt = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.get(
+                f"{NAVER_BASE}/v1/pay-order/seller/product-orders",
+                headers=await self._headers(),
+                params={"from": from_dt, "to": to_dt, "pageSize": 300}
+            )
+            r.raise_for_status()
+            return r.json().get("data", {}).get("contents", [])
+
 
 # ─── 오너클랜 Excel 파서 ──────────────────────────────────────────────────────
 COLUMN_MAP = {
