@@ -292,9 +292,9 @@ def parse_excel(filepath):
     if not rows:
         return []
 
-    # 헤더 행 자동 감지 — 기본값 1 (오너클랜: row0=그룹헤더, row1=컬럼명)
-    header_idx = 1 if len(rows) > 1 else 0
-    for i, row in enumerate(rows[:5]):
+    # 헤더 행 자동 감지 — row1부터 탐색 (오너클랜 row0=그룹헤더라 건너뜀)
+    header_idx = min(1, len(rows) - 1)
+    for i, row in enumerate(rows[1:6], start=1):
         if row and sum(1 for v in row if _match_col(v)) >= 2:
             header_idx = i
             break
