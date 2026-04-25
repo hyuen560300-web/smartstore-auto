@@ -104,6 +104,70 @@ async def debug_naver():
     return JSONResponse(result)
 
 
+@app.post("/register-products-debug")
+async def register_products_debug():
+    """상품 등록 1개 동기 실행 — 에러 즉시 반환"""
+    from main import parse_excel, generate_product_copy, calculate_selling_price, get_product_image, build_product_payload, save_registered_code, load_registered_codes
+    from employees import employee_sourcing_manager, employee_ip_guardian, employee_season_planner, employee_trend_scout, employee_review_analyst
+
+    files = sorted(Path(EXCEL_FOLDER).glob("*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
+    if not files:
+        return JSONResponse({"step": "excel", "error": "Excel 파일 없음"})
+
+    try:
+        products = parse_excel(str(files[0]))
+        return_data = {"step": "parse", "total_products": len(products)}
+    except Exception as e:
+        return JSONResponse({"step": "parse", "error": str(e)})
+
+    if not products:
+        return JSONResponse({"step": "parse", "error": "파싱된 상품 없음"})
+
+    p = products[0]
+    return_data["sample_product"] = {"name": p.get("name"), "price": p.get("price"), "image": str(p.get("image", ""))[:50]}
+
+    try:
+        safe, kw = employee_ip_guardian(p)
+        return_data["ip_check"] = "통과" if safe else f"차단: {kw}"
+        if not safe:
+            return JSONResponse(return_data)
+    except Exception as e:
+        return JSONResponse({"step": "ip_guardian", "error": str(e), **return_data})
+
+    try:
+        review = await employee_review_analyst(str(p.get("name", "")), ANTHROPIC_API_KEY)
+        return_data["review"] = "완료"
+    except Exception as e:
+        return JSONResponse({"step": "review_analyst", "error": str(e), **return_data})
+
+    try:
+        ai = await generate_product_copy(p, {"season": "", "trends": [], "pain_points": [], "selling_points": []})
+        return_data["product_copy"] = ai.get("product_name", "")[:30]
+    except Exception as e:
+        return JSONResponse({"step": "generate_copy", "error": str(e), **return_data})
+
+    try:
+        img_url = await get_product_image(p)
+        return_data["image"] = img_url[:50] if img_url else "이미지 없음"
+        if not img_url:
+            return JSONResponse({"step": "image", "error": "이미지 없음 → 등록 제외", **return_data})
+    except Exception as e:
+        return JSONResponse({"step": "get_image", "error": str(e), **return_data})
+
+    try:
+        price = calculate_selling_price(p["price"])
+        payload = build_product_payload(p, ai, price)
+        payload["originProduct"]["images"]["representativeImage"]["url"] = img_url
+        result = await naver_api.register_product(payload)
+        save_registered_code(str(p.get("code", "")))
+        return_data["naver_result"] = str(result)[:100]
+        return_data["step"] = "완료"
+    except Exception as e:
+        return JSONResponse({"step": "naver_register", "error": str(e), **return_data})
+
+    return JSONResponse(return_data)
+
+
 @app.get("/store-status")
 async def store_status():
     """스토어 현황 — 등록 상품 수 + 시즌 + 드라이브 진행률"""
