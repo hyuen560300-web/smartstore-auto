@@ -49,6 +49,29 @@ def health():
     return {"status": "ok", "service": "smartstore_auto", "version": "3.0"}
 
 
+@app.get("/store-status")
+async def store_status():
+    """스토어 현황 — 등록 상품 수 + 시즌 + 드라이브 진행률"""
+    from main import load_registered_codes
+    codes = load_registered_codes()
+    file_ids = _load_drive_index()
+    try:
+        with open(EXCEL_PROGRESS) as f:
+            progress = json.load(f)
+    except Exception:
+        progress = {"current_index": 0}
+    idx = progress.get("current_index", 0)
+    from employees import employee_season_planner
+    season = employee_season_planner()
+    return JSONResponse({
+        "등록된_상품수": len(codes),
+        "처리한_Excel파일": idx,
+        "전체_Excel파일": len(file_ids),
+        "남은_Excel파일": len(file_ids) - idx,
+        "다가오는_시즌": [e["event"] + " D-" + str(e["days_left"]) for e in season["upcoming"][:3]],
+    })
+
+
 @app.get("/myip")
 async def myip():
     import httpx
