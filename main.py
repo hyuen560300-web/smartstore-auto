@@ -329,14 +329,27 @@ def parse_excel(filepath):
 # ─── 텍스트 정제 ─────────────────────────────────────────────────────────────
 import re
 
+_NAVER_BANNED = {"최고","제일","넘버원","1등","공짜","무료","특가","대박","혜자","최저가","최대","독점","정품보장"}
+
 def clean_product_name(name: str) -> str:
+    # 대괄호/소괄호/슬래시 포함 내용 제거
+    name = re.sub(r'\[.*?\]|\(.*?\)|/[^\s]+', ' ', name)
     # 모델번호/관리코드 제거 (영대문자+숫자 조합)
-    name = re.sub(r'\b[A-Z]{1,5}[-_]?\d{3,}[A-Z0-9-]*\b', '', name)
-    name = re.sub(r'\b\d{4,}[A-Z]{0,3}\b', '', name)
-    # 불필요한 특수문자 제거 (한글/영문/숫자/공백/하이픈/플러스만 허용)
+    name = re.sub(r'\b[A-Za-z]{1,5}[-_]?\d{3,}[A-Za-z0-9-]*\b', '', name)
+    name = re.sub(r'\b\d{4,}\b', '', name)
+    # 특수문자 제거
     name = re.sub(r'[^\w\s가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9\- ]', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
-    return name[:50]
+    # 네이버 금지어 제거
+    words = name.split()
+    words = [w for w in words if w not in _NAVER_BANNED]
+    # 중복 단어 제거 (순서 유지)
+    seen, deduped = set(), []
+    for w in words:
+        if w not in seen:
+            seen.add(w); deduped.append(w)
+    name = ' '.join(deduped)
+    return name[:40]
 
 
 # ─── 가격 계산 ────────────────────────────────────────────────────────────────
@@ -370,12 +383,18 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
         max_tokens=1500,
         system=[{
             "type": "text",
-            "text": "당신은 네이버 스마트스토어 상품 등록 전문가입니다. 반드시 JSON만 출력하세요.",
+            "text": (
+                "당신은 10년차 네이버 스마트스토어 마케팅 전문가입니다. "
+                "상품명 규칙: ① [브랜드명]+[핵심키워드]+[속성/규격] 25자 내외 "
+                "② 특수문자([],(),/,*), 관리번호, 동일단어 중복 절대 금지 "
+                "③ 최고·제일·1등·공짜·무료·특가 등 네이버 금지어 사용 금지. "
+                "반드시 JSON만 출력하세요."
+            ),
             "cache_control": {"type": "ephemeral"}
         }],
         messages=[{
             "role": "user",
-            "content": f"""아래 상품 정보를 스마트스토어 최적화 형식으로 변환해주세요.
+            "content": f"""아래 상품을 스마트스토어 SEO 최적화 형식으로 변환하세요.
 {extra_context}
 
 상품 정보:
@@ -383,11 +402,14 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
 
 출력 형식 (JSON만):
 {{
-  "product_name": "[브랜드명] [핵심키워드] [속성/용도] 순서로 조합, 50자 이내, 모델번호/관리코드/특수문자 절대 포함 금지, 자연스러운 한국어로만 작성",
-  "description": "구매 욕구 자극 HTML (800자 이내). 반드시 아래 구조 사용:\\n<h3 style='color:#333;margin:20px 0 10px'>✅ 이 상품을 선택해야 하는 이유</h3><ul style='line-height:2'><li>...</li></ul><h3 style='color:#333;margin:20px 0 10px'>📦 상품 구성</h3><p>...</p><h3 style='color:#333;margin:20px 0 10px'>💡 이런 분께 추천</h3><ul style='line-height:2'><li>...</li></ul>",
-  "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"],
-  "banner_text": "핵심 셀링 메시지 (15자 이내, 숫자 포함)",
-  "sub_text": "구체적 혜택 서브 문구 (25자 이내)"
+  "product_name": "브랜드+핵심키워드+속성/규격, 25자 내외, 모델번호/특수문자/중복단어/금지어 없이 자연스러운 한국어",
+  "reason_1": "이 상품을 사야 하는 이유 1 (Pain Point 해결, 30자 내외)",
+  "reason_2": "이 상품을 사야 하는 이유 2 (차별점 강조, 30자 내외)",
+  "reason_3": "이 상품을 사야 하는 이유 3 (시즌/트렌드 연결, 30자 내외)",
+  "spec_rows": [["항목명","값"], ["항목명","값"], ["항목명","값"], ["항목명","값"]],
+  "tags": ["태그1","태그2","태그3","태그4","태그5"],
+  "banner_text": "핵심 메시지 15자 이내, 숫자 포함",
+  "sub_text": "혜택 서브 문구 25자 이내"
 }}"""
         }]
     )
@@ -572,7 +594,7 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
             draw.text((W // 2, int(H * 0.86)), sub_text[:28], font=sub_font, fill=(230, 230, 230), anchor="mm")
 
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=95)
+        img.save(buf, format="JPEG", quality=95, subsampling=0)
         buf.seek(0)
         token = await naver_api.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
@@ -780,12 +802,38 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             payload = build_product_payload(p, ai, price)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
             if banner_url:
+                reasons = [
+                    ai.get("reason_1", ""), ai.get("reason_2", ""), ai.get("reason_3", "")
+                ]
+                reason_items = "".join(
+                    f'<li style="padding:8px 0;border-bottom:1px solid #eee;">'
+                    f'<b style="color:#1a73e8;">0{i+1}</b>&nbsp;&nbsp;{r}</li>'
+                    for i, r in enumerate(reasons) if r
+                )
+                spec_rows = ai.get("spec_rows", [])
+                spec_table = ""
+                if spec_rows:
+                    rows_html = "".join(
+                        f'<tr><td style="background:#f5f5f5;padding:10px 14px;font-weight:bold;width:35%;border:1px solid #ddd;">{row[0]}</td>'
+                        f'<td style="padding:10px 14px;border:1px solid #ddd;">{row[1] if len(row)>1 else ""}</td></tr>'
+                        for row in spec_rows
+                    )
+                    spec_table = (
+                        '<h3 style="font-size:16px;color:#333;border-left:4px solid #1a73e8;padding-left:10px;margin:28px 0 12px;">📋 상품 스펙</h3>'
+                        f'<table style="width:100%;border-collapse:collapse;font-size:14px;">{rows_html}</table>'
+                    )
                 payload["originProduct"]["detailContent"] = (
-                    f'<img src="{banner_url}" style="width:100%;max-width:860px;display:block;margin:0 auto;">'
-                    f'<img src="{naver_img_url}" style="width:100%;max-width:860px;display:block;margin:10px auto;">'
-                    f'<div style="max-width:860px;margin:0 auto;padding:16px;font-family:\'나눔고딕\',sans-serif;font-size:15px;line-height:1.8;color:#333;">'
-                    + ai["description"]
-                    + '</div>'
+                    # ① 배너
+                    f'<img src="{banner_url}" style="max-width:100%;height:auto;display:block;margin:0 auto;">'
+                    # ② 상품 이미지
+                    f'<img src="{naver_img_url}" style="max-width:100%;height:auto;display:block;margin:12px auto;">'
+                    # ③ 이유 3가지
+                    '<div style="max-width:860px;margin:0 auto;padding:20px 16px;font-family:\'나눔고딕\',sans-serif;">'
+                    '<h3 style="font-size:17px;color:#333;border-left:4px solid #1a73e8;padding-left:10px;margin:0 0 12px;">✅ 이 상품을 사야 하는 이유 3가지</h3>'
+                    f'<ul style="list-style:none;padding:0;margin:0;font-size:15px;line-height:1.8;color:#444;">{reason_items}</ul>'
+                    # ④ 스펙 테이블
+                    + spec_table +
+                    '</div>'
                 )
 
             await naver_api.register_product(payload)
