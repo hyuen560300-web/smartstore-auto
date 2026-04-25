@@ -105,6 +105,7 @@ async def download_excel_from_url(request: Request):
 
 DRIVE_FOLDER_ID   = "1jTkPYwxOqdGEcCQCUgm5A2YlNDGRqprF"
 FALLBACK_FILE_ID  = "1h6KTzD5-rcqCODII0GHsLPdIxaYTSlVz"
+GOOGLE_API_KEY    = os.environ.get("GOOGLE_API_KEY", "")
 DRIVE_INDEX_FILE  = "./uploads/drive_index.json"
 EXCEL_PROGRESS    = "./uploads/excel_progress.json"
 
@@ -123,25 +124,35 @@ def _save_drive_index(file_ids: list):
 
 
 async def _scan_drive_folder() -> list:
-    """Google Drive 폴더 페이지 스캔으로 파일 ID 목록 추출"""
-    import re as _re
+    """Google Drive API로 폴더 내 파일 ID 목록 조회"""
+    if not GOOGLE_API_KEY:
+        print("[DRIVE] GOOGLE_API_KEY 없음", flush=True)
+        return []
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
-            r = await c.get(
-                f"https://drive.google.com/drive/folders/{DRIVE_FOLDER_ID}",
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            )
-            html = r.text
-        ids = _re.findall(r'/file/d/([A-Za-z0-9_-]{25,44})/', html)
-        seen, unique = set(), []
-        for fid in ids:
-            if fid not in seen:
-                seen.add(fid)
-                unique.append(fid)
-        print(f"[DRIVE] 폴더 스캔 완료: {len(unique)}개 파일 발견", flush=True)
-        return unique
+        file_ids = []
+        page_token = None
+        async with httpx.AsyncClient(timeout=20) as c:
+            while True:
+                params = {
+                    "q": f"'{DRIVE_FOLDER_ID}' in parents and trashed=false",
+                    "fields": "nextPageToken,files(id,name)",
+                    "pageSize": 200,
+                    "key": GOOGLE_API_KEY,
+                }
+                if page_token:
+                    params["pageToken"] = page_token
+                r = await c.get("https://www.googleapis.com/drive/v3/files", params=params)
+                r.raise_for_status()
+                data = r.json()
+                for f in data.get("files", []):
+                    file_ids.append(f["id"])
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    break
+        print(f"[DRIVE] API 스캔 완료: {len(file_ids)}개 파일 발견", flush=True)
+        return file_ids
     except Exception as e:
-        print(f"[DRIVE] 폴더 스캔 실패: {e}", flush=True)
+        print(f"[DRIVE] API 스캔 실패: {e}", flush=True)
         return []
 
 
