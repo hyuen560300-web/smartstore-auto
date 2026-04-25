@@ -25,6 +25,7 @@ NAVER_CLIENT_ID     = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 NAVER_SELLER_ID     = os.environ.get("NAVER_SELLER_ID", "")
 ANTHROPIC_API_KEY   = os.environ.get("ANTHROPIC_API_KEY", "")
+PEXELS_API_KEY      = os.environ.get("PEXELS_API_KEY", "")
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
@@ -367,6 +368,70 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
     }
 
 
+# ─── 이미지 처리 ─────────────────────────────────────────────────────────────
+PEXELS_KEYWORD_MAP = {
+    "티셔츠": "t-shirt", "바지": "pants", "아우터": "jacket outer",
+    "원피스": "dress", "스커트": "skirt", "후드": "hoodie",
+    "가방": "bag", "지갑": "wallet", "신발": "shoes sneakers",
+    "주방": "kitchen cookware", "생활용품": "household items",
+    "가전": "electronics appliance", "뷰티": "beauty cosmetics",
+    "화장품": "cosmetics makeup", "식품": "food",
+    "스포츠": "sports fitness", "완구": "toy", "도서": "book",
+    "침구": "bedding", "가구": "furniture", "조명": "lighting lamp",
+    "시계": "watch", "안경": "glasses eyewear", "모자": "hat cap",
+    "양말": "socks", "속옷": "underwear", "수영복": "swimwear",
+}
+
+async def search_pexels_image(product_name: str) -> str | None:
+    if not PEXELS_API_KEY:
+        return None
+    keyword = "product"
+    for ko, en in PEXELS_KEYWORD_MAP.items():
+        if ko in product_name:
+            keyword = en
+            break
+    else:
+        english = re.sub(r'[가-힣ㄱ-ㅎㅏ-ㅣ\W]+', ' ', product_name).strip()
+        if english:
+            keyword = english
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://api.pexels.com/v1/search",
+                headers={"Authorization": PEXELS_API_KEY},
+                params={"query": keyword, "per_page": 3, "orientation": "square"}
+            )
+            if r.status_code == 200:
+                photos = r.json().get("photos", [])
+                if photos:
+                    return photos[0]["src"]["large"]
+    except Exception:
+        pass
+    return None
+
+
+async def get_product_image(p: dict) -> str | None:
+    """오너클랜 이미지 시도 → 실패 시 Pexels 검색 → 없으면 None(등록 제외)"""
+    image_url = str(p.get("image", "")).strip()
+
+    # 1. 오너클랜 이미지 시도
+    if image_url.startswith("http"):
+        try:
+            return await naver_api.upload_image(image_url)
+        except Exception:
+            print(f"[IMAGE] 오너클랜 이미지 실패, Pexels 검색 중...", flush=True)
+
+    # 2. Pexels 폴백
+    pexels_url = await search_pexels_image(str(p.get("name", "")))
+    if pexels_url:
+        try:
+            return await naver_api.upload_image(pexels_url)
+        except Exception:
+            pass
+
+    return None
+
+
 # ─── 파이프라인 ───────────────────────────────────────────────────────────────
 naver_api = NaverCommerceAPI()
 
@@ -377,16 +442,17 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
     products = parse_excel(excel_path)
     print(f"[REGISTER] 파싱 완료: {len(products)}개", flush=True)
 
-    results = {"success": 0, "fail": 0, "errors": []}
+    results = {"success": 0, "fail": 0, "skip": 0, "errors": []}
     for p in products[:limit]:
         try:
             ai = await generate_product_copy(p)
             price = calculate_selling_price(p["price"])
-            # 이미지 네이버 서버 업로드
-            naver_img_url = await naver_api.upload_image(str(p.get("image", "")))
-            p["naver_image"] = naver_img_url
+            naver_img_url = await get_product_image(p)
+            if not naver_img_url:
+                print(f"[REGISTER] SKIP 이미지없음: {p.get('name', '')}", flush=True)
+                results["skip"] += 1
+                continue
             payload = build_product_payload(p, ai, price)
-            # 업로드된 이미지 URL 교체
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
             await naver_api.register_product(payload)
             results["success"] += 1
@@ -397,7 +463,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             results["errors"].append(str(e))
             print(f"[REGISTER] FAIL {e}", flush=True)
 
-    print(f"[REGISTER] 완료 — 성공:{results['success']} 실패:{results['fail']}", flush=True)
+    print(f"[REGISTER] 완료 — 성공:{results['success']} 실패:{results['fail']} 스킵:{results['skip']}", flush=True)
     return results
 
 
