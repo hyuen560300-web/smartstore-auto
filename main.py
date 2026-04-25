@@ -93,8 +93,9 @@ class NaverCommerceAPI:
         }
 
     async def upload_image(self, image_url: str) -> str:
-        img_resp = await httpx.AsyncClient(timeout=15, follow_redirects=True).get(image_url)
-        img_resp.raise_for_status()
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            img_resp = await c.get(image_url)
+            img_resp.raise_for_status()
         token = await self.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(
@@ -391,9 +392,7 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
                         "troubleShootingContents": "상세페이지 참조",
                     },
                 },
-                "sellerCodeInfo": {
-                    "sellerManagementCode": str(raw.get("code", ""))
-                },
+                **({"sellerCodeInfo": {"sellerManagementCode": str(raw.get("code", ""))}} if raw.get("code") else {}),
             },
         },
         "smartstoreChannelProduct": {
@@ -515,7 +514,7 @@ async def generate_dalle_image(product_name: str) -> str | None:
                 headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
                 json={
                     "model": "dall-e-3",
-                    "prompt": f"Clean white background product photo of {product_name}, professional e-commerce style, high quality",
+                    "prompt": f"Professional product photo for Korean e-commerce, clean white background, high quality studio lighting, no text, no watermark. Product: {product_name}",
                     "n": 1,
                     "size": "1024x1024",
                     "quality": "standard",

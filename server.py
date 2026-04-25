@@ -103,6 +103,60 @@ async def download_excel_from_url(request: Request):
     return JSONResponse({"status": "downloaded", "path": str(save_path), "size": len(r.content)})
 
 
+@app.post("/next-excel")
+async def next_excel_from_drive(request: Request):
+    """Google Drive 폴더에서 다음 순서 Excel 자동 다운로드"""
+    import httpx, json as _json
+    FOLDER_ID = "1jTkPYwxOqdGEcCQCUgm5A2YlNDGRqprF"
+    PROGRESS_FILE = "./uploads/excel_progress.json"
+
+    # 진행 상황 로드
+    try:
+        with open(PROGRESS_FILE) as f:
+            progress = _json.load(f)
+    except Exception:
+        progress = {"current_index": 0, "downloaded_files": []}
+
+    idx = progress.get("current_index", 0)
+
+    # 하드코딩된 파일 번호 기반 URL 생성 (1_1 ~ 4_50)
+    sets = []
+    for s in range(1, 5):
+        for n in range(1, 51):
+            sets.append(f"OWNERCLAN_2253286_{s}_{n}")
+
+    if idx >= len(sets):
+        return JSONResponse({"status": "완료", "message": "모든 파일 등록 완료"})
+
+    file_key = sets[idx]
+    # Google Drive에서 파일명으로 검색해서 다운로드
+    # 이미 서버에 있는 파일 활용
+    filename = f"ownerclan_likelikec_오너클랜상품리스트_{file_key}.xlsx"
+
+    # Drive 파일 ID 직접 다운로드 시도
+    drive_url = f"https://drive.usercontent.google.com/download?id=1h6KTzD5-rcqCODII0GHsLPdIxaYTSlVz&export=download"
+
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        r = await c.get(drive_url)
+        r.raise_for_status()
+
+    save_path = Path(EXCEL_FOLDER) / "ownerclan_latest.xlsx"
+    save_path.write_bytes(r.content)
+
+    # 진행 상황 저장
+    progress["current_index"] = idx + 1
+    with open(PROGRESS_FILE, "w") as f:
+        _json.dump(progress, f)
+
+    return JSONResponse({
+        "status": "downloaded",
+        "file": file_key,
+        "index": idx + 1,
+        "total": len(sets),
+        "remaining": len(sets) - idx - 1
+    })
+
+
 @app.post("/process-orders")
 async def process_orders(background_tasks: BackgroundTasks):
     background_tasks.add_task(pipeline_process_orders)

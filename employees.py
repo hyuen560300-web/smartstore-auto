@@ -257,7 +257,7 @@ async def employee_shortform_creator(product_name: str) -> dict:
         return {"status": "실패", "error": str(e)}
 
 
-# ─── 직원 10: 블로그 포스팅 매니저 ──────────────────────────────────────────
+# ─── 직원 11: 블로그 포스팅 매니저 ──────────────────────────────────────────
 async def employee_blog_manager(product: dict, anthropic_key: str) -> str:
     """상품 정보 기반 네이버 블로그용 홍보 포스팅 글 생성"""
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
@@ -277,7 +277,7 @@ async def employee_blog_manager(product: dict, anthropic_key: str) -> str:
     return resp.content[0].text.strip()
 
 
-# ─── 직원 11: 광고 효율 분석가 ──────────────────────────────────────────────
+# ─── 직원 12: 광고 효율 분석가 ──────────────────────────────────────────────
 async def employee_ad_analyst(orders: list, ad_cost: int, anthropic_key: str) -> dict:
     """ROAS 계산 및 광고 효율 분석"""
     total_revenue = sum(int(o.get("totalPaymentAmount", 0)) for o in orders)
@@ -297,7 +297,7 @@ async def employee_ad_analyst(orders: list, ad_cost: int, anthropic_key: str) ->
     }
 
 
-# ─── 직원 12: 플랫폼 확장 전문가 ────────────────────────────────────────────
+# ─── 직원 13: 플랫폼 확장 전문가 ────────────────────────────────────────────
 async def employee_platform_expander(product: dict, target_platform: str, anthropic_key: str) -> dict:
     """타 플랫폼(쿠팡/11번가/지마켓) 맞춤 상품정보 변환"""
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
