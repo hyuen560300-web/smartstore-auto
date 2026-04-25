@@ -1,5 +1,6 @@
 """
 스마트스토어 자동화 - FastAPI 서버
+총괄팀장: Claude
 """
 
 import os
@@ -17,14 +18,31 @@ from main import (
     pipeline_reply_inquiries,
     calculate_selling_price,
     EXCEL_FOLDER,
+    ANTHROPIC_API_KEY,
+    MARGIN_RATE,
+    naver_api,
+    parse_excel,
+)
+from employees import (
+    employee_season_planner,
+    employee_trend_scout,
+    employee_accounting_manager,
+    employee_error_auditor,
+    employee_shortform_creator,
+    employee_blog_manager,
+    employee_review_analyst,
+    employee_stock_guardian,
+    employee_ad_analyst,
+    employee_platform_expander,
 )
 
-app = FastAPI(title="스마트스토어 자동화", version="2.0.0")
+app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0")
 
 
+# ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "2.0"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "3.0"}
 
 
 @app.get("/myip")
@@ -35,21 +53,19 @@ async def myip():
         return r.json()
 
 
+# ─── 상품 등록 ────────────────────────────────────────────────────────────────
 @app.post("/register-products")
 async def register_products(request: Request, background_tasks: BackgroundTasks):
-    """n8n → 상품 등록 트리거 (body에 excel_path 또는 최신 파일 자동 선택)"""
     try:
         body = await request.json()
     except Exception:
         body = {}
-
     excel_path = body.get("excel_path")
     if not excel_path:
         files = sorted(Path(EXCEL_FOLDER).glob("*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
         if not files:
             return JSONResponse({"status": "error", "message": "업로드된 Excel 파일 없음"}, status_code=400)
         excel_path = str(files[0])
-
     limit = int(body.get("limit", 50))
     background_tasks.add_task(pipeline_register_products, excel_path, limit)
     return JSONResponse({"status": "processing", "excel": excel_path, "limit": limit})
@@ -57,7 +73,6 @@ async def register_products(request: Request, background_tasks: BackgroundTasks)
 
 @app.post("/upload-excel")
 async def upload_excel(file: UploadFile = File(...)):
-    """오너클랜 Excel 파일 업로드"""
     save_path = Path(EXCEL_FOLDER) / file.filename
     content = await file.read()
     save_path.write_bytes(content)
@@ -66,36 +81,138 @@ async def upload_excel(file: UploadFile = File(...)):
 
 @app.post("/process-orders")
 async def process_orders(background_tasks: BackgroundTasks):
-    """주문 처리 트리거"""
     background_tasks.add_task(pipeline_process_orders)
     return JSONResponse({"status": "processing"})
 
 
 @app.post("/sync-inventory")
 async def sync_inventory(background_tasks: BackgroundTasks):
-    """재고 동기화 트리거"""
     background_tasks.add_task(pipeline_sync_inventory)
     return JSONResponse({"status": "processing"})
 
 
 @app.post("/reply-inquiries")
 async def reply_inquiries(background_tasks: BackgroundTasks):
-    """고객 문의 자동 답변 트리거"""
     background_tasks.add_task(pipeline_reply_inquiries)
     return JSONResponse({"status": "processing"})
 
 
 @app.get("/price-check")
 def price_check(wholesale_price: int):
-    """도매가 → 판매가 계산"""
     selling = calculate_selling_price(wholesale_price)
     margin = float(os.environ.get("MARGIN_RATE", "0.15"))
-    return {
-        "wholesale_price": wholesale_price,
-        "selling_price": selling,
-        "margin_rate": f"{margin * 100:.0f}%",
-        "profit": selling - wholesale_price,
-    }
+    return {"wholesale_price": wholesale_price, "selling_price": selling,
+            "margin_rate": f"{margin * 100:.0f}%", "profit": selling - wholesale_price}
+
+
+# ─── AI 직원단 엔드포인트 ──────────────────────────────────────────────────────
+
+@app.get("/season-plan")
+async def season_plan():
+    """📅 시즌 기획자 — 다가오는 이벤트 & 소싱 키워드"""
+    return JSONResponse(employee_season_planner())
+
+
+@app.get("/trend-scout")
+async def trend_scout():
+    """📈 트렌드 스카우터 — 한국 실시간 트렌딩 키워드"""
+    keywords = await employee_trend_scout()
+    return JSONResponse({"trending": keywords, "count": len(keywords)})
+
+
+@app.get("/daily-report")
+async def daily_report():
+    """📊 일일 종합 리포트 — 회계+시즌+트렌드"""
+    orders = await naver_api.get_new_orders()
+    accounting = await employee_accounting_manager(orders, MARGIN_RATE)
+    season = employee_season_planner()
+    trends = await employee_trend_scout()
+    return JSONResponse({
+        "accounting": accounting,
+        "upcoming_events": season["upcoming"][:3],
+        "trending_keywords": trends[:10],
+    })
+
+
+@app.post("/stock-alert")
+async def stock_alert():
+    """⚠️ 품절 방지 알림이 — 재고 부족 상품 체크"""
+    files = sorted(Path(EXCEL_FOLDER).glob("*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
+    if not files:
+        return JSONResponse({"status": "no_excel"})
+    products = parse_excel(str(files[0]))
+    low_stock = employee_stock_guardian(products)
+    return JSONResponse({"low_stock_count": len(low_stock), "items": low_stock[:20]})
+
+
+@app.post("/error-audit")
+async def error_audit(request: Request):
+    """🔍 시스템 에러 감사원 — 에러 분석 & 해결책"""
+    try:
+        body = await request.json()
+        errors = body.get("errors", [])
+    except Exception:
+        errors = []
+    report = await employee_error_auditor(errors, ANTHROPIC_API_KEY)
+    return JSONResponse({"report": report})
+
+
+@app.post("/create-shortform")
+async def create_shortform(request: Request):
+    """🎬 숏폼 영상 제작자 — 상품 홍보 영상 제작 요청"""
+    try:
+        body = await request.json()
+        product_name = body.get("product_name", "")
+    except Exception:
+        product_name = ""
+    if not product_name:
+        return JSONResponse({"status": "error", "message": "product_name 필요"}, status_code=400)
+    result = await employee_shortform_creator(product_name)
+    return JSONResponse(result)
+
+
+@app.post("/write-blog")
+async def write_blog(request: Request):
+    """📝 블로그 포스팅 매니저 — 네이버 블로그 홍보글 생성"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    post = await employee_blog_manager(body, ANTHROPIC_API_KEY)
+    return JSONResponse({"post": post})
+
+
+@app.get("/review-analysis")
+async def review_analysis(product_name: str):
+    """⭐ 리뷰 분석가 — Pain Point & 셀링포인트 분석"""
+    result = await employee_review_analyst(product_name, ANTHROPIC_API_KEY)
+    return JSONResponse(result)
+
+
+@app.post("/ad-analysis")
+async def ad_analysis(request: Request):
+    """💰 광고 효율 분석가 — ROAS 계산 & 입찰가 조정"""
+    try:
+        body = await request.json()
+        ad_cost = int(body.get("ad_cost", 0))
+    except Exception:
+        ad_cost = 0
+    orders = await naver_api.get_new_orders()
+    result = await employee_ad_analyst(orders, ad_cost, ANTHROPIC_API_KEY)
+    return JSONResponse(result)
+
+
+@app.post("/expand-platform")
+async def expand_platform(request: Request):
+    """🌐 플랫폼 확장 전문가 — 타 플랫폼 상품정보 변환"""
+    try:
+        body = await request.json()
+        product = body.get("product", {})
+        platform = body.get("platform", "쿠팡")
+    except Exception:
+        return JSONResponse({"status": "error"}, status_code=400)
+    result = await employee_platform_expander(product, platform, ANTHROPIC_API_KEY)
+    return JSONResponse(result)
 
 
 if __name__ == "__main__":

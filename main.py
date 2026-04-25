@@ -437,14 +437,26 @@ naver_api = NaverCommerceAPI()
 
 
 async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
-    """파이프라인 1: 오너클랜 Excel → AI 설명 → 스마트스토어 등록"""
+    """파이프라인 1: 오너클랜 Excel → 소싱팀장 선별 → IP감시 → AI설명 → 스마트스토어 등록"""
+    from employees import employee_sourcing_manager, employee_ip_guardian
     print(f"[REGISTER] 시작: {excel_path}", flush=True)
     products = parse_excel(excel_path)
     print(f"[REGISTER] 파싱 완료: {len(products)}개", flush=True)
 
-    results = {"success": 0, "fail": 0, "skip": 0, "errors": []}
+    # 소싱팀장: 잘 팔릴 상품 선별
+    products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
+    print(f"[소싱팀장] 선별 완료: {len(products)}개", flush=True)
+
+    results = {"success": 0, "fail": 0, "skip": 0, "ip_blocked": 0, "errors": []}
     for p in products[:limit]:
         try:
+            # IP 감시관: 상표권 위험 체크
+            safe, danger_kw = employee_ip_guardian(p)
+            if not safe:
+                print(f"[IP감시관] 차단: {p.get('name','')} — {danger_kw}", flush=True)
+                results["ip_blocked"] += 1
+                continue
+
             ai = await generate_product_copy(p)
             price = calculate_selling_price(p["price"])
             naver_img_url = await get_product_image(p)
