@@ -594,6 +594,58 @@ async def confirm_orders(request: Request):
 
 DRIVE_FILE_IDS_PERMANENT = ["1F5BYQ4DqnMSZW-oeuz4EtZGGIfyZ0y-X","1gLAbw9lGhR3BVZCNAa_P7RMwUZ88U50k","1jV6AxMEyJsg7XOg6C5sosZ5dHORAumJh","1xZ47ndTtOmG261DdijOgL8C2SiAbuyL6","16AGyMIIJXKlZP_ihd7tXerSz6pCkSs9H","1_I1dUiFX7D0rnof4rC7obk2yYWblZpnR","136S01eIBe00xCWo2dAXuxB7uX10xKlje","1R44kThE6GRDDcr1896ngE_0XB5PTynWO","17qy8J8EH_vlY8P8XP17XlhCzvWQpbx4V","1m8kZTgreECPiLcIQ_SkJ7-55Iz0oNFcd","1JK04RyMbNegk3MOoAWS68hBHeq0dHP6B","1rWS4PmF6azG-FeUnQnyT6ck7FSbIDyMQ","1BKhyhLCqwHTkKcaKw6woUnICHONoB5jP","1UBbWPc4cLa0HTW0h-OaheVW4JWTjjN0a","1kTdJsxZk8SpiD13T-XG-jAY-EI7VX3VN","1ruA9DR188aU0xECYhX1Zt-BXJ9r_rYts","1G0x8w7J-v5gNWHGq1gxsOfo1nmm81ohF","1Rx5Qto0IjKsLZsHM1Za-R2r0LMJ21Q2A","1N2vIv8EZptFFNRTBYYj2OZhjN04PGf80","1iWQeMw-l4fMyGMjmpjNu3TfkQTiR0x8I","1OSxxuS035-sE7VNIRlc-puJ5kq2_6Gmt","1WacefkrQLELQKiKPJeEA2-QVO9UxIfIV","1ROgmOKDXcaQ-g-vMr7AziTxsmMSllAOm","1UReOo21RGL5W6cj7Nkn4Q8eL3dbQVQ5E","1hy-CYqLxulXuHDcSEzAJ4XllBNpLhYZm","1pMYqfejj_FQlh5tolEji5jIr6rK1tW2a","1u7WoYhBl4p7uK-1eKNAngQ4roHh2xBv4","1OjI642UaLTIouubjRyby7iCxFcYvL33F","1Y0_-7GYDH5X5Ec4b_3wrQrjOsTJ8MGKs","1lzKcE6tMIanUhhwWckzEgrdZa07vVsPM","14OpPEfS9cHbW5QX4nVY4tzzLIFAVYo2T","17BoqT3OiJQ9X7NFSvJXoN8dMDOzOwUho","1HMWYeI68b9QwUqfxLyPjugbeYm6UOCEA","1J1g3g0E0bCyeAlOYH-1DbuNEE5yYsSiW","1DhHzFgz9Ugii4jv9QqjYa7Gbjolx_rKo","1VNxBrRO8bCr45BJBSNdk-eljnM4V9o01","1rmcK-W5BLrI6f4sGdeebdF65qoO35rDE","1-0n6qo9QuTEFau0H_XaKvCkEsTWCCkuu","1AKMgOcB-Rwm4vAbOdsYvnk-TJ7BXTDKd","1RUBacH7H3IdYGNKlkXKLKVkYp8QS_O0U","1ghsRkLDZrujEw9FzX1Wt25vssyGl1K3s","1ncek80ov0wP2UvgMrvnKPGXDZV2qqye8","1Ax1PxhZxGJ7GTvSaDFvg_WhAHCOSv2QK","1I4M5l5ZXYM0ENRT5r_DDow7KuLHTQtK4","1MLuON0bayJvPxAkMzQA-kkML7-sRdpF2","1NSOrchmXlrxyVMXoP43wZET7iDq8QVm2","1qO-2UByqCafS3OlVWgTxMbEizUHH45Kx","1siOiZVLn9HltdoThgoB1zThMgmej8V2T","1wHixMn1oKCaZ4SiJuU1p41e-LwIsPzG_","1Eg2b_gakaB_hyZ6Xq1cDyggVHmXwz4CF","1PcouzQhb9_vaDYQI0C8sIVfmXCoDr7Mo","1ph5PWisdk4qKfzOh3xHXYaZJTxw9DHVw","1xW8PUy--_4nYuNcC6KJDKzjELBYQOVBK","1BQsWH4K1R_HZsRViJs0Ur8ZogDMgJwgX","1QlyBfWW1lOyZCR8XS2qsH2aYM8Gs7uwp","1WBR2ENBnxYJOsaZQ7Kf2XNwDKSaDBznp","1XVWlYTgKu7MF-KNX7Rg_DtgUhPLa2_Va","1yR9IHTYqmPXCS3LBUEOsn5MzO4ANTepo","11T4mj6_EkKmcObkRvbuUuNmeol5cA_ii","157oPxSB2d60bZyXWll5ydfvxOaiHEmZi","1AX0QZb9ywqpdKnIpbeOF8HnXvH1UXQhH","1oNWkUdTrFyZIOFJVzU_82XokzTogSKIr","1oeHDaC-PfVjsQowLkuz1unv8WGZxQ5db","16PUdz772aVdiOgvopZA51KRRiAH53PGA","1If2XNJhzim-VwtOeRE3WaskZ1sFAYFGm","1JAws2ZHI0Mun47Qr0mYXJKibv9X8tmgm","1Z25uo9fazYjqTlKvWQ5FIl0OZQTBHt1_","1sT6-RZ0iJIT8oAZq_Flz9xXCT6w4fwvU","1EJ_nUj0KFB4i74ox5O4QQnZ-hdnNwtkM","1Qt4tJnJdKq2u0x1ltyQKxTckPjqWuY1-","1Vj2czJGi34Z_e-rmmaaZzRrLaHqQbNO4","1XBgsRrVNzyE5QKuHTVGigzaQmWKhxliK","1lHYHebmM_CcPFU0NUyl9vIzRkyWX1Y8l","1wJ4SGiak6aaWjWUurLMEDAY9Lxfiy-gm","1MKf2Mt-iKaXjKDV8y88M1BiMFjkQfZKL","1N2bMF6zicrqlAtEFVUawxZw_kAVgZPLU","1bOHq1d4vMbBxAO6lPgrXgvzg2wUA6tT4","1fnTMIh-0Iaa52Gj1FdurGr79KiH8s1Ji","1yOXhzXgmtypzb17D2b0GJl2yn7udJS25","1_bTHeN4wRvVoE8bUqcxCgNh40BvLeQhq","1aZ8LhL1YvA2-4KCmD4k9Tf5jmiKcDO-n","1rtQ-V2dWRP_swvUaiMgmmqJ20x6WNcS1","1zn4pHgAtv_7PL0sSAJyp-21VilJAd8TY","14m9VKg_Mf0fXUzuuzbXJb73FuN8sVXK_","15tSQNhEShtvhw1m3R_MZabXUtZamVfZs","1A5iQUlri9GNQxtHsJF705iGDySxvqijB","1T3CO3cz5SltsAxlaQLaptHtoGGwiPmYi","1auVWrv8tbwvH2msTwFlUpvN4zpX2Hfxl","1qQXd7-f2RgbQKW0R736AgnH80miMQZmD","1B-ZmqSmchfBVXVUNdj4Tso2IZnNU3kB4","1Cgc-TZu39T-9uodBJTty9bWYx0WLcSmG","1GyBNNnp4Rpv6zgkQhzj6nih_QMUzhM0h","1NbIdzQNUNwhWy2De_7DAOqKLv1Nc_Bqp","1Q2bBdF43r4sMZowAYH892SDE76lS45Zw","1YnmCsMRGmbLbfJnuChQKcytmue5RJSAZ","16dWlOpx6PZ6eV-uJJPteLSileR44hDFU","1RyVncFlc0405E4MGa80u7fMG40YoOWt_","1_sWOhaL-CMIL0npAbtRcY3mDgiBzxdFJ","1wsJsYMhIWdJDzDYiKnq310OFX41iV4Hs","1BqKYPd0ToNlb3ANBX70DY2iyo2sEP_e0","1EVzmB1B_ytHXA9636yY-iFlLHnXyXM9s","1HCDX9dg4WWcWsjaiv1dnqzXz9VR2zdO1","1VrcyTXLfu63a3bTc6RzVH7DScvrilOjz","1yiMUE-3dXiZalDhe1s7_e3i96XYCttmu","1TegWQGFp4_gnLQR5owFab9p1_8Im96MX","1ToXKEyn0pobQ8pmxjCenRqPjHbjh1ci1","1YF9oHUXb93fPhIvO5E59ccGClmGsBdYa","1bWYJqUfRQdgiH4mUDiu85DdUJiSQB-x_","1IrUNjWmdaRVtAeaOPTqGbjXdb35dWycj","1i_P6kT1CNaL7F20Vmh3qXZvL_yMnVLWH","1lbvL7uu3ssgfYvB1fdSOCnmEA892vEVU","1luu7f1xChN-CoUKuRjQs_v55wsqgcrIP","1Gkz53GQtRajwGxXlxZGs3BmjZxcfz98S","1aUTOgLQUcg_hEQQVuwzfnP1wk9gwOFXy","1r5siU-1IdGnSN9yBrW_7lm0pKTa25T81","1z1ZPX-56iY3rbzrGMyBJrtNLwCrxSk82","1G2Ornl4RbSYNPK5pX2uvKzk_VINAaKdp","1Hso2RmL08J78F4jCIPpltwi1B4zx_MpS","1LRgY3HlCLMfc8m4g1w7IHK92g0GxKHPJ","1evSX1iLnVc-9FFyMm1sqw34-uO8mZtl5","1RhXaznEnw8LGhrhtMcjEeGs2ht7X98wK","1qjfzFm2tvqqEQpKvHqjwQIvjc9B-09Pk","1vTEOAgQKuC5oYWVFvR4tssERahbUV4W_","13h6QLiWULI9zfVBJyp6Wwr4YxFrZeLME","13kw2jcXWoAXKBmh1kysA5yuDSuweeStv","1UOo_sLBYXGwog9iJhTp5m6WDLfofvXxW","1ArJKR_Ha3VKXBBQ8r-8QcUCC8-aPhdGq","1J9-P6AMGjoqIB3BNR8qjp92mOeZyH1rg","1MUhAQsn45c98o3r08WADbGIoAAHtEkkL","1OP74P7NPvbkVU7D57z9BEhHDXlRUUkit","12Tgjh0MrXyfOfQiNTCgRg6EWA-jL4bVj","1Jq2O_1z13GjgG6Qmn2lTgZgbGcXXGekK","1_j3jPGp25-PqECF4Jlrtpgv-TpdlrBBx","1ua9c6gBJsl9wZX_10skCvwh9r68lDrNO","106q6bRDNZjSnBjAI-Hlp6L42IFTDpAPT","12V1bcyTYgr7TOUWbaOF0SSPTdeTBCvng","1AUYuELkcuuumtZtefr641kYOq4kzTo0y","1XfN2YiaYuj4z17EITCtYpNmNumE7eu86","1KnoLKpqCUtdaHFjhpNWtbBIV1xCAdG2x","1vuJvBSpIRPol6PRduh5NKLnJZfWYDR54","1EJLZ0bMqwwULosztfyGWLkFwPKNK0364","1vUZipeLzpWQftlk9oTJ1RvjGgKeF7cl6","11ZOejeQL-so2J4ku6OzsSTjdhcIa96W5","1YwL0MOnYRNo7C1zqPfvDKca2z7DgxniG","17Lt_3vrK0Up1lWu9Zw_ghgQa_gBeTUCy","1EtI3v_2UUzwB5Eca9v6FNtxIR1-xTEFC","1DEFlm039yWVM_wvcKEjaH87PWY7sDx-T","1ymSnyqJPLsult7Y2UGi3OfWAkbn8cTCB","1u0QoRrypl0eTu-4mQoXLtbXRAjsboNIO","1zGMrtjXLOskZPKpbeFw4NGmUEqXyMuHe","12J4RUEXRgmNhrOkf3tljxo3XFvD21LOb","1a83RMRVW0KU6RJHcK4eszGPOk0572C4y","1hSJ4XOi446f2JAnFk1i9E8aB61c86m62","1QkwuYvBpPmpk__-4kHgB9bhObmRS_R3h","1cbloe-yFwkXnPzh5tXys3zHqlTY4VjkN","1ybUp8l1X4I_t6BRBx8__N6xxYCZeplws","1zwKum5N68_0mnORYW0-tD1smZw2Ei4yu","1Iho3wyoJ8KMVP0XGkUE3X1LMtKje8Y6N","1K-11X4Ha-EDoJ071ZV1ezTY-36z-K0NX","1mGUotPNdjOMT9U2S9wKTT0xH9EyZ-22I","1gU3dBS9TJJ8nz3BQbkBh8mlapM6lrjl8","1wriCB5ACsGrI4Qk3OaV3mK4p-bjTc7sZ","104m1Nn5Yn_K6YTbVm4iYS85Of-k_S4K-","1JzeA97DE1BSbm5Ya2pK2CvaYiFW0Et7C","11TGeqWDWpgmE9D3oAQt0rKCVMeaeJd6K","1_mrSh71x1RKIpI80Y56sbYMWt6mhvXfK","1OCe_H9pPv8cwCMfewnuVq-g21QvSzd5d","18U7KAZXzsXPSMk_PQ-_frCQ5vHVqyuw_","1R7Wzcy4s7U_gRtsIndobsog0ASyRXhnR","13MJ0kvm2Plihs__1iwONchp-1oBCUKMH","1V81aQA2ZhHAI_mYzu5yTGVjS4w8EOAgH","1CPuRA5ycFkJxF6iy63p75fJ6vS8znGTa","1Rx2dsq81CsvhMzPcqXaryCUWoCd3jAps","1o-sqx7Byql-2QpE0TVdgDFYUq675X5fg","19WcOdoyExwmRsMUZqDbkot0BvzlF6Hby","18U5ktqW1Qv8BKXKPOlQzHKVq0m4rELNw","1FEg57Qhb01nVuzh1GClay9szBbbWbkeE","1Hz4SDPCSPFHfLxiymXm9Rpkvenxy_lRt","1karcwPejIkfauRY7rChcoE3zj0qzgBnv","1GLEoDqU4sh94vWPjhcyZKzfEvOEEc867","1uNIgYG60Uqqy2NFkKWco1GkpdCp6znFN","11Bj_GZgeKpjeZzDkkqpfvDcUzVV-nixg","1AaMU6tb-Xupt8zsW7opdIBraMolbXP1i","1dz9uQ-BTdTCsBTMoNheO_UkFw3S6YKZs","1EFAJ_sBFkpCPydIJnPIOW2gTMJX0wLCp","1ZxkN6N9fA7EWY0yIUqkYW7F8S9c2ot6g","1putzYsp62ggXXS_tJ0qSdKzb5iJ-1d8T","1BUDm-E15IEaopYG69rAbJ3m_s7EPsjZV","1IABoz-WhYeqx9a4qpCYf5ejJFwIMVK_S","1Z_fY7Vff71ADcHEQpF0xN0eBA-RSo_p0","1nWngRjmzC08Sce_e5LJKhOKkKZEXY_fB","1Q80t3QqknIKUvSVXKuWTeTHvfqUJtazl","1nSI73rtaQp6dpE8jaytm_BeH5DwYQ7Hc","1CQUCNX7ZhqU2UjMdDUtfDPZdRKT902tk","1T39vHXQiLJof5qOH34gJLwb6KmboD35q","1a5xPrxSb5Wse1kiRrYQeTs8kHDFsAqLM","1voLwq4dB5peIs9Y_25GWg6_RPknwOF82","1EW0feDsEu3kM_3Gn3_I4TPS05uDWuXvh","1odfn60_x74Q4QWFWCvEmDY-liTurzoyT","1L2Mu4FLmL5jc_KHjH5PDk3nGps9_Npj7"]
 
+@app.get("/full-report")
+async def full_report():
+    """📊 전체 현황 한 번에 조회"""
+    import asyncio
+    from main import load_registered_codes, MARGIN_RATE
+    from employees import employee_season_planner, employee_trend_scout, employee_accounting_manager, employee_stock_guardian
+
+    # 병렬 조회
+    orders, inquiries, trends, products_raw = await asyncio.gather(
+        naver_api.get_all_orders(7),
+        naver_api.get_inquiries(),
+        employee_trend_scout(),
+        naver_api.list_products(1, 50),
+    )
+
+    codes = load_registered_codes()
+    season = employee_season_planner()
+    accounting = await employee_accounting_manager(orders, MARGIN_RATE)
+
+    # 저재고 상품
+    from main import parse_excel
+    from pathlib import Path as _Path
+    excel_files = sorted(_Path(EXCEL_FOLDER).glob("*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
+    low_stock = []
+    if excel_files:
+        prods = parse_excel(str(excel_files[0]))
+        low_stock = employee_stock_guardian(prods, threshold=5)
+
+    # 주문 상태별 분류
+    status_map = {}
+    for o in orders:
+        s = o.get("productOrderStatus", "기타")
+        status_map[s] = status_map.get(s, 0) + 1
+
+    return JSONResponse({
+        "🏪 스토어 현황": {
+            "등록 상품 수": len(codes),
+            "처리한 Excel 파일": json.load(open(EXCEL_PROGRESS)).get("current_index", 0) if os.path.exists(EXCEL_PROGRESS) else 0,
+            "전체 Excel 파일": len(_load_drive_index()),
+        },
+        "💰 매출 (7일)": accounting,
+        "📦 주문 현황": {
+            "총 주문 수": len(orders),
+            "상태별": status_map,
+        },
+        "❓ 미답변 문의": len(inquiries),
+        "⚠️ 재고 부족": low_stock[:5] if low_stock else "없음",
+        "📅 다가오는 시즌": [f"{e['event']} D-{e['days_left']} ({e['urgency']})" for e in season["upcoming"][:3]],
+        "📈 실시간 트렌드": trends[:5],
+    })
+
+
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 Drive 인덱스 자동 복구"""
