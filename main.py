@@ -33,6 +33,20 @@ AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
 NAVER_BASE = "https://api.commerce.naver.com/external"
 
 Path(EXCEL_FOLDER).mkdir(exist_ok=True)
+REGISTERED_CODES_FILE = "./uploads/registered_codes.json"
+
+def load_registered_codes() -> set:
+    try:
+        with open(REGISTERED_CODES_FILE, "r") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def save_registered_code(code: str):
+    codes = load_registered_codes()
+    codes.add(str(code))
+    with open(REGISTERED_CODES_FILE, "w") as f:
+        json.dump(list(codes), f)
 
 
 # ─── 네이버 커머스 API ────────────────────────────────────────────────────────
@@ -539,9 +553,18 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
     trend_keywords = await employee_trend_scout()
     print(f"[트렌드스카우터] 키워드 {len(trend_keywords)}개 수집", flush=True)
 
-    results = {"success": 0, "fail": 0, "skip": 0, "ip_blocked": 0, "errors": []}
+    registered_codes = load_registered_codes()
+    print(f"[총괄] 기등록 상품: {len(registered_codes)}개 제외", flush=True)
+
+    results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0, "ip_blocked": 0, "errors": []}
     for p in products[:limit]:
         try:
+            # 중복 체크
+            code = str(p.get("code", ""))
+            if code and code in registered_codes:
+                results["duplicate"] += 1
+                continue
+
             # ④ IP 감시관: 상표권 위험 체크
             safe, danger_kw = employee_ip_guardian(p)
             if not safe:
@@ -585,6 +608,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                 )
 
             await naver_api.register_product(payload)
+            save_registered_code(code)
             results["success"] += 1
             print(f"[총괄] ✅ {ai['product_name']} ({price:,}원)", flush=True)
             await asyncio.sleep(0.5)
