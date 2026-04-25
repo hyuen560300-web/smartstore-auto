@@ -225,12 +225,29 @@ def calculate_selling_price(wholesale_price: int) -> int:
     return round(price / 10) * 10
 
 
-# ─── Claude AI 상품 설명 생성 ─────────────────────────────────────────────────
-async def generate_product_copy(product: dict) -> dict:
+# ─── Claude AI 상품 설명 생성 (전 직원 협업 버전) ────────────────────────────
+async def generate_product_copy(product: dict, context: dict = None) -> dict:
+    """시즌+트렌드+리뷰 Pain Point 반영한 상품 설명 생성"""
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    ctx = context or {}
+    season_info = ctx.get("season", "")
+    trend_keywords = ctx.get("trends", [])
+    pain_points = ctx.get("pain_points", [])
+    selling_points = ctx.get("selling_points", [])
+
+    extra_context = ""
+    if season_info:
+        extra_context += f"\n현재 시즌 이벤트: {season_info}"
+    if trend_keywords:
+        extra_context += f"\n실시간 트렌딩 키워드: {', '.join(trend_keywords[:5])}"
+    if pain_points:
+        extra_context += f"\n고객 Pain Point (반드시 해결책 언급): {', '.join(pain_points)}"
+    if selling_points:
+        extra_context += f"\n핵심 셀링포인트: {', '.join(selling_points)}"
+
     resp = await client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
+        max_tokens=1500,
         system=[{
             "type": "text",
             "text": "당신은 네이버 스마트스토어 상품 등록 전문가입니다. 반드시 JSON만 출력하세요.",
@@ -239,15 +256,18 @@ async def generate_product_copy(product: dict) -> dict:
         messages=[{
             "role": "user",
             "content": f"""아래 상품 정보를 스마트스토어 최적화 형식으로 변환해주세요.
+{extra_context}
 
 상품 정보:
 {json.dumps(product, ensure_ascii=False)}
 
 출력 형식 (JSON만):
 {{
-  "product_name": "검색 최적화 상품명 (50자 이내)",
-  "description": "구매 욕구 자극 HTML 설명 (500자 이내, <p> 태그 사용)",
-  "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"]
+  "product_name": "검색 최적화 상품명 (50자 이내, 트렌딩 키워드 포함)",
+  "description": "구매 욕구 자극 HTML 설명 (800자 이내, <p><b><ul><li> 태그 사용, Pain Point 해결책 포함)",
+  "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"],
+  "banner_text": "상세페이지 배너용 핵심 문구 (20자 이내)",
+  "sub_text": "배너 서브 문구 (30자 이내)"
 }}"""
         }]
     )
@@ -368,6 +388,65 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
     }
 
 
+# ─── 이미지 디렉터: 텍스트 배너 생성 ────────────────────────────────────────
+async def create_banner_image(image_url: str, main_text: str, sub_text: str = "") -> str | None:
+    """배경 이미지 위에 마케팅 텍스트 합성 → Naver 업로드"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+
+        # 배경 이미지 다운로드
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+
+        img = Image.open(io.BytesIO(r.content)).convert("RGBA")
+        img = img.resize((800, 800), Image.LANCZOS)
+
+        # 반투명 오버레이
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        draw.rectangle([(0, 550), (800, 800)], fill=(0, 0, 0, 160))
+        img = Image.alpha_composite(img, overlay).convert("RGB")
+        draw = ImageDraw.Draw(img)
+
+        # 폰트 설정 (나눔고딕 or 기본 폰트)
+        font_paths = [
+            "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+        main_font = sub_font = ImageFont.load_default()
+        for fp in font_paths:
+            try:
+                main_font = ImageFont.truetype(fp, 48)
+                sub_font = ImageFont.truetype(fp, 28)
+                break
+            except Exception:
+                pass
+
+        # 텍스트 그리기
+        draw.text((400, 620), main_text, font=main_font, fill="white", anchor="mm")
+        if sub_text:
+            draw.text((400, 690), sub_text[:30], font=sub_font, fill=(220, 220, 220), anchor="mm")
+
+        # Naver 서버 업로드
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        buf.seek(0)
+        token = await naver_api.get_token()
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/product-images/upload",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"imageFiles": ("banner.jpg", buf.read(), "image/jpeg")}
+            )
+            r.raise_for_status()
+            return r.json()["images"][0]["url"]
+    except Exception as e:
+        print(f"[이미지디렉터] 배너 생성 실패: {e}", flush=True)
+        return None
+
+
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
 PEXELS_KEYWORD_MAP = {
     "티셔츠": "t-shirt", "바지": "pants", "아우터": "jacket outer",
@@ -437,45 +516,85 @@ naver_api = NaverCommerceAPI()
 
 
 async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
-    """파이프라인 1: 오너클랜 Excel → 소싱팀장 선별 → IP감시 → AI설명 → 스마트스토어 등록"""
-    from employees import employee_sourcing_manager, employee_ip_guardian
-    print(f"[REGISTER] 시작: {excel_path}", flush=True)
+    """파이프라인 1: 전 직원 협업 — 소싱→IP→시즌→트렌드→리뷰→설명→이미지→등록"""
+    from employees import (
+        employee_sourcing_manager, employee_ip_guardian,
+        employee_season_planner, employee_trend_scout, employee_review_analyst
+    )
+    print(f"[총괄] 상품 등록 시작: {excel_path}", flush=True)
     products = parse_excel(excel_path)
-    print(f"[REGISTER] 파싱 완료: {len(products)}개", flush=True)
+    print(f"[총괄] 파싱 완료: {len(products)}개", flush=True)
 
-    # 소싱팀장: 잘 팔릴 상품 선별
+    # ① 소싱팀장: 잘 팔릴 상품 선별
     products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
-    print(f"[소싱팀장] 선별 완료: {len(products)}개", flush=True)
+    print(f"[소싱팀장] 선별: {len(products)}개", flush=True)
+
+    # ② 시즌 기획자: 현재 시즌 파악
+    season_data = employee_season_planner()
+    season_info = season_data["upcoming"][0]["event"] if season_data["upcoming"] else ""
+    if season_info:
+        print(f"[시즌기획자] 현재 시즌: {season_info}", flush=True)
+
+    # ③ 트렌드 스카우터: 트렌딩 키워드 수집
+    trend_keywords = await employee_trend_scout()
+    print(f"[트렌드스카우터] 키워드 {len(trend_keywords)}개 수집", flush=True)
 
     results = {"success": 0, "fail": 0, "skip": 0, "ip_blocked": 0, "errors": []}
     for p in products[:limit]:
         try:
-            # IP 감시관: 상표권 위험 체크
+            # ④ IP 감시관: 상표권 위험 체크
             safe, danger_kw = employee_ip_guardian(p)
             if not safe:
                 print(f"[IP감시관] 차단: {p.get('name','')} — {danger_kw}", flush=True)
                 results["ip_blocked"] += 1
                 continue
 
-            ai = await generate_product_copy(p)
+            # ⑤ 리뷰 분석가: Pain Point 분석
+            review = await employee_review_analyst(str(p.get("name", "")), ANTHROPIC_API_KEY)
+
+            # ⑥ 상품 설명 작가: 전 직원 데이터 통합해서 설명 생성
+            context = {
+                "season": season_info,
+                "trends": trend_keywords[:5],
+                "pain_points": review.get("pain_points", []),
+                "selling_points": review.get("selling_points", []),
+            }
+            ai = await generate_product_copy(p, context)
             price = calculate_selling_price(p["price"])
+
+            # ⑦ 이미지 디렉터: 메인 이미지
             naver_img_url = await get_product_image(p)
             if not naver_img_url:
-                print(f"[REGISTER] SKIP 이미지없음: {p.get('name', '')}", flush=True)
+                print(f"[이미지디렉터] SKIP 이미지없음: {p.get('name', '')}", flush=True)
                 results["skip"] += 1
                 continue
+
+            # ⑧ 이미지 디렉터: 상세페이지 텍스트 배너 생성
+            banner_url = await create_banner_image(
+                naver_img_url,
+                ai.get("banner_text", p.get("name", "")[:20]),
+                ai.get("sub_text", review.get("key_message", ""))
+            )
+
             payload = build_product_payload(p, ai, price)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
+            if banner_url:
+                payload["originProduct"]["detailContent"] = (
+                    f'<img src="{banner_url}" style="width:100%;display:block;">'
+                    + ai["description"]
+                )
+
             await naver_api.register_product(payload)
             results["success"] += 1
-            print(f"[REGISTER] OK {ai['product_name']} ({price:,}원)", flush=True)
+            print(f"[총괄] ✅ {ai['product_name']} ({price:,}원)", flush=True)
             await asyncio.sleep(0.5)
+
         except Exception as e:
             results["fail"] += 1
             results["errors"].append(str(e))
-            print(f"[REGISTER] FAIL {e}", flush=True)
+            print(f"[총괄] ❌ {e}", flush=True)
 
-    print(f"[REGISTER] 완료 — 성공:{results['success']} 실패:{results['fail']} 스킵:{results['skip']}", flush=True)
+    print(f"[총괄] 완료 — 성공:{results['success']} 실패:{results['fail']} 스킵:{results['skip']} IP차단:{results['ip_blocked']}", flush=True)
     return results
 
 

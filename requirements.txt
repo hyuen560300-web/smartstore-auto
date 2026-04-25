@@ -6,3 +6,4 @@ python-dotenv
 openpyxl
 python-multipart
 bcrypt
+Pillow
