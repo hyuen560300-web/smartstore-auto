@@ -5,6 +5,7 @@
 
 import os
 import json
+import httpx
 from datetime import datetime, timezone
 from fastapi import FastAPI, BackgroundTasks, Request, UploadFile, File
 from fastapi.responses import JSONResponse
