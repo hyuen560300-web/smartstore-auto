@@ -113,7 +113,8 @@ class NaverCommerceAPI:
                 headers=await self._headers(),
                 json=payload
             )
-            r.raise_for_status()
+            if not r.is_success:
+                raise Exception(f"Naver API {r.status_code}: {r.text[:500]}")
             return r.json()
 
     async def get_new_orders(self) -> list:
@@ -256,6 +257,7 @@ COLUMN_MAP = {
     "원본상품명": "name", "마켓상품명": "name",
     "오너클랜판매가": "price", "판매가": "price", "공급가": "price", "도매가": "price",
     "마켓판매가": "market_price", "마켓실제판매가": "market_price", "소비자가": "market_price",
+    "카테고리코드": "category_id",
     "카테고리명": "category", "카테고리": "category",
     "대카테고리": "cat_large", "중카테고리": "cat_medium", "소카테고리": "cat_small",
     "대표이미지": "image", "이미지URL": "image", "이미지": "image",
@@ -415,6 +417,13 @@ DEFAULT_CATEGORY_ID = 50000830
 
 
 def get_category_id(product: dict) -> int:
+    # 오너클랜 Excel의 카테고리코드 직접 사용
+    cat_id = product.get("category_id")
+    if cat_id:
+        try:
+            return int(str(cat_id).strip())
+        except (ValueError, TypeError):
+            pass
     for key in ("cat_large", "cat_medium", "category"):
         val = str(product.get(key, ""))
         for k, v in CATEGORY_ID_MAP.items():
