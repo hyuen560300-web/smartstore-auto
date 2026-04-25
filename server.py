@@ -127,8 +127,10 @@ async def register_products_debug():
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         wb.close()
-        headers = [str(v) for v in (rows[0] if rows else [])]
-        return JSONResponse({"step": "parse", "error": "파싱된 상품 없음", "headers": headers[:20], "total_rows": len(rows)})
+        row0 = [str(v) for v in (rows[0] if rows else [])]
+        row1 = [str(v) for v in (rows[1] if len(rows) > 1 else [])]
+        row2 = [str(v) for v in (rows[2] if len(rows) > 2 else [])]
+        return JSONResponse({"step": "parse", "error": "파싱된 상품 없음", "row0": row0[:25], "row1": row1[:25], "row2": row2[:25], "total_rows": len(rows)})
 
     p = products[0]
     return_data["sample_product"] = {"name": p.get("name"), "price": p.get("price"), "image": str(p.get("image", ""))[:50]}
