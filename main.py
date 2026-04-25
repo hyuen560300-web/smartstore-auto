@@ -457,7 +457,7 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
                 "deliveryAttributeType": "NORMAL",
                 "deliveryCompany": "CJGLS",
                 "deliveryFee": {
-                    "deliveryFeeType": "FREE" if is_free else "CHARGE",
+                    "deliveryFeeType": "FREE" if is_free else "PAID",
                     "baseFee": 0 if is_free else delivery_fee,
                     "freeConditionalAmount": 0,
                 },
