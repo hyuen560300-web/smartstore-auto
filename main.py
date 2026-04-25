@@ -250,17 +250,29 @@ class NaverCommerceAPI:
 
 # ─── 오너클랜 Excel 파서 ──────────────────────────────────────────────────────
 COLUMN_MAP = {
-    "상품코드": "code", "공급사상품코드": "code",
-    "상품명": "name",
+    "상품코드": "code", "공급사상품코드": "code", "업체상품코드": "code",
+    "상품명": "name", "상품명(필수)": "name",
     "오너클랜판매가": "price", "판매가": "price", "마켓판매가": "market_price",
+    "공급가": "price", "도매가": "price", "소비자가": "market_price",
     "카테고리": "category",
     "대카테고리": "cat_large", "중카테고리": "cat_medium", "소카테고리": "cat_small",
     "대표이미지": "image", "이미지URL": "image", "이미지": "image",
-    "재고수량": "stock",
+    "이미지1": "image", "대표이미지URL": "image", "상품이미지": "image",
+    "재고수량": "stock", "재고": "stock",
     "배송방법": "delivery_type", "배송비": "delivery_fee",
     "원산지": "origin", "브랜드": "brand", "제조사": "manufacturer",
     "상품설명": "desc",
 }
+
+def _match_col(header: str) -> str | None:
+    """COLUMN_MAP 완전일치 → 포함관계 순으로 매핑"""
+    h = header.strip()
+    if h in COLUMN_MAP:
+        return COLUMN_MAP[h]
+    for k, v in COLUMN_MAP.items():
+        if k in h:
+            return v
+    return None
 
 def parse_excel(filepath: str) -> list[dict]:
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
@@ -270,15 +282,15 @@ def parse_excel(filepath: str) -> list[dict]:
     if not rows:
         return []
 
-    # 헤더 행 자동 감지
-    header_idx = 0
+    # 헤더 행 자동 감지 — 기본값 1 (오너클랜: row0=그룹헤더, row1=컬럼명)
+    header_idx = 1 if len(rows) > 1 else 0
     for i, row in enumerate(rows[:5]):
-        if row and sum(1 for v in row if str(v).strip() in COLUMN_MAP) >= 2:
+        if row and sum(1 for v in row if _match_col(str(v) if v else "")) >= 2:
             header_idx = i
             break
 
     headers = [str(v).strip() if v else "" for v in rows[header_idx]]
-    col_idx = {i: COLUMN_MAP[h] for i, h in enumerate(headers) if h in COLUMN_MAP}
+    col_idx = {i: mapped for i, h in enumerate(headers) if (mapped := _match_col(h))}
 
     products = []
     for row in rows[header_idx + 1:]:
