@@ -161,15 +161,58 @@ async def _scan_drive_folder() -> list:
 
 @app.post("/build-drive-index")
 async def build_drive_index():
-    """Google Drive 폴더 스캔 → 파일 ID 인덱스 구축 (최초 1회 실행)"""
-    file_ids = await _scan_drive_folder()
-    if not file_ids:
-        file_ids = [FALLBACK_FILE_ID]
-        msg = "스캔 실패 — 폴백 파일 ID 1개 저장"
+    """Google Drive 폴더 스캔 → 파일 ID 인덱스 구축"""
+    api_key_set = bool(GOOGLE_API_KEY)
+    debug_info = {"api_key_set": api_key_set, "folder_id": DRIVE_FOLDER_ID}
+
+    # Drive API 직접 호출해서 에러 내용 확인
+    error_detail = None
+    file_ids = []
+    if GOOGLE_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(
+                    "https://www.googleapis.com/drive/v3/files",
+                    params={
+                        "q": f"'{DRIVE_FOLDER_ID}' in parents and trashed=false",
+                        "fields": "nextPageToken,files(id,name)",
+                        "pageSize": 200,
+                        "key": GOOGLE_API_KEY,
+                    }
+                )
+                debug_info["api_status"] = r.status_code
+                data = r.json()
+                if r.status_code == 200:
+                    file_ids = [f["id"] for f in data.get("files", [])]
+                    # 페이지 추가 처리
+                    page_token = data.get("nextPageToken")
+                    while page_token:
+                        r2 = await c.get(
+                            "https://www.googleapis.com/drive/v3/files",
+                            params={
+                                "q": f"'{DRIVE_FOLDER_ID}' in parents and trashed=false",
+                                "fields": "nextPageToken,files(id,name)",
+                                "pageSize": 200,
+                                "key": GOOGLE_API_KEY,
+                                "pageToken": page_token,
+                            }
+                        )
+                        d2 = r2.json()
+                        file_ids += [f["id"] for f in d2.get("files", [])]
+                        page_token = d2.get("nextPageToken")
+                else:
+                    error_detail = data.get("error", {}).get("message", str(data))
+        except Exception as e:
+            error_detail = str(e)
     else:
-        msg = f"{len(file_ids)}개 파일 ID 저장 완료"
-    _save_drive_index(file_ids)
-    return JSONResponse({"status": "ok", "message": msg, "count": len(file_ids)})
+        error_detail = "GOOGLE_API_KEY 환경변수 없음"
+
+    if file_ids:
+        _save_drive_index(file_ids)
+        return JSONResponse({"status": "ok", "message": f"{len(file_ids)}개 파일 ID 저장 완료", "count": len(file_ids), "debug": debug_info})
+    else:
+        _save_drive_index([FALLBACK_FILE_ID])
+        return JSONResponse({"status": "fallback", "message": "스캔 실패", "error": error_detail, "debug": debug_info})
 
 
 @app.post("/add-drive-file-ids")
