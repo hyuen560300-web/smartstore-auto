@@ -103,57 +103,144 @@ async def download_excel_from_url(request: Request):
     return JSONResponse({"status": "downloaded", "path": str(save_path), "size": len(r.content)})
 
 
-@app.post("/next-excel")
-async def next_excel_from_drive(request: Request):
-    """Google Drive 폴더에서 다음 순서 Excel 자동 다운로드"""
-    import httpx, json as _json
-    FOLDER_ID = "1jTkPYwxOqdGEcCQCUgm5A2YlNDGRqprF"
-    PROGRESS_FILE = "./uploads/excel_progress.json"
+DRIVE_FOLDER_ID   = "1jTkPYwxOqdGEcCQCUgm5A2YlNDGRqprF"
+FALLBACK_FILE_ID  = "1h6KTzD5-rcqCODII0GHsLPdIxaYTSlVz"
+DRIVE_INDEX_FILE  = "./uploads/drive_index.json"
+EXCEL_PROGRESS    = "./uploads/excel_progress.json"
 
-    # 진행 상황 로드
+
+def _load_drive_index() -> list:
     try:
-        with open(PROGRESS_FILE) as f:
-            progress = _json.load(f)
+        with open(DRIVE_INDEX_FILE) as f:
+            return json.load(f).get("file_ids", [])
     except Exception:
-        progress = {"current_index": 0, "downloaded_files": []}
+        return []
 
+
+def _save_drive_index(file_ids: list):
+    with open(DRIVE_INDEX_FILE, "w") as f:
+        json.dump({"file_ids": file_ids, "scanned_at": str(datetime.now(timezone.utc))}, f)
+
+
+async def _scan_drive_folder() -> list:
+    """Google Drive 폴더 페이지 스캔으로 파일 ID 목록 추출"""
+    import re as _re
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
+            r = await c.get(
+                f"https://drive.google.com/drive/folders/{DRIVE_FOLDER_ID}",
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            )
+            html = r.text
+        ids = _re.findall(r'/file/d/([A-Za-z0-9_-]{25,44})/', html)
+        seen, unique = set(), []
+        for fid in ids:
+            if fid not in seen:
+                seen.add(fid)
+                unique.append(fid)
+        print(f"[DRIVE] 폴더 스캔 완료: {len(unique)}개 파일 발견", flush=True)
+        return unique
+    except Exception as e:
+        print(f"[DRIVE] 폴더 스캔 실패: {e}", flush=True)
+        return []
+
+
+@app.post("/build-drive-index")
+async def build_drive_index():
+    """Google Drive 폴더 스캔 → 파일 ID 인덱스 구축 (최초 1회 실행)"""
+    file_ids = await _scan_drive_folder()
+    if not file_ids:
+        file_ids = [FALLBACK_FILE_ID]
+        msg = "스캔 실패 — 폴백 파일 ID 1개 저장"
+    else:
+        msg = f"{len(file_ids)}개 파일 ID 저장 완료"
+    _save_drive_index(file_ids)
+    return JSONResponse({"status": "ok", "message": msg, "count": len(file_ids)})
+
+
+@app.post("/add-drive-file-ids")
+async def add_drive_file_ids(request: Request):
+    """파일 ID 목록 수동 등록 (Drive 스캔이 안 될 때 직접 입력)
+    Body: {"file_ids": ["id1", "id2", ...]}
+    """
+    try:
+        body = await request.json()
+        new_ids = body.get("file_ids", [])
+    except Exception:
+        return JSONResponse({"status": "error", "message": "file_ids 배열 필요"}, status_code=400)
+
+    existing = _load_drive_index()
+    combined = list(dict.fromkeys(existing + new_ids))  # 중복 제거, 순서 유지
+    _save_drive_index(combined)
+    return JSONResponse({"status": "ok", "total": len(combined), "added": len(combined) - len(existing)})
+
+
+@app.get("/drive-index-status")
+async def drive_index_status():
+    """현재 Drive 인덱스 상태 확인"""
+    file_ids = _load_drive_index()
+    try:
+        with open(EXCEL_PROGRESS) as f:
+            progress = json.load(f)
+    except Exception:
+        progress = {"current_index": 0}
     idx = progress.get("current_index", 0)
+    return JSONResponse({
+        "indexed_files": len(file_ids),
+        "current_index": idx,
+        "next_file_id": file_ids[idx % len(file_ids)] if file_ids else FALLBACK_FILE_ID,
+        "cycles_completed": idx // len(file_ids) if file_ids else 0,
+    })
 
-    # 하드코딩된 파일 번호 기반 URL 생성 (1_1 ~ 4_50)
-    sets = []
-    for s in range(1, 5):
-        for n in range(1, 51):
-            sets.append(f"OWNERCLAN_2253286_{s}_{n}")
 
-    if idx >= len(sets):
-        return JSONResponse({"status": "완료", "message": "모든 파일 등록 완료"})
+@app.post("/next-excel")
+async def next_excel_from_drive():
+    """Google Drive에서 다음 순서 Excel 다운로드 (인덱스 순환)"""
+    # 1. 파일 ID 목록 로드 — 없으면 Drive 스캔 시도
+    file_ids = _load_drive_index()
+    if not file_ids:
+        print("[DRIVE] 인덱스 없음 — Drive 스캔 시도", flush=True)
+        file_ids = await _scan_drive_folder()
+        if file_ids:
+            _save_drive_index(file_ids)
+        else:
+            file_ids = [FALLBACK_FILE_ID]
+            print("[DRIVE] 스캔 실패 — 폴백 파일 ID 사용", flush=True)
 
-    file_key = sets[idx]
-    # Google Drive에서 파일명으로 검색해서 다운로드
-    # 이미 서버에 있는 파일 활용
-    filename = f"ownerclan_likelikec_오너클랜상품리스트_{file_key}.xlsx"
+    # 2. 진행 상황 로드
+    try:
+        with open(EXCEL_PROGRESS) as f:
+            progress = json.load(f)
+    except Exception:
+        progress = {"current_index": 0}
 
-    # Drive 파일 ID 직접 다운로드 시도
-    drive_url = f"https://drive.usercontent.google.com/download?id=1h6KTzD5-rcqCODII0GHsLPdIxaYTSlVz&export=download"
+    idx = progress.get("current_index", 0) % len(file_ids)
+    file_id = file_ids[idx]
+
+    # 3. 다운로드
+    download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+    print(f"[DRIVE] 다운로드 중: {file_id} (인덱스 {idx+1}/{len(file_ids)})", flush=True)
 
     async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
-        r = await c.get(drive_url)
+        r = await c.get(download_url)
         r.raise_for_status()
 
     save_path = Path(EXCEL_FOLDER) / "ownerclan_latest.xlsx"
     save_path.write_bytes(r.content)
 
-    # 진행 상황 저장
-    progress["current_index"] = idx + 1
-    with open(PROGRESS_FILE, "w") as f:
-        _json.dump(progress, f)
+    # 4. 진행 상황 저장
+    next_idx = (idx + 1) % len(file_ids)
+    progress["current_index"] = next_idx
+    with open(EXCEL_PROGRESS, "w") as f:
+        json.dump(progress, f)
 
     return JSONResponse({
         "status": "downloaded",
-        "file": file_key,
+        "file_id": file_id,
         "index": idx + 1,
-        "total": len(sets),
-        "remaining": len(sets) - idx - 1
+        "total": len(file_ids),
+        "next_index": next_idx + 1,
+        "size_bytes": len(r.content),
     })
 
 

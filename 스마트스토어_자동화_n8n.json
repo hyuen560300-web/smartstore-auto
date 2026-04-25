@@ -26,6 +26,47 @@
         "rule": {
           "interval": [
             {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-daily",
+      "name": "매일 자정 (상품등록)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/next-excel",
+        "options": {}
+      },
+      "id": "http-next-excel",
+      "name": "다음 Excel 다운로드",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/register-products",
+        "options": {}
+      },
+      "id": "http-register-daily",
+      "name": "상품 등록 (자동)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 100]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
               "field": "hours",
               "hoursInterval": 1
             }
@@ -115,6 +156,28 @@
         [
           {
             "node": "상품 등록",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매일 자정 (상품등록)": {
+      "main": [
+        [
+          {
+            "node": "다음 Excel 다운로드",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "다음 Excel 다운로드": {
+      "main": [
+        [
+          {
+            "node": "상품 등록 (자동)",
             "type": "main",
             "index": 0
           }
