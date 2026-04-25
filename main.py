@@ -380,7 +380,7 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
 
     resp = await client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=1500,
+        max_tokens=2000,
         system=[{
             "type": "text",
             "text": (
@@ -403,13 +403,15 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
 출력 형식 (JSON만):
 {{
   "product_name": "브랜드+핵심키워드+속성/규격, 25자 내외, 모델번호/특수문자/중복단어/금지어 없이 자연스러운 한국어",
-  "reason_1": "이 상품을 사야 하는 이유 1 (Pain Point 해결, 30자 내외)",
-  "reason_2": "이 상품을 사야 하는 이유 2 (차별점 강조, 30자 내외)",
-  "reason_3": "이 상품을 사야 하는 이유 3 (시즌/트렌드 연결, 30자 내외)",
-  "spec_rows": [["항목명","값"], ["항목명","값"], ["항목명","값"], ["항목명","값"]],
-  "tags": ["태그1","태그2","태그3","태그4","태그5"],
-  "banner_text": "핵심 메시지 15자 이내, 숫자 포함",
-  "sub_text": "혜택 서브 문구 25자 이내"
+  "headline": "Pillow 배너용 핵심 편익 (예: '한 번으로 3배 오래!'), 18자 이내, 숫자 필수",
+  "sub_headline": "배너 서브 문구 (예: '교체 빈도 줄이고 비용 절약'), 28자 이내",
+  "emotional_copy": "감성 설득 문구 2~3문장. 구매자의 일상과 연결되는 따뜻하고 공감가는 문장으로 작성. 100자 내외.",
+  "recommend_list": ["이런 분 추천 1 (20자 이내)", "이런 분 추천 2", "이런 분 추천 3", "이런 분 추천 4", "이런 분 추천 5"],
+  "reason_1": "사야 하는 이유 1 — Pain Point 해결 중심, 구체적 수치 포함 (40자 이내)",
+  "reason_2": "사야 하는 이유 2 — 차별점/기술력 강조 (40자 이내)",
+  "reason_3": "사야 하는 이유 3 — 시즌/트렌드/절약 연결 (40자 이내)",
+  "spec_rows": [["항목","값"],["항목","값"],["항목","값"],["항목","값"],["항목","값"]],
+  "tags": ["태그1","태그2","태그3","태그4","태그5"]
 }}"""
         }]
     )
@@ -610,6 +612,94 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
         return None
 
 
+# ─── 스마트스토어 상세페이지 HTML 빌더 ──────────────────────────────────────
+def build_detail_html(banner_url: str, product_img_url: str, ai: dict) -> str:
+    """
+    5-섹션 설득형 상세페이지 HTML
+    ① 헤드라인 배너  ② 감성 설득 문구  ③ 상품 이미지
+    ④ 이런 분께 추천 체크리스트  ⑤ 이유 3가지 + 스펙 테이블
+    """
+    W = "100%"
+    IMG_STYLE = f'style="max-width:100%;width:{W};height:auto;display:block;margin:0 auto;"'
+    WRAP = 'style="max-width:860px;margin:0 auto;padding:0 16px;font-family:\'나눔고딕\',Apple SD Gothic Neo,sans-serif;color:#333;"'
+
+    # ① 헤드라인 배너 (Pillow 생성 이미지)
+    sec1 = f'<img src="{banner_url}" {IMG_STYLE}>' if banner_url else ""
+
+    # ② 감성 설득 문구 섹션
+    emotional = ai.get("emotional_copy", "")
+    sec2 = (
+        f'<div style="background:#f0f6ff;padding:28px 24px;text-align:center;'
+        f'border-top:3px solid #1a73e8;border-bottom:3px solid #1a73e8;margin:0;">'
+        f'<p style="font-size:16px;line-height:1.9;color:#444;margin:0;">{emotional}</p>'
+        f'</div>'
+    ) if emotional else ""
+
+    # ③ 상품 이미지 (860~1000px)
+    sec3 = f'<img src="{product_img_url}" {IMG_STYLE}>' if product_img_url else ""
+
+    # ④ 이런 분께 추천 체크리스트
+    recs = [r for r in ai.get("recommend_list", []) if r]
+    if recs:
+        items = "".join(
+            f'<li style="padding:10px 0 10px 36px;position:relative;border-bottom:1px solid #dce8ff;'
+            f'font-size:15px;color:#333;">'
+            f'<span style="position:absolute;left:0;color:#1a73e8;font-size:18px;">✔</span>{r}</li>'
+            for r in recs
+        )
+        sec4 = (
+            f'<div {WRAP}>'
+            f'<div style="background:#eef4ff;border-radius:12px;padding:24px 20px;margin:20px 0;">'
+            f'<h3 style="font-size:17px;color:#1a73e8;margin:0 0 16px;text-align:center;">'
+            f'💙 이런 분들께 추천드려요</h3>'
+            f'<ul style="list-style:none;padding:0;margin:0;">{items}</ul>'
+            f'</div></div>'
+        )
+    else:
+        sec4 = ""
+
+    # ⑤ 이유 3가지
+    reasons = [(ai.get(f"reason_{i}", ""), c) for i, c in
+               enumerate(["#e8f5e9","#fff3e0","#fce4ec"], start=1) if ai.get(f"reason_{i}")]
+    reason_blocks = "".join(
+        f'<div style="background:{bg};border-radius:10px;padding:18px 20px;margin:10px 0;">'
+        f'<span style="font-weight:bold;font-size:22px;color:#555;">0{i}&nbsp;</span>'
+        f'<span style="font-size:15px;line-height:1.8;">{txt}</span></div>'
+        for i, (txt, bg) in enumerate(reasons, start=1)
+    )
+    if reason_blocks:
+        sec5a = (
+            f'<div {WRAP}>'
+            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;padding-left:12px;margin:28px 0 14px;">'
+            f'✅ 이 상품을 선택해야 하는 이유</h3>'
+            + reason_blocks + '</div>'
+        )
+    else:
+        sec5a = ""
+
+    # ⑥ 스펙 테이블
+    spec_rows = ai.get("spec_rows", [])
+    if spec_rows:
+        rows_html = "".join(
+            f'<tr><td style="background:#f5f7fa;padding:11px 14px;font-weight:bold;'
+            f'width:38%;border:1px solid #ddd;font-size:14px;">{r[0]}</td>'
+            f'<td style="padding:11px 14px;border:1px solid #ddd;font-size:14px;">'
+            f'{r[1] if len(r) > 1 else ""}</td></tr>'
+            for r in spec_rows
+        )
+        sec5b = (
+            f'<div {WRAP}>'
+            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;padding-left:12px;margin:28px 0 14px;">'
+            f'📋 상품 스펙</h3>'
+            f'<table style="width:100%;border-collapse:collapse;">{rows_html}</table>'
+            f'</div>'
+        )
+    else:
+        sec5b = ""
+
+    return sec1 + sec2 + sec3 + sec4 + sec5a + sec5b
+
+
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
 PEXELS_KEYWORD_MAP = {
     "티셔츠": "t-shirt", "바지": "pants", "아우터": "jacket outer",
@@ -795,46 +885,15 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             # ⑧ 이미지 디렉터: 상세페이지 텍스트 배너 생성
             banner_url = await create_banner_image(
                 naver_img_url,
-                ai.get("banner_text", p.get("name", "")[:20]),
-                ai.get("sub_text", review.get("key_message", ""))
+                ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18],
+                ai.get("sub_headline") or ai.get("sub_text", "")
             )
 
             payload = build_product_payload(p, ai, price)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
-            if banner_url:
-                reasons = [
-                    ai.get("reason_1", ""), ai.get("reason_2", ""), ai.get("reason_3", "")
-                ]
-                reason_items = "".join(
-                    f'<li style="padding:8px 0;border-bottom:1px solid #eee;">'
-                    f'<b style="color:#1a73e8;">0{i+1}</b>&nbsp;&nbsp;{r}</li>'
-                    for i, r in enumerate(reasons) if r
-                )
-                spec_rows = ai.get("spec_rows", [])
-                spec_table = ""
-                if spec_rows:
-                    rows_html = "".join(
-                        f'<tr><td style="background:#f5f5f5;padding:10px 14px;font-weight:bold;width:35%;border:1px solid #ddd;">{row[0]}</td>'
-                        f'<td style="padding:10px 14px;border:1px solid #ddd;">{row[1] if len(row)>1 else ""}</td></tr>'
-                        for row in spec_rows
-                    )
-                    spec_table = (
-                        '<h3 style="font-size:16px;color:#333;border-left:4px solid #1a73e8;padding-left:10px;margin:28px 0 12px;">📋 상품 스펙</h3>'
-                        f'<table style="width:100%;border-collapse:collapse;font-size:14px;">{rows_html}</table>'
-                    )
-                payload["originProduct"]["detailContent"] = (
-                    # ① 배너
-                    f'<img src="{banner_url}" style="max-width:100%;height:auto;display:block;margin:0 auto;">'
-                    # ② 상품 이미지
-                    f'<img src="{naver_img_url}" style="max-width:100%;height:auto;display:block;margin:12px auto;">'
-                    # ③ 이유 3가지
-                    '<div style="max-width:860px;margin:0 auto;padding:20px 16px;font-family:\'나눔고딕\',sans-serif;">'
-                    '<h3 style="font-size:17px;color:#333;border-left:4px solid #1a73e8;padding-left:10px;margin:0 0 12px;">✅ 이 상품을 사야 하는 이유 3가지</h3>'
-                    f'<ul style="list-style:none;padding:0;margin:0;font-size:15px;line-height:1.8;color:#444;">{reason_items}</ul>'
-                    # ④ 스펙 테이블
-                    + spec_table +
-                    '</div>'
-                )
+            detail_html = build_detail_html(banner_url, naver_img_url, ai)
+            if detail_html:
+                payload["originProduct"]["detailContent"] = detail_html
 
             await naver_api.register_product(payload)
             save_registered_code(code)
