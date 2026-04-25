@@ -251,15 +251,17 @@ class NaverCommerceAPI:
 # ─── 오너클랜 Excel 파서 ──────────────────────────────────────────────────────
 COLUMN_MAP = {
     "상품코드": "code", "공급사상품코드": "code", "업체상품코드": "code",
+    "판매자관리코드": "code",
     "상품명": "name", "상품명(필수)": "name",
-    "오너클랜판매가": "price", "판매가": "price", "마켓판매가": "market_price",
-    "공급가": "price", "도매가": "price", "소비자가": "market_price",
-    "카테고리": "category",
+    "원본상품명": "name", "마켓상품명": "name",
+    "오너클랜판매가": "price", "판매가": "price", "공급가": "price", "도매가": "price",
+    "마켓판매가": "market_price", "마켓실제판매가": "market_price", "소비자가": "market_price",
+    "카테고리명": "category", "카테고리": "category",
     "대카테고리": "cat_large", "중카테고리": "cat_medium", "소카테고리": "cat_small",
     "대표이미지": "image", "이미지URL": "image", "이미지": "image",
     "이미지1": "image", "대표이미지URL": "image", "상품이미지": "image",
     "재고수량": "stock", "재고": "stock",
-    "배송방법": "delivery_type", "배송비": "delivery_fee",
+    "배송방법": "delivery_type", "배송유형": "delivery_type", "배송비": "delivery_fee",
     "원산지": "origin", "브랜드": "brand", "제조사": "manufacturer",
     "상품설명": "desc",
 }
@@ -302,12 +304,14 @@ def parse_excel(filepath: str) -> list[dict]:
                 item[col_idx[i]] = val
         if not item.get("name"):
             continue
-        raw_price = item.get("market_price") or item.get("price") or 0
-        try:
-            item["price"] = int(float(str(raw_price).replace(",", "")))
-        except (ValueError, TypeError):
-            item["price"] = 0
-        if item["price"] > 0:
+        def _to_int(v):
+            try:
+                return int(float(str(v).replace(",", "")))
+            except (ValueError, TypeError):
+                return 0
+        price = _to_int(item.get("price")) or _to_int(item.get("market_price"))
+        item["price"] = price
+        if price > 0:
             products.append(item)
 
     return products
