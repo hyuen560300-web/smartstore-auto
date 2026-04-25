@@ -34,6 +34,7 @@ from employees import (
     employee_stock_guardian,
     employee_ad_analyst,
     employee_platform_expander,
+    employee_event_manager,
 )
 
 app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0")
@@ -199,6 +200,13 @@ async def ad_analysis(request: Request):
         ad_cost = 0
     orders = await naver_api.get_new_orders()
     result = await employee_ad_analyst(orders, ad_cost, ANTHROPIC_API_KEY)
+    return JSONResponse(result)
+
+
+@app.get("/event-manager")
+async def event_manager():
+    """🎉 이벤트 매니저 — 프로모션/알림 문구 자동 생성"""
+    result = await employee_event_manager(ANTHROPIC_API_KEY)
     return JSONResponse(result)
 
 

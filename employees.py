@@ -207,7 +207,43 @@ async def employee_error_auditor(errors: list, anthropic_key: str) -> str:
     return resp.content[0].text.strip()
 
 
-# ─── 직원 9: 숏폼 영상 제작자 ───────────────────────────────────────────────
+# ─── 직원 9: 이벤트 매니저 ──────────────────────────────────────────────────
+async def employee_event_manager(anthropic_key: str) -> dict:
+    """스토어 프로모션 문구 & 알림 메시지 자동 생성"""
+    season = employee_season_planner()
+    upcoming = season["upcoming"][:2] if season["upcoming"] else []
+
+    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+    context = f"다가오는 이벤트: {[e['event'] for e in upcoming]}" if upcoming else "일반 시즌"
+
+    resp = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=512,
+        system=[{"type": "text", "text": "스마트스토어 이벤트 마케팅 전문가. JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": f"""
+{context} 기준으로 스마트스토어 프로모션 문구를 생성해주세요.
+
+JSON 출력:
+{{
+  "store_notice": "스토어 공지사항 문구 (50자)",
+  "first_buy_message": "첫 구매 할인 안내 문구 (30자)",
+  "alarm_message": "알림받기 유도 문구 (30자)",
+  "hashtags": ["이벤트태그1", "이벤트태그2", "이벤트태그3"]
+}}
+"""}]
+    )
+    try:
+        text = resp.content[0].text.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:].strip()
+        return json.loads(text)
+    except Exception:
+        return {}
+
+
+# ─── 직원 10: 숏폼 영상 제작자 ──────────────────────────────────────────────
 async def employee_shortform_creator(product_name: str) -> dict:
     """숏폼 공장에 상품 홍보 영상 제작 요청"""
     try:
