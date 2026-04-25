@@ -49,6 +49,61 @@ def health():
     return {"status": "ok", "service": "smartstore_auto", "version": "3.0"}
 
 
+@app.get("/debug-naver")
+async def debug_naver():
+    """네이버 API 인증 진단"""
+    import bcrypt as _bcrypt
+    import base64 as _b64
+    import time as _time
+
+    client_id = os.environ.get("NAVER_CLIENT_ID", "")
+    client_secret = os.environ.get("NAVER_CLIENT_SECRET", "")
+
+    result = {
+        "client_id_set": bool(client_id),
+        "client_id_length": len(client_id),
+        "client_id_prefix": client_id[:4] if client_id else "",
+        "secret_set": bool(client_secret),
+        "secret_length": len(client_secret),
+        "secret_prefix": client_secret[:7] if client_secret else "",
+    }
+
+    # bcrypt 서명 시도
+    try:
+        timestamp = str(int(_time.time() * 1000))
+        password = f"{client_id}_{timestamp}"
+        hashed = _bcrypt.hashpw(password.encode("utf-8"), client_secret.encode("utf-8"))
+        sig = _b64.b64encode(hashed).decode("utf-8")
+        result["bcrypt_sign"] = "성공"
+        result["sig_length"] = len(sig)
+    except Exception as e:
+        result["bcrypt_sign"] = f"실패: {e}"
+
+    # 토큰 요청 시도 후 상세 응답
+    try:
+        timestamp = str(int(_time.time() * 1000))
+        password = f"{client_id}_{timestamp}"
+        hashed = _bcrypt.hashpw(password.encode("utf-8"), client_secret.encode("utf-8"))
+        sig = _b64.b64encode(hashed).decode("utf-8")
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(
+                "https://api.commerce.naver.com/external/v1/oauth2/token",
+                data={
+                    "client_id": client_id,
+                    "timestamp": timestamp,
+                    "client_secret_sign": sig,
+                    "grant_type": "client_credentials",
+                    "type": "SELF",
+                }
+            )
+            result["token_status"] = r.status_code
+            result["token_response"] = r.text[:300]
+    except Exception as e:
+        result["token_error"] = str(e)
+
+    return JSONResponse(result)
+
+
 @app.get("/store-status")
 async def store_status():
     """스토어 현황 — 등록 상품 수 + 시즌 + 드라이브 진행률"""
