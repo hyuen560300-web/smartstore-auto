@@ -26,6 +26,7 @@ NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 NAVER_SELLER_ID     = os.environ.get("NAVER_SELLER_ID", "")
 ANTHROPIC_API_KEY   = os.environ.get("ANTHROPIC_API_KEY", "")
 PEXELS_API_KEY      = os.environ.get("PEXELS_API_KEY", "")
+OPENAI_API_KEY      = os.environ.get("OPENAI_API_KEY", "")
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
@@ -503,8 +504,32 @@ async def search_pexels_image(product_name: str) -> str | None:
     return None
 
 
+async def generate_dalle_image(product_name: str) -> str | None:
+    """DALL-E 3로 상품 이미지 생성 → URL 반환"""
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "dall-e-3",
+                    "prompt": f"Clean white background product photo of {product_name}, professional e-commerce style, high quality",
+                    "n": 1,
+                    "size": "1024x1024",
+                    "quality": "standard",
+                }
+            )
+            r.raise_for_status()
+            return r.json()["data"][0]["url"]
+    except Exception as e:
+        print(f"[DALLE] 이미지 생성 실패: {e}", flush=True)
+        return None
+
+
 async def get_product_image(p: dict) -> str | None:
-    """오너클랜 이미지 시도 → 실패 시 Pexels 검색 → 없으면 None(등록 제외)"""
+    """오너클랜 이미지 → Pexels 폴백 → DALL-E 폴백 → None"""
     image_url = str(p.get("image", "")).strip()
 
     # 1. 오너클랜 이미지 시도
@@ -519,6 +544,15 @@ async def get_product_image(p: dict) -> str | None:
     if pexels_url:
         try:
             return await naver_api.upload_image(pexels_url)
+        except Exception:
+            pass
+
+    # 3. DALL-E 폴백
+    print(f"[IMAGE] Pexels 실패, DALL-E 생성 중...", flush=True)
+    dalle_url = await generate_dalle_image(str(p.get("name", "")))
+    if dalle_url:
+        try:
+            return await naver_api.upload_image(dalle_url)
         except Exception:
             pass
 
