@@ -5,6 +5,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libffi-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libfreetype6-dev \
+    fonts-nanum \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
