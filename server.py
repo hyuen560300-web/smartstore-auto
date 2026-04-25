@@ -80,6 +80,29 @@ async def upload_excel(file: UploadFile = File(...)):
     return JSONResponse({"status": "uploaded", "path": str(save_path), "size": len(content)})
 
 
+@app.post("/download-excel")
+async def download_excel_from_url(request: Request):
+    """URL에서 Excel 파일 다운로드 (Google Drive 등)"""
+    import httpx
+    try:
+        body = await request.json()
+        url = body.get("url", "")
+        filename = body.get("filename", "ownerclan_latest.xlsx")
+    except Exception:
+        return JSONResponse({"status": "error", "message": "url 필요"}, status_code=400)
+
+    if not url:
+        return JSONResponse({"status": "error", "message": "url 필요"}, status_code=400)
+
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        r = await c.get(url)
+        r.raise_for_status()
+
+    save_path = Path(EXCEL_FOLDER) / filename
+    save_path.write_bytes(r.content)
+    return JSONResponse({"status": "downloaded", "path": str(save_path), "size": len(r.content)})
+
+
 @app.post("/process-orders")
 async def process_orders(background_tasks: BackgroundTasks):
     background_tasks.add_task(pipeline_process_orders)
