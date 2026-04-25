@@ -121,7 +121,14 @@ async def register_products_debug():
         return JSONResponse({"step": "parse", "error": str(e)})
 
     if not products:
-        return JSONResponse({"step": "parse", "error": "파싱된 상품 없음"})
+        # 헤더 확인용
+        import openpyxl
+        wb = openpyxl.load_workbook(str(files[0]), read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        headers = [str(v) for v in (rows[0] if rows else [])]
+        return JSONResponse({"step": "parse", "error": "파싱된 상품 없음", "headers": headers[:20], "total_rows": len(rows)})
 
     p = products[0]
     return_data["sample_product"] = {"name": p.get("name"), "price": p.get("price"), "image": str(p.get("image", ""))[:50]}
