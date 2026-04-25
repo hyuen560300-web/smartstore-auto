@@ -130,7 +130,15 @@ async def register_products_debug():
         row0 = [str(v) for v in (rows[0] if rows else [])]
         row1 = [str(v) for v in (rows[1] if len(rows) > 1 else [])]
         row2 = [str(v) for v in (rows[2] if len(rows) > 2 else [])]
-        return JSONResponse({"step": "parse", "error": "파싱된 상품 없음", "row0": row0[:25], "row1": row1[:25], "row2": row2[:25], "total_rows": len(rows)})
+        # col_idx 직접 계산해서 진단
+        from main import COLUMN_MAP, _match_col
+        headers_dbg = [str(v).strip() if v else "" for v in (rows[1] if len(rows) > 1 else [])]
+        col_idx_dbg = {}
+        for i, h in enumerate(headers_dbg):
+            m = _match_col(h)
+            if m:
+                col_idx_dbg[i] = {"header": h, "mapped": m}
+        return JSONResponse({"step": "parse", "error": "파싱된 상품 없음", "row0": row0[:25], "row1": row1[:25], "row2": row2[:25], "col_idx": col_idx_dbg, "total_rows": len(rows)})
 
     p = products[0]
     return_data["sample_product"] = {"name": p.get("name"), "price": p.get("price"), "image": str(p.get("image", ""))[:50]}

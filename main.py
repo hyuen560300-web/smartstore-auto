@@ -266,9 +266,11 @@ COLUMN_MAP = {
     "상품설명": "desc",
 }
 
-def _match_col(header: str) -> str | None:
+def _match_col(header):
     """COLUMN_MAP 완전일치 → 포함관계 순으로 매핑"""
-    h = header.strip()
+    h = str(header).strip() if header else ""
+    if not h:
+        return None
     if h in COLUMN_MAP:
         return COLUMN_MAP[h]
     for k, v in COLUMN_MAP.items():
@@ -276,7 +278,13 @@ def _match_col(header: str) -> str | None:
             return v
     return None
 
-def parse_excel(filepath: str) -> list[dict]:
+def _to_int(v):
+    try:
+        return int(float(str(v).replace(",", "")))
+    except (ValueError, TypeError):
+        return 0
+
+def parse_excel(filepath):
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
@@ -287,12 +295,16 @@ def parse_excel(filepath: str) -> list[dict]:
     # 헤더 행 자동 감지 — 기본값 1 (오너클랜: row0=그룹헤더, row1=컬럼명)
     header_idx = 1 if len(rows) > 1 else 0
     for i, row in enumerate(rows[:5]):
-        if row and sum(1 for v in row if _match_col(str(v) if v else "")) >= 2:
+        if row and sum(1 for v in row if _match_col(v)) >= 2:
             header_idx = i
             break
 
     headers = [str(v).strip() if v else "" for v in rows[header_idx]]
-    col_idx = {i: mapped for i, h in enumerate(headers) if (mapped := _match_col(h))}
+    col_idx = {}
+    for i, h in enumerate(headers):
+        m = _match_col(h)
+        if m:
+            col_idx[i] = m
 
     products = []
     for row in rows[header_idx + 1:]:
@@ -304,11 +316,6 @@ def parse_excel(filepath: str) -> list[dict]:
                 item[col_idx[i]] = val
         if not item.get("name"):
             continue
-        def _to_int(v):
-            try:
-                return int(float(str(v).replace(",", "")))
-            except (ValueError, TypeError):
-                return 0
         price = _to_int(item.get("price")) or _to_int(item.get("market_price"))
         item["price"] = price
         if price > 0:
