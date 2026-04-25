@@ -174,21 +174,22 @@ class NaverCommerceAPI:
 
     async def list_products(self, page: int = 1, size: int = 50) -> dict:
         """등록된 상품 목록 조회"""
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
         async with httpx.AsyncClient(timeout=30) as c:
-            # v1 채널 상품 조회 시도
-            ch = await self.get_channel_no()
-            r = await c.get(
-                f"{NAVER_BASE}/v1/products/origin-products",
+            r = await c.post(
+                f"{NAVER_BASE}/v1/products/search",
                 headers=await self._headers(),
-                params={"page": page, "size": size}
+                json={
+                    "productStatusTypes": ["SALE", "SUSPENSION"],
+                    "page": page,
+                    "size": size,
+                    "orderType": "NO",
+                    "periodType": "PROD_REG_DAY",
+                    "fromDate": (now - timedelta(days=365)).strftime("%Y-%m-%d"),
+                    "toDate": now.strftime("%Y-%m-%d"),
+                }
             )
-            if r.status_code == 404:
-                # 대안: 채널별 조회
-                r = await c.get(
-                    f"{NAVER_BASE}/v1/channels/{ch}/channel-products",
-                    headers=await self._headers(),
-                    params={"page": page, "pageSize": size}
-                )
             r.raise_for_status()
             return r.json()
 
