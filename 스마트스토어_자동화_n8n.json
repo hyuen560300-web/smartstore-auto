@@ -1,0 +1,166 @@
+{
+  "name": "스마트스토어 자동화",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-register",
+      "name": "상품등록 수동실행",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/register-products",
+        "options": {}
+      },
+      "id": "http-register",
+      "name": "상품 등록",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-orders",
+      "name": "매 1시간마다 (주문)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/process-orders",
+        "options": {}
+      },
+      "id": "http-orders",
+      "name": "주문 처리",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule-inventory",
+      "name": "매 6시간마다 (재고)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 700]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/sync-inventory",
+        "options": {}
+      },
+      "id": "http-inventory",
+      "name": "재고 동기화",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 700]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "schedule-inquiries",
+      "name": "매 2시간마다 (문의)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 900]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/reply-inquiries",
+        "options": {}
+      },
+      "id": "http-inquiries",
+      "name": "고객 문의 답변",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 900]
+    }
+  ],
+  "connections": {
+    "상품등록 수동실행": {
+      "main": [
+        [
+          {
+            "node": "상품 등록",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매 1시간마다 (주문)": {
+      "main": [
+        [
+          {
+            "node": "주문 처리",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매 6시간마다 (재고)": {
+      "main": [
+        [
+          {
+            "node": "재고 동기화",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "매 2시간마다 (문의)": {
+      "main": [
+        [
+          {
+            "node": "고객 문의 답변",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

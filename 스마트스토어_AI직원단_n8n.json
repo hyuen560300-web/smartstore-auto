@@ -1,0 +1,256 @@
+{
+  "name": "스마트스토어 AI 직원단",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-all",
+      "name": "수동 실행",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 120]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 1}]}
+      },
+      "id": "schedule-register",
+      "name": "매 1시간 (상품등록)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/register-products",
+        "options": {}
+      },
+      "id": "http-register",
+      "name": "소싱팀장+IP감시관+상품등록",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 260]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 1}]}
+      },
+      "id": "schedule-orders",
+      "name": "매 1시간 (주문처리)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/process-orders",
+        "options": {}
+      },
+      "id": "http-orders",
+      "name": "주문 처리",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 380]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 2}]}
+      },
+      "id": "schedule-stock",
+      "name": "매 2시간 (품절방지)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/stock-alert",
+        "options": {}
+      },
+      "id": "http-stock",
+      "name": "품절 방지 알림이",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 2}]}
+      },
+      "id": "schedule-inquiries",
+      "name": "매 2시간 (고객문의)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 620]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/reply-inquiries",
+        "options": {}
+      },
+      "id": "http-inquiries",
+      "name": "CS 매니저",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 620]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 6}]}
+      },
+      "id": "schedule-inventory",
+      "name": "매 6시간 (재고동기화)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 740]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/sync-inventory",
+        "options": {}
+      },
+      "id": "http-inventory",
+      "name": "재고 관리자",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 740]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 6}]}
+      },
+      "id": "schedule-trend",
+      "name": "매 6시간 (트렌드)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 860]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://smartstore-auto-production.up.railway.app/trend-scout",
+        "options": {}
+      },
+      "id": "http-trend",
+      "name": "트렌드 스카우터",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 860]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 24}]}
+      },
+      "id": "schedule-daily",
+      "name": "매일 (일일리포트)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 980]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://smartstore-auto-production.up.railway.app/daily-report",
+        "options": {}
+      },
+      "id": "http-daily",
+      "name": "회계+시즌+트렌드 일일리포트",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 980]
+    },
+    {
+      "parameters": {
+        "rule": {"interval": [{"field": "hours", "hoursInterval": 24}]}
+      },
+      "id": "schedule-season",
+      "name": "매일 (시즌기획)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 1100]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://smartstore-auto-production.up.railway.app/season-plan",
+        "options": {}
+      },
+      "id": "http-season",
+      "name": "시즌 기획자",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 1100]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "weeks", "weeksInterval": 1}]
+        }
+      },
+      "id": "schedule-event",
+      "name": "매주 (이벤트매니저)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 1220]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://smartstore-auto-production.up.railway.app/event-manager",
+        "options": {}
+      },
+      "id": "http-event",
+      "name": "이벤트 매니저",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 1220]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "weeks", "weeksInterval": 1}]
+        }
+      },
+      "id": "schedule-blog",
+      "name": "매주 (블로그포스팅)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 1340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://smartstore-auto-production.up.railway.app/write-blog",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\"name\": \"인기 상품\", \"cat_large\": \"생활용품\"}",
+        "options": {}
+      },
+      "id": "http-blog",
+      "name": "블로그 포스팅 매니저",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 1340]
+    }
+  ],
+  "connections": {
+    "매 1시간 (상품등록)": {"main": [[{"node": "소싱팀장+IP감시관+상품등록", "type": "main", "index": 0}]]},
+    "매 1시간 (주문처리)": {"main": [[{"node": "주문 처리", "type": "main", "index": 0}]]},
+    "매 2시간 (품절방지)": {"main": [[{"node": "품절 방지 알림이", "type": "main", "index": 0}]]},
+    "매 2시간 (고객문의)": {"main": [[{"node": "CS 매니저", "type": "main", "index": 0}]]},
+    "매 6시간 (재고동기화)": {"main": [[{"node": "재고 관리자", "type": "main", "index": 0}]]},
+    "매 6시간 (트렌드)": {"main": [[{"node": "트렌드 스카우터", "type": "main", "index": 0}]]},
+    "매일 (일일리포트)": {"main": [[{"node": "회계+시즌+트렌드 일일리포트", "type": "main", "index": 0}]]},
+    "매일 (시즌기획)": {"main": [[{"node": "시즌 기획자", "type": "main", "index": 0}]]},
+    "매주 (이벤트매니저)": {"main": [[{"node": "이벤트 매니저", "type": "main", "index": 0}]]},
+    "매주 (블로그포스팅)": {"main": [[{"node": "블로그 포스팅 매니저", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "meta": {"templateCredsSetupCompleted": true},
+  "tags": []
+}
