@@ -330,7 +330,11 @@ def parse_excel(filepath):
 import re
 
 def clean_product_name(name: str) -> str:
-    name = re.sub(r'[^\w\s가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9\-/&()%+]', '', name)
+    # 모델번호/관리코드 제거 (영대문자+숫자 조합)
+    name = re.sub(r'\b[A-Z]{1,5}[-_]?\d{3,}[A-Z0-9-]*\b', '', name)
+    name = re.sub(r'\b\d{4,}[A-Z]{0,3}\b', '', name)
+    # 불필요한 특수문자 제거 (한글/영문/숫자/공백/하이픈/플러스만 허용)
+    name = re.sub(r'[^\w\s가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9\- ]', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
     return name[:50]
 
@@ -379,11 +383,11 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
 
 출력 형식 (JSON만):
 {{
-  "product_name": "검색 최적화 상품명 (50자 이내, 트렌딩 키워드 포함)",
-  "description": "구매 욕구 자극 HTML 설명 (800자 이내, <p><b><ul><li> 태그 사용, Pain Point 해결책 포함)",
+  "product_name": "[브랜드명] [핵심키워드] [속성/용도] 순서로 조합, 50자 이내, 모델번호/관리코드/특수문자 절대 포함 금지, 자연스러운 한국어로만 작성",
+  "description": "구매 욕구 자극 HTML (800자 이내). 반드시 아래 구조 사용:\\n<h3 style='color:#333;margin:20px 0 10px'>✅ 이 상품을 선택해야 하는 이유</h3><ul style='line-height:2'><li>...</li></ul><h3 style='color:#333;margin:20px 0 10px'>📦 상품 구성</h3><p>...</p><h3 style='color:#333;margin:20px 0 10px'>💡 이런 분께 추천</h3><ul style='line-height:2'><li>...</li></ul>",
   "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"],
-  "banner_text": "상세페이지 배너용 핵심 문구 (20자 이내)",
-  "sub_text": "배너 서브 문구 (30자 이내)"
+  "banner_text": "핵심 셀링 메시지 (15자 이내, 숫자 포함)",
+  "sub_text": "구체적 혜택 서브 문구 (25자 이내)"
 }}"""
         }]
     )
@@ -512,27 +516,43 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
 
 # ─── 이미지 디렉터: 텍스트 배너 생성 ────────────────────────────────────────
 async def create_banner_image(image_url: str, main_text: str, sub_text: str = "") -> str | None:
-    """배경 이미지 위에 마케팅 텍스트 합성 → Naver 업로드"""
+    """1200×675 고품질 배너 합성 → Naver 업로드"""
     try:
         from PIL import Image, ImageDraw, ImageFont
         import io
 
-        # 배경 이미지 다운로드
+        W, H = 1200, 675
+
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
             r = await c.get(image_url)
             r.raise_for_status()
 
-        img = Image.open(io.BytesIO(r.content)).convert("RGBA")
-        img = img.resize((800, 800), Image.LANCZOS)
+        # 원본 이미지를 배경으로 크롭-리사이즈 (중앙 기준)
+        orig = Image.open(io.BytesIO(r.content)).convert("RGB")
+        orig_ratio = orig.width / orig.height
+        target_ratio = W / H
+        if orig_ratio > target_ratio:
+            new_h = orig.height
+            new_w = int(new_h * target_ratio)
+            left = (orig.width - new_w) // 2
+            orig = orig.crop((left, 0, left + new_w, new_h))
+        else:
+            new_w = orig.width
+            new_h = int(new_w / target_ratio)
+            top = (orig.height - new_h) // 2
+            orig = orig.crop((0, top, new_w, top + new_h))
+        img = orig.resize((W, H), Image.LANCZOS).convert("RGBA")
 
-        # 반투명 오버레이
-        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-        draw.rectangle([(0, 550), (800, 800)], fill=(0, 0, 0, 160))
+        # 하단 40% 그라데이션 오버레이
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        draw_ov = ImageDraw.Draw(overlay)
+        for y in range(int(H * 0.55), H):
+            alpha = int(200 * (y - H * 0.55) / (H * 0.45))
+            draw_ov.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
         img = Image.alpha_composite(img, overlay).convert("RGB")
         draw = ImageDraw.Draw(img)
 
-        # 폰트 설정 (나눔고딕 or 기본 폰트)
+        # 폰트
         font_paths = [
             "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -540,20 +560,19 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
         main_font = sub_font = ImageFont.load_default()
         for fp in font_paths:
             try:
-                main_font = ImageFont.truetype(fp, 48)
-                sub_font = ImageFont.truetype(fp, 28)
+                main_font = ImageFont.truetype(fp, 58)
+                sub_font = ImageFont.truetype(fp, 32)
                 break
             except Exception:
                 pass
 
-        # 텍스트 그리기
-        draw.text((400, 620), main_text, font=main_font, fill="white", anchor="mm")
+        # 텍스트 (하단 중앙)
+        draw.text((W // 2, int(H * 0.72)), main_text, font=main_font, fill="white", anchor="mm")
         if sub_text:
-            draw.text((400, 690), sub_text[:30], font=sub_font, fill=(220, 220, 220), anchor="mm")
+            draw.text((W // 2, int(H * 0.86)), sub_text[:28], font=sub_font, fill=(230, 230, 230), anchor="mm")
 
-        # Naver 서버 업로드
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=90)
+        img.save(buf, format="JPEG", quality=95)
         buf.seek(0)
         token = await naver_api.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
@@ -635,16 +654,34 @@ async def generate_dalle_image(product_name: str) -> str | None:
         return None
 
 
+async def _is_text_heavy_image(image_url: str) -> bool:
+    """배송/반품 안내 등 텍스트 과다 이미지 감지 — 세로가 가로의 2.5배 초과 시 제외"""
+    try:
+        from PIL import Image
+        import io
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        img = Image.open(io.BytesIO(r.content))
+        w, h = img.size
+        return h > w * 2.5
+    except Exception:
+        return False
+
+
 async def get_product_image(p: dict) -> str | None:
-    """오너클랜 이미지 → Pexels 폴백 → DALL-E 폴백 → None"""
+    """오너클랜 이미지 (텍스트 과다 제외) → Pexels 폴백 → DALL-E 폴백 → None"""
     image_url = str(p.get("image", "")).strip()
 
-    # 1. 오너클랜 이미지 시도
+    # 1. 오너클랜 이미지 시도 (텍스트 과다 이미지 제외)
     if image_url.startswith("http"):
-        try:
-            return await naver_api.upload_image(image_url)
-        except Exception:
-            print(f"[IMAGE] 오너클랜 이미지 실패, Pexels 검색 중...", flush=True)
+        if await _is_text_heavy_image(image_url):
+            print(f"[IMAGE] 텍스트 과다 이미지 제외 → Pexels 폴백", flush=True)
+        else:
+            try:
+                return await naver_api.upload_image(image_url)
+            except Exception:
+                print(f"[IMAGE] 오너클랜 이미지 실패, Pexels 검색 중...", flush=True)
 
     # 2. Pexels 폴백
     pexels_url = await search_pexels_image(str(p.get("name", "")))
@@ -744,8 +781,11 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
             if banner_url:
                 payload["originProduct"]["detailContent"] = (
-                    f'<img src="{banner_url}" style="width:100%;display:block;">'
+                    f'<img src="{banner_url}" style="width:100%;max-width:860px;display:block;margin:0 auto;">'
+                    f'<img src="{naver_img_url}" style="width:100%;max-width:860px;display:block;margin:10px auto;">'
+                    f'<div style="max-width:860px;margin:0 auto;padding:16px;font-family:\'나눔고딕\',sans-serif;font-size:15px;line-height:1.8;color:#333;">'
                     + ai["description"]
+                    + '</div>'
                 )
 
             await naver_api.register_product(payload)
