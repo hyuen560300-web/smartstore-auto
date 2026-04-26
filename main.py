@@ -503,7 +503,27 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
     end = text.rfind("}") + 1
     if start != -1 and end > start:
         text = text[start:end]
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except Exception:
+        name = product.get("name", "상품")[:25]
+        return {
+            "product_name": name,
+            "headline": f"{name[:14]} 특가",
+            "sub_headline": "지금 바로 확인하세요",
+            "emotional_copy": f"{name}을 합리적인 가격에 만나보세요.",
+            "recommend_list": ["실용적인 제품을 원하시는 분", "가성비를 중시하는 분",
+                               "품질을 중시하는 분", "선물용으로 찾으시는 분", "빠른 배송이 필요하신 분"],
+            "reason_1": "검증된 품질로 만족도 높음",
+            "reason_2": "합리적인 가격대 형성",
+            "reason_3": "빠른 배송 및 안전 포장",
+            "spec_rows": [["상품명", name], ["배송", "택배"], ["원산지", "국내/해외"],
+                          ["반품", "수령 후 7일 이내"], ["교환", "상품 불량 시 가능"]],
+            "spec_hint": "product detail texture and quality",
+            "compare_points": ["검증된 품질", "합리적 가격", "빠른 배송"],
+            "tags": [name[:5], "추천", "특가", "당일발송", "품질보장"],
+            "description": f"{name} 상품입니다.",
+        }
 
 
 # ─── 스마트스토어 상품 payload 빌더 ──────────────────────────────────────────
