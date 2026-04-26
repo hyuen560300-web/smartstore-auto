@@ -78,15 +78,22 @@ def check_env():
 
 @app.get("/test-dalle")
 async def test_dalle():
-    """DALL-E 단독 동작 확인"""
-    from main import generate_dalle_image, OPENAI_API_KEY
+    """DALL-E 단독 동작 확인 — 실제 API 에러 노출"""
+    from main import OPENAI_API_KEY
+    import httpx as _httpx
     if not OPENAI_API_KEY:
         return JSONResponse({"status": "skip", "reason": "OPENAI_API_KEY 없음"})
+    prompt = "Professional product photo of a massage cushion on white background, studio lighting."
     try:
-        url = await generate_dalle_image("product photo test")
-        return JSONResponse({"status": "ok" if url else "fail", "url": url})
+        async with _httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "dall-e-3", "prompt": prompt, "n": 1, "size": "1024x1024", "quality": "standard"},
+            )
+            return JSONResponse({"status_code": r.status_code, "body": r.json()})
     except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+        return JSONResponse({"status": "exception", "message": str(e)})
 
 
 @app.get("/debug-naver")
