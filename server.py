@@ -78,31 +78,52 @@ def check_env():
 
 @app.get("/test-image-gen")
 async def test_image_gen():
-    """Gemini / Flux / DALL-E 이미지 생성 진단"""
-    from main import generate_gemini_image, generate_flux_image, GOOGLE_AI_API_KEY, FLUX_API_KEY, OPENAI_API_KEY
+    """Gemini / Flux 직접 API 호출 진단 — 에러 본문 노출"""
+    from main import GOOGLE_AI_API_KEY, FLUX_API_KEY, OPENAI_API_KEY, _get_en_name
+    import httpx as _httpx, base64 as _b64
     results = {}
 
-    # Gemini
+    # Gemini 직접 호출
     if GOOGLE_AI_API_KEY:
         try:
-            raw = await generate_gemini_image("massage cushion product", "생활/건강")
-            results["gemini"] = "ok_bytes" if isinstance(raw, bytes) and len(raw) > 100 else f"fail:{raw}"
+            async with _httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    "gemini-2.0-flash-preview-image-generation:generateContent",
+                    params={"key": GOOGLE_AI_API_KEY},
+                    json={
+                        "contents": [{"parts": [{"text": "Professional product photo of a massage cushion"}]}],
+                        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+                    },
+                )
+            body = r.json()
+            if r.status_code == 200:
+                parts = body.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                has_img = any("inlineData" in p for p in parts)
+                results["gemini"] = f"ok(image={has_img})" if r.status_code == 200 else f"fail"
+            else:
+                results["gemini"] = f"http{r.status_code}:{str(body)[:200]}"
         except Exception as e:
-            results["gemini"] = f"exception:{e}"
+            results["gemini"] = f"exception:{str(e)[:200]}"
     else:
         results["gemini"] = "no_key"
 
-    # Flux
+    # Flux 직접 호출
     if FLUX_API_KEY:
         try:
-            url = await generate_flux_image("massage cushion product", "디지털/가전")
-            results["flux"] = f"ok:{url[:60]}" if url else "fail:None"
+            async with _httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    "https://api.us1.bfl.ai/v1/flux-pro-1.1",
+                    headers={"X-Key": FLUX_API_KEY, "Content-Type": "application/json"},
+                    json={"prompt": "professional product photo massage cushion", "width": 1024, "height": 1024},
+                )
+            results["flux_submit"] = f"http{r.status_code}:{str(r.json())[:200]}"
         except Exception as e:
-            results["flux"] = f"exception:{e}"
+            results["flux_submit"] = f"exception:{str(e)[:200]}"
     else:
-        results["flux"] = "no_key"
+        results["flux_submit"] = "no_key"
 
-    results["openai_billing"] = "limit_reached" if not OPENAI_API_KEY else "key_set"
+    results["dalle_key"] = "set" if OPENAI_API_KEY else "missing"
     return JSONResponse(results)
 
 
