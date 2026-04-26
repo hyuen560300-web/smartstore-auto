@@ -1264,8 +1264,8 @@ async def get_product_image(p: dict) -> str | None:
     """
     이미지 우선순위:
     1. 오너클랜 원본 (품질 OK + 404 아닌 경우)
-    2. DALL-E 3 (원본 실패 시 우선)
-    3. Pexels (DALL-E 실패 시)
+    2. Pexels 실사진
+    3. DALL-E 3 (Pexels 실패 시 폴백)
     """
     image_url = str(p.get("image", "")).strip()
     product_name = str(p.get("name", ""))
@@ -1283,7 +1283,20 @@ async def get_product_image(p: dict) -> str | None:
         else:
             print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
 
-    # 2. DALL-E 3 폴백 (첫 번째 폴백)
+    # 2. Pexels 실사진
+    print(f"[IMAGE] Pexels 검색 중: {product_name[:20]}", flush=True)
+    pexels_url = await search_pexels_image(product_name)
+    if pexels_url:
+        try:
+            result = await naver_api.upload_image(pexels_url)
+            print(f"[IMAGE] Pexels ✅", flush=True)
+            return result
+        except Exception as e:
+            print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
+    else:
+        print(f"[IMAGE] Pexels 검색 실패 → DALL-E", flush=True)
+
+    # 3. DALL-E 3 폴백
     print(f"[IMAGE] DALL-E 생성 중: {product_name[:20]}", flush=True)
     dalle_url = await generate_dalle_image(product_name)
     if dalle_url:
@@ -1293,18 +1306,6 @@ async def get_product_image(p: dict) -> str | None:
             return result
         except Exception as e:
             print(f"[IMAGE] DALL-E 업로드 실패: {e}", flush=True)
-    else:
-        print(f"[IMAGE] DALL-E 생성 실패 → Pexels", flush=True)
-
-    # 3. Pexels 폴백
-    pexels_url = await search_pexels_image(product_name)
-    if pexels_url:
-        try:
-            result = await naver_api.upload_image(pexels_url)
-            print(f"[IMAGE] Pexels ✅", flush=True)
-            return result
-        except Exception as e:
-            print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
 
     print(f"[IMAGE] ❌ 모든 소스 실패: {product_name[:20]}", flush=True)
     return None
