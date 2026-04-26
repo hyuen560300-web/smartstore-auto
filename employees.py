@@ -363,12 +363,16 @@ async def employee_price_optimizer(
         if prices:
             avg = int(sum(prices) / len(prices))
             lo, hi = min(prices), max(prices)
+            top3 = ", ".join(
+                f"{c['title'][:12]} {c['price']:,}원"
+                for c in competitor_prices[:3]
+            )
             comp_context = (
                 f"\n\n[실시간 네이버 쇼핑 경쟁사 데이터]\n"
                 f"수집 상품 수: {len(prices)}개\n"
                 f"가격 범위: {lo:,}원 ~ {hi:,}원\n"
                 f"평균가: {avg:,}원\n"
-                f"상위 3개: {[f'{c[\"title\"][:12]} {c[\"price\"]:,}원' for c in competitor_prices[:3]]}"
+                f"상위 3개: {top3}"
             )
 
     resp = await client.messages.create(
