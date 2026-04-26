@@ -6,8 +6,10 @@
 
 import asyncio
 import base64
+import io as _io
 import json
 import os
+import re as _re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +19,65 @@ import bcrypt
 import httpx
 import openpyxl
 from dotenv import load_dotenv
+
+
+# ─── 이미지 고화질 처리 유틸 ──────────────────────────────────────────────────
+_THUMB_PATTERN = _re.compile(
+    r'(_\d{2,4}x\d{2,4}|_thumb|_small|_medium|_low|_300|_400|_500'
+    r'|\?.*?(width|w|size)=\d+.*?)',
+    _re.IGNORECASE
+)
+
+def _extract_hq_url(url: str) -> str:
+    """썸네일 접미사 제거 → 원본 고해상도 URL 반환"""
+    if not url:
+        return url
+    # 쿼리스트링 크기 제한 제거
+    clean = _re.sub(r'[?&](width|w|size|h|height)=\d+', '', url)
+    # 경로 접미사 제거 (_300, _thumb 등)
+    clean = _re.sub(
+        r'(_\d{2,4}x\d{2,4}|_thumb|_small|_medium|_low|_300|_400|_500)',
+        '', clean, flags=_re.IGNORECASE
+    )
+    return clean.strip('?&')
+
+
+def _process_image_hq(raw_bytes: bytes, target: int = 1000) -> bytes:
+    """
+    1000×1000 흰 캔버스 중앙 배치 + LANCZOS 고화질 리사이징
+    - 비율 유지하며 target 안에 맞춤
+    - 남는 공간은 흰색(#ffffff) 패딩
+    - quality=95, subsampling=0, optimize, progressive
+    """
+    try:
+        from PIL import Image
+        img = Image.open(_io.BytesIO(raw_bytes)).convert("RGB")
+        w, h = img.size
+
+        # 비율 유지 리사이징 (target 안에 맞춤)
+        scale = min(target / w, target / h)
+        if scale < 1.0:  # 축소 시 LANCZOS
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+        elif scale > 1.0:  # 업스케일 시 BICUBIC (더 선명)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = img.resize((new_w, new_h), Image.BICUBIC)
+        else:
+            new_w, new_h = w, h
+
+        # 흰 캔버스 중앙 배치
+        canvas = Image.new("RGB", (target, target), (255, 255, 255))
+        offset_x = (target - new_w) // 2
+        offset_y = (target - new_h) // 2
+        canvas.paste(img, (offset_x, offset_y))
+
+        buf = _io.BytesIO()
+        canvas.save(buf, format="JPEG", quality=95, subsampling=0,
+                    optimize=True, progressive=True)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[IMAGE] 처리 실패, 원본 사용: {e}", flush=True)
+        return raw_bytes
 
 load_dotenv()
 
@@ -93,27 +154,16 @@ class NaverCommerceAPI:
         }
 
     async def upload_image(self, image_url: str) -> str:
+        # ① 원본 고해상도 URL 추출 (썸네일 접미사 제거)
+        clean_url = _extract_hq_url(image_url)
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
-            img_resp = await c.get(image_url)
+            img_resp = await c.get(clean_url)
+            if img_resp.status_code != 200 and clean_url != image_url:
+                img_resp = await c.get(image_url)
             img_resp.raise_for_status()
 
-        # 1000×1000 이상으로 업스케일 후 고화질 저장
-        try:
-            from PIL import Image
-            import io as _io
-            img = Image.open(_io.BytesIO(img_resp.content)).convert("RGB")
-            w, h = img.size
-            target = 1000
-            if w < target or h < target:
-                scale = target / min(w, h)
-                new_w, new_h = int(w * scale), int(h * scale)
-                img = img.resize((new_w, new_h), Image.LANCZOS)
-            buf = _io.BytesIO()
-            img.save(buf, format="JPEG", quality=95, subsampling=0,
-                     optimize=True, progressive=True)
-            image_bytes = buf.getvalue()
-        except Exception:
-            image_bytes = img_resp.content
+        # ② 1000×1000 흰 캔버스 패딩 + 고화질 저장
+        image_bytes = _process_image_hq(img_resp.content)
 
         token = await self.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
@@ -570,7 +620,7 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
     """1000×500 헤드라인 배너 — #1a1a1a 상단바 + 고화질 저장"""
     try:
         from PIL import Image, ImageDraw, ImageFont
-        import io
+        io = _io
 
         W, H = 1000, 500
         FONT_SIZE_MAIN = int(W * 0.08)   # 가로 폭의 8%
@@ -828,7 +878,7 @@ async def _is_text_heavy_image(image_url: str) -> bool:
     """배송/반품 안내 등 텍스트 과다 이미지 감지 — 세로가 가로의 2.5배 초과 시 제외"""
     try:
         from PIL import Image
-        import io
+        io = _io
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
             r = await c.get(image_url)
             r.raise_for_status()
