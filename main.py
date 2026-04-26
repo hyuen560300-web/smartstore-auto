@@ -1079,15 +1079,65 @@ _CATEGORY_EN_MAP = {
     "청소용품":     "cleaning household tool",
 }
 
+# 상품명 키워드 → 영어 토큰 (삽입 순서 = 조합 순서)
+_PRODUCT_KEYWORD_MAP = {
+    # 자동차/차량 — 앞에 두어 수식어로 쓰임
+    "차량용":      ["automotive"],
+    "자동차":      ["automotive"],
+    "카시트":      ["car", "seat"],
+    # 시트/쿠션류
+    "통풍시트":    ["ventilated", "seat"],
+    "시트커버":    ["seat", "cover"],
+    "쿠션":        ["cushion"],
+    # 안마/마사지
+    "마사지":      ["massage"],
+    # 침구/수면
+    "베개":        ["pillow"],
+    # 음료용품
+    "텀블러":      ["tumbler", "bottle"],
+    # 소형 가전
+    "가습기":      ["humidifier"],
+    "에어프라이어": ["air", "fryer"],
+    "청소기":      ["vacuum", "cleaner"],
+    # 의류/패션
+    "운동화":      ["sneakers"],
+    "가방":        ["bag"],
+    "지갑":        ["wallet"],
+    # 화장품
+    "선크림":      ["sunscreen"],
+    "선블록":      ["sunscreen"],
+    # 육아
+    "유아용품":    ["baby", "product"],
+    "기저귀":      ["diaper"],
+    "젖병":        ["baby", "bottle"],
+    # 주방
+    "에어프라이":  ["air", "fryer"],
+    "냄비":        ["cooking", "pot"],
+    "프라이팬":    ["frying", "pan"],
+    # 반려동물
+    "강아지":      ["dog", "pet"],
+    "고양이":      ["cat", "pet"],
+    "펫":          ["pet"],
+    # 스포츠/레저
+    "덤벨":        ["dumbbell"],
+    "요가":        ["yoga", "mat"],
+    "캠핑":        ["camping", "outdoor"],
+    "텐트":        ["tent", "camping"],
+}
+
 def _get_en_name(product_name: str, category: str) -> str:
-    """카테고리 기반으로 DALL-E용 영어 제품 설명 반환"""
-    top_cat = category.split(">")[0].strip() if category else ""
-    if top_cat in _CATEGORY_EN_MAP:
-        return _CATEGORY_EN_MAP[top_cat]
-    # 카테고리 매핑 없으면 상품명에서 영문만 추출, 없으면 기본값
-    en_only = re.sub(r'[가-힣ㄱ-ㆎ\s]', ' ', product_name).strip()
-    en_only = re.sub(r'\s+', ' ', en_only).strip()
-    return en_only if len(en_only) > 3 else "lifestyle product"
+    """상품명 키워드 조합 우선, 없으면 카테고리 폴백"""
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for kor, parts in _PRODUCT_KEYWORD_MAP.items():
+        if kor in product_name:
+            for p in parts:
+                if p not in seen:
+                    tokens.append(p)
+                    seen.add(p)
+    if tokens:
+        return " ".join(tokens)
+    return _CATEGORY_EN_MAP.get(category, "lifestyle product")
 
 
 # ─── 키워드 기반 씬 컨텍스트 맵 ──────────────────────────────────────────────
