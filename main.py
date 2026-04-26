@@ -415,7 +415,7 @@ def clean_product_name(name: str) -> str:
     # ① 광고성 패턴 제거
     name = _AD_PATTERN.sub(' ', name)
     # ② 특수문자 블록 제거 (괄호류, 슬래시)
-    name = re.sub(r'[\[\](){}<>/\\|*~`^]', ' ', name)
+    name = re.sub(r'[\[\](){}<>/\\|*~`^?"\'@#$%&=+]', ' ', name)
     # ③ 모델·관리번호 제거 (영문+숫자 혼합)
     name = re.sub(r'\b[A-Za-z]{1,5}[-_]?\d{3,}[A-Za-z0-9-]*\b', '', name)
     name = re.sub(r'\b\d{5,}\b', '', name)
