@@ -1314,26 +1314,22 @@ async def generate_gemini_image(product_name: str, category: str = "") -> bytes 
     )
     try:
         import base64 as _b64
-        for model in (
-            "gemini-2.0-flash-exp",
-            "gemini-2.0-flash-preview-image-generation",
-        ):
-            async with httpx.AsyncClient(timeout=60) as c:
-                r = await c.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                    params={"key": GOOGLE_AI_API_KEY},
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-                    },
-                )
-            if r.status_code != 200:
-                print(f"[GEMINI] {model} → HTTP{r.status_code}", flush=True)
-                continue
+        # gemini-2.0-flash-exp: 이미지 생성 응답 시도
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
+                params={"key": GOOGLE_AI_API_KEY},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+                },
+            )
+        if r.status_code == 200:
             for part in r.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
                 if "inlineData" in part:
-                    print(f"[GEMINI] ✅ {model} {product_name[:20]}", flush=True)
+                    print(f"[GEMINI] ✅ {product_name[:20]}", flush=True)
                     return _b64.b64decode(part["inlineData"]["data"])
+        print(f"[GEMINI] HTTP{r.status_code} — 이미지 생성 미지원, 스킵", flush=True)
     except Exception as e:
         print(f"[GEMINI] 실패: {e}", flush=True)
     return None
@@ -1361,7 +1357,10 @@ async def generate_flux_image(product_name: str, category: str = "") -> str | No
                 json={"prompt": prompt, "width": 1024, "height": 1024},
             )
             r.raise_for_status()
-            task_id = r.json().get("id")
+            resp_json = r.json()
+            task_id = resp_json.get("id")
+            # 응답에 polling_url이 있으면 그것을 사용 (리전 자동 처리)
+            polling_url = resp_json.get("polling_url") or f"https://api.bfl.ai/v1/get_result?id={task_id}"
         if not task_id:
             return None
         # 결과 폴링 (최대 60초, 2초 간격)
@@ -1369,9 +1368,8 @@ async def generate_flux_image(product_name: str, category: str = "") -> str | No
             await asyncio.sleep(2)
             async with httpx.AsyncClient(timeout=15) as c:
                 r = await c.get(
-                    "https://api.bfl.ai/v1/get_result",
+                    polling_url,
                     headers={"X-Key": FLUX_API_KEY},
-                    params={"id": task_id},
                 )
                 data = r.json()
             status = data.get("status")
