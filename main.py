@@ -850,28 +850,58 @@ async def search_pexels_image(product_name: str) -> str | None:
     return None
 
 
-async def generate_dalle_image(product_name: str) -> str | None:
-    """DALL-E 3로 상품 이미지 생성 → URL 반환"""
+# ─── DALL-E 3 공통 스타일 접미사 ─────────────────────────────────────────────
+_DALLE_SUFFIX = (
+    "Warm minimal white tone, soft natural sunlight, clean and airy atmosphere, "
+    "photorealistic, 4K quality, no text, no watermark, no people, "
+    "lifestyle product photography style for Korean smart store."
+)
+
+
+async def _dalle_request(prompt: str, size: str = "1024x1024", quality: str = "hd") -> str | None:
+    """DALL-E 3 공통 호출"""
     if not OPENAI_API_KEY:
         return None
     try:
-        async with httpx.AsyncClient(timeout=60) as c:
+        async with httpx.AsyncClient(timeout=90) as c:
             r = await c.post(
                 "https://api.openai.com/v1/images/generations",
                 headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "model": "dall-e-3",
-                    "prompt": f"Professional product photo for Korean e-commerce, clean white background, high quality studio lighting, no text, no watermark. Product: {product_name}",
-                    "n": 1,
-                    "size": "1024x1024",
-                    "quality": "standard",
-                }
+                json={"model": "dall-e-3", "prompt": prompt, "n": 1,
+                      "size": size, "quality": quality}
             )
             r.raise_for_status()
             return r.json()["data"][0]["url"]
     except Exception as e:
-        print(f"[DALLE] 이미지 생성 실패: {e}", flush=True)
+        print(f"[DALLE] 실패: {e}", flush=True)
         return None
+
+
+async def generate_dalle_image(product_name: str) -> str | None:
+    """상품 연출컷 — 라이프스타일 포토리얼리스틱 1024×1024"""
+    prompt = (
+        f"A lifestyle product photography of '{product_name}' "
+        f"placed on a clean white wooden shelf with soft morning sunlight coming through a window. "
+        f"The product is the main focus, surrounded by minimal Nordic-style decorations. "
+        f"{_DALLE_SUFFIX}"
+    )
+    print(f"[DALLE] 상품컷 생성: {product_name[:20]}", flush=True)
+    return await _dalle_request(prompt, size="1024x1024", quality="hd")
+
+
+async def generate_dalle_banner(product_name: str, headline: str = "") -> str | None:
+    """배너용 — 좌측 여백(Negative Space) 확보 와이드 1792×1024"""
+    txt = headline or product_name
+    prompt = (
+        f"A wide lifestyle banner image for Korean e-commerce. "
+        f"RIGHT side: beautifully styled '{product_name}' on a warm white surface with soft shadows. "
+        f"LEFT side: large empty negative space with plain off-white background — "
+        f"this space will be used for overlaying Korean text. "
+        f"Composition ratio: 40% product, 60% empty space on left. "
+        f"{_DALLE_SUFFIX}"
+    )
+    print(f"[DALLE] 배너 생성: {txt[:20]}", flush=True)
+    return await _dalle_request(prompt, size="1792x1024", quality="hd")
 
 
 async def _is_text_heavy_image(image_url: str) -> bool:
@@ -990,12 +1020,19 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                 results["skip"] += 1
                 continue
 
-            # ⑧ 이미지 디렉터: 상세페이지 텍스트 배너 생성
-            banner_url = await create_banner_image(
-                naver_img_url,
-                ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18],
-                ai.get("sub_headline") or ai.get("sub_text", "")
-            )
+            # ⑧ 이미지 디렉터: DALL-E 3 배너 우선 → 실패 시 Pillow 배너 폴백
+            headline_txt = ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18]
+            dalle_banner_raw = await generate_dalle_banner(str(p.get("name", "")), headline_txt)
+            if dalle_banner_raw:
+                # DALL-E 배너도 1000px 고화질 처리 후 Naver 업로드
+                banner_url = await naver_api.upload_image(dalle_banner_raw)
+                print(f"[DALLE] 배너 업로드 완료", flush=True)
+            else:
+                banner_url = await create_banner_image(
+                    naver_img_url,
+                    headline_txt,
+                    ai.get("sub_headline") or ai.get("sub_text", "")
+                )
 
             payload = build_product_payload(p, ai, price)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
