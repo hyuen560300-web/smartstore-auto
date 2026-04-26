@@ -880,11 +880,140 @@ async def search_pexels_image(product_name: str) -> str | None:
 
 
 # ─── DALL-E 3 공통 스타일 접미사 ─────────────────────────────────────────────
+# ─── 브랜드 글로벌 비주얼 가이드라인 (모든 이미지 공통 적용) ─────────────────
 _DALLE_SUFFIX = (
-    "Warm minimal white tone, soft natural sunlight, clean and airy atmosphere, "
-    "photorealistic, 4K quality, no text, no watermark, no people, "
-    "lifestyle product photography style for Korean smart store."
+    "GLOBAL VISUAL STYLE: photorealistic 8K, natural soft lighting, "
+    "clean white-themed minimal aesthetic, warm and premium atmosphere, "
+    "no text, no watermark, no people, "
+    "professional Korean smart store product photography."
 )
+
+# ─── 3단계 통합 QC 파이프라인 ────────────────────────────────────────────────
+import html as _html_parser
+
+async def run_qc_pipeline(
+    image_url: str,
+    product_name: str,
+    detail_html: str,
+    anthropic_key: str,
+    reject_keywords: list = None,
+) -> dict:
+    """
+    1단계: 기술 검수 — 해상도·용량
+    2단계: 비전 검수 — 상품명↔이미지 일치
+    3단계: 콘텐츠 검수 — HTML 핵심 정보 3줄 이상
+
+    반환: {passed, stage, reason, score}
+    """
+    # ── 1단계: 기술 검수 ──────────────────────────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        img_bytes = r.content
+        from PIL import Image as _PILImg
+        img = _PILImg.open(_io.BytesIO(img_bytes))
+        w, h = img.size
+        size_kb = len(img_bytes) / 1024
+
+        if min(w, h) < 800:
+            return {"passed": False, "stage": 1,
+                    "reason": f"해상도 미달 ({w}×{h}, 최소 800px 필요)",
+                    "score": 0}
+        if size_kb < 5:
+            return {"passed": False, "stage": 1,
+                    "reason": f"파일 용량 너무 작음 ({size_kb:.1f}KB)",
+                    "score": 0}
+        if size_kb > 10240:
+            return {"passed": False, "stage": 1,
+                    "reason": f"파일 용량 초과 ({size_kb:.0f}KB, 최대 10MB)",
+                    "score": 0}
+        print(f"[QC-1] ✅ 기술검수 통과 ({w}×{h}, {size_kb:.0f}KB)", flush=True)
+    except Exception as e:
+        print(f"[QC-1] ⚠️ 기술검수 스킵: {e}", flush=True)
+
+    # ── 2단계: 비전 검수 ──────────────────────────────────────────────────────
+    from employees import employee_image_inspector
+    qc = await employee_image_inspector(
+        image_url, product_name, anthropic_key,
+        reject_keywords=reject_keywords
+    )
+    score = qc.get("score", 100)
+    if score < 90:
+        return {"passed": False, "stage": 2,
+                "reason": f"비전검수 {score}점: {qc.get('issues',[])}",
+                "score": score,
+                "retry_prompt": qc.get("retry_prompt", "")}
+    print(f"[QC-2] ✅ 비전검수 통과 ({score}점)", flush=True)
+
+    # ── 3단계: 콘텐츠 검수 ───────────────────────────────────────────────────
+    clean_text = _re.sub(r'<[^>]+>', ' ', detail_html)
+    clean_text = _re.sub(r'\s+', ' ', clean_text).strip()
+    lines = [l.strip() for l in clean_text.split('·') + clean_text.split('•')
+             if len(l.strip()) > 10]
+    if len(clean_text) < 100:
+        return {"passed": False, "stage": 3,
+                "reason": f"상세페이지 내용 부족 ({len(clean_text)}자, 최소 100자)",
+                "score": score}
+    print(f"[QC-3] ✅ 콘텐츠검수 통과 ({len(clean_text)}자)", flush=True)
+
+    return {"passed": True, "stage": 3, "reason": "전체 통과", "score": score}
+
+
+async def build_dalle_prompt_smart(
+    product_name: str,
+    category: str = "",
+    shot_type: str = "lifestyle",
+    spec_hint: str = "",
+) -> str:
+    """
+    지능형 프롬프트 생성기
+    - _SCENE_MAP으로 1차 분류
+    - 미분류 시 Claude가 씬 자동 생성
+    - shot_type: lifestyle | detail | banner
+    """
+    scene, _ = _get_scene_context(product_name)
+
+    # 미분류(기본 씬) + 카테고리 있으면 Claude로 씬 보강
+    is_default = scene == _DEFAULT_SCENE[0]
+    if is_default and ANTHROPIC_API_KEY and category:
+        try:
+            client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+            resp = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[{"role": "user", "content":
+                    f"상품명: '{product_name}', 카테고리: '{category}'\n"
+                    f"이 상품을 실제로 사용하는 구체적인 배경 장면을 영어 20단어 이내로 묘사해. "
+                    f"장소/분위기만 설명하고 상품명은 포함하지 마."}]
+            )
+            scene = resp.content[0].text.strip()
+            print(f"[PROMPT] Claude 씬 생성: {scene[:40]}", flush=True)
+        except Exception:
+            pass
+
+    if shot_type == "detail":
+        highlight = spec_hint if spec_hint else "material texture and fine craftsmanship"
+        return (
+            f"Extreme close-up macro product photography of '{product_name}'. "
+            f"Highlight: {highlight}. "
+            f"Pure white background, overhead flat lay, ultra-sharp studio lighting. "
+            f"{_DALLE_SUFFIX}"
+        )
+    elif shot_type == "banner":
+        return (
+            f"Wide Korean e-commerce banner image. "
+            f"RIGHT 40%: '{product_name}' {scene}. "
+            f"LEFT 60%: large plain off-white empty negative space for text overlay. "
+            f"Clean professional composition. No text, no watermark. {_DALLE_SUFFIX}"
+        )
+    else:  # lifestyle
+        return (
+            f"Photorealistic 8K lifestyle product photography. "
+            f"'{product_name}' {scene}. "
+            f"The product is the clear main subject, beautifully lit. "
+            f"No people, no text, no watermark. {_DALLE_SUFFIX}"
+        )
 
 
 async def _dalle_request(prompt: str, size: str = "1024x1024", quality: str = "hd") -> str | None:
@@ -969,41 +1098,23 @@ def _get_scene_context(product_name: str) -> tuple[str, list[str]]:
     return _DEFAULT_SCENE
 
 
-async def generate_dalle_image(product_name: str) -> str | None:
-    """② 라이프스타일 상품컷 — 키워드 씬 자동 주입"""
-    scene, _ = _get_scene_context(product_name)
-    prompt = (
-        f"Photorealistic 8K high-quality lifestyle product photography. "
-        f"'{product_name}' {scene}. "
-        f"The product is the clear main subject, beautifully lit. "
-        f"No people, no text, no watermark. {_DALLE_SUFFIX}"
-    )
-    print(f"[DALLE] 상품컷: {product_name[:20]} | 씬: {scene[:40]}", flush=True)
+async def generate_dalle_image(product_name: str, category: str = "") -> str | None:
+    """② 라이프스타일 상품컷 — 지능형 씬 자동 주입"""
+    prompt = await build_dalle_prompt_smart(product_name, category, shot_type="lifestyle")
+    print(f"[DALLE] 상품컷: {product_name[:20]}", flush=True)
     return await _dalle_request(prompt, size="1024x1024", quality="hd")
 
 
-async def generate_dalle_banner(product_name: str, headline: str = "") -> str | None:
-    """① 메인 배너 — 좌측 여백 + 키워드 씬 자동 주입"""
-    scene, _ = _get_scene_context(product_name)
-    prompt = (
-        f"Wide Korean e-commerce banner image. "
-        f"RIGHT 40%: '{product_name}' {scene}. "
-        f"LEFT 60%: large plain off-white empty negative space for text overlay. "
-        f"Clean professional composition. No text, no watermark. {_DALLE_SUFFIX}"
-    )
+async def generate_dalle_banner(product_name: str, headline: str = "", category: str = "") -> str | None:
+    """① 메인 배너 — 지능형 씬 자동 주입 + 좌측 여백"""
+    prompt = await build_dalle_prompt_smart(product_name, category, shot_type="banner")
     print(f"[DALLE] 배너: {product_name[:20]}", flush=True)
     return await _dalle_request(prompt, size="1792x1024", quality="hd")
 
 
-async def generate_dalle_detail_shot(product_name: str, spec_hint: str = "") -> str | None:
+async def generate_dalle_detail_shot(product_name: str, spec_hint: str = "", category: str = "") -> str | None:
     """④ 디테일/기능 설명컷 — 클로즈업, spec_hint 반영"""
-    hint = spec_hint if spec_hint else "material texture and fine craftsmanship"
-    prompt = (
-        f"Extreme close-up macro product photography of '{product_name}'. "
-        f"Highlight: {hint}. "
-        f"Pure white background, overhead flat lay, ultra-sharp studio lighting, "
-        f"4K macro detail, no text, no watermark. {_DALLE_SUFFIX}"
-    )
+    prompt = await build_dalle_prompt_smart(product_name, category, shot_type="detail", spec_hint=spec_hint)
     print(f"[DALLE] 디테일컷: {product_name[:20]}", flush=True)
     return await _dalle_request(prompt, size="1024x1024", quality="hd")
 
@@ -1155,77 +1266,78 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             price = calculate_selling_price(p["price"])
 
             # ⑦ 이미지 디렉터: 메인 이미지
+            _cat = str(p.get("category", ""))
             naver_img_url = await get_product_image(p)
             if not naver_img_url:
                 print(f"[이미지디렉터] SKIP 이미지없음: {p.get('name', '')}", flush=True)
                 results["skip"] += 1
                 continue
 
-            # ⑧ 품질검수관: 씬 거부 기준 포함 검수 (최대 2회 시도)
-            from employees import employee_image_inspector
-            _, reject_kws = _get_scene_context(str(p.get("name", "")))
-            qc = await employee_image_inspector(
-                naver_img_url, str(p.get("name","")), ANTHROPIC_API_KEY,
-                reject_keywords=reject_kws
-            )
-            print(f"[검수관] 점수:{qc.get('score')} 통과:{qc.get('passed')} 이슈:{qc.get('issues')}", flush=True)
-            if not qc.get("passed"):
-                print(f"[검수관] 90점 미만 → DALL-E 재시도 (씬: {reject_kws})", flush=True)
-                retry_hint = qc.get("retry_prompt", "")
-                new_dalle = await generate_dalle_image(f"{p.get('name','')} {retry_hint}".strip())
-                if new_dalle:
-                    retry_img = await naver_api.upload_image(new_dalle)
-                    qc2 = await employee_image_inspector(retry_img, str(p.get("name","")), ANTHROPIC_API_KEY)
-                    print(f"[검수관] 재시도 점수:{qc2.get('score')}", flush=True)
-                    if qc2.get("passed"):
-                        naver_img_url = retry_img
-                    else:
-                        # 2회 모두 실패 → 반려 리포트 로그
-                        reject_msg = (
-                            f"[반려] {p.get('name','')} | "
-                            f"1차:{qc.get('score')}점 이슈:{qc.get('issues')} | "
-                            f"2차:{qc2.get('score')}점 이슈:{qc2.get('issues')}"
-                        )
-                        print(reject_msg, flush=True)
-                        results["fail"] += 1
-                        results["errors"].append(reject_msg)
-                        continue
-
-            # ⑨ 배너 생성: DALL-E 3 배너 우선 → 실패 시 Pillow 폴백
+            # ⑧ 배너 생성 (DALL-E → Pillow 폴백)
             headline_txt = ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18]
-            dalle_banner_raw = await generate_dalle_banner(str(p.get("name", "")), headline_txt)
+            dalle_banner_raw = await generate_dalle_banner(str(p.get("name", "")), headline_txt, _cat)
             if dalle_banner_raw:
                 banner_url = await naver_api.upload_image(dalle_banner_raw, is_banner=True)
-                # 배너도 검수
-                bqc = await employee_image_inspector(banner_url, str(p.get("name","")), ANTHROPIC_API_KEY, is_banner=True)
-                print(f"[검수관] 배너점수:{bqc.get('score')}", flush=True)
-                if not bqc.get("passed"):
-                    # 배너 검수 실패 → Pillow 폴백
-                    print(f"[검수관] 배너 기준 미달 → Pillow 폴백", flush=True)
-                    banner_url = await create_banner_image(
-                        naver_img_url, headline_txt,
-                        ai.get("sub_headline") or ai.get("sub_text", "")
-                    )
             else:
                 banner_url = await create_banner_image(
                     naver_img_url, headline_txt,
                     ai.get("sub_headline") or ai.get("sub_text", "")
                 )
 
-            # ⑩ 디테일/기능 설명컷 생성
+            # ⑨ 디테일컷 생성
             detail_img_url = ""
-            spec_hint = ai.get("spec_hint", "")
-            dalle_detail_raw = await generate_dalle_detail_shot(str(p.get("name","")), spec_hint)
+            dalle_detail_raw = await generate_dalle_detail_shot(
+                str(p.get("name","")), ai.get("spec_hint",""), _cat)
             if dalle_detail_raw:
                 try:
                     detail_img_url = await naver_api.upload_image(dalle_detail_raw)
-                    print(f"[DALLE] 디테일컷 업로드 완료", flush=True)
                 except Exception:
                     pass
 
+            # ⑩ HTML 상세페이지 빌드
+            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
+
+            # ⑪ 3단계 통합 QC 파이프라인 (기술+비전+콘텐츠)
+            _, reject_kws = _get_scene_context(str(p.get("name", "")))
+            qc_result = await run_qc_pipeline(
+                naver_img_url, str(p.get("name","")),
+                detail_html, ANTHROPIC_API_KEY, reject_kws
+            )
+            print(f"[QC] 단계:{qc_result['stage']} 통과:{qc_result['passed']} — {qc_result['reason']}", flush=True)
+
+            if not qc_result["passed"]:
+                if qc_result["stage"] == 2:
+                    # 비전검수 실패 → DALL-E 재시도 1회
+                    retry_prompt = qc_result.get("retry_prompt","")
+                    retry_raw = await generate_dalle_image(f"{p.get('name','')} {retry_prompt}".strip(), _cat)
+                    if retry_raw:
+                        retry_img = await naver_api.upload_image(retry_raw)
+                        qc2 = await run_qc_pipeline(
+                            retry_img, str(p.get("name","")),
+                            detail_html, ANTHROPIC_API_KEY, reject_kws
+                        )
+                        if qc2["passed"]:
+                            naver_img_url = retry_img
+                            print(f"[QC] 재시도 ✅", flush=True)
+                        else:
+                            reject_msg = f"[반려] {p.get('name','')} | QC단계:{qc2['stage']} — {qc2['reason']}"
+                            print(reject_msg, flush=True)
+                            results["fail"] += 1; results["errors"].append(reject_msg)
+                            continue
+                    else:
+                        reject_msg = f"[반려] {p.get('name','')} — DALL-E 재생성 실패"
+                        print(reject_msg, flush=True)
+                        results["fail"] += 1; results["errors"].append(reject_msg)
+                        continue
+                else:
+                    # 1단계(기술)/3단계(콘텐츠) 실패 → 스킵
+                    reject_msg = f"[반려] {p.get('name','')} | QC단계:{qc_result['stage']} — {qc_result['reason']}"
+                    print(reject_msg, flush=True)
+                    results["fail"] += 1; results["errors"].append(reject_msg)
+                    continue
+
             payload = build_product_payload(p, ai, price)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
-            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
 

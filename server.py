@@ -25,6 +25,19 @@ from main import (
     MARGIN_RATE,
     naver_api,
     parse_excel,
+    run_qc_pipeline,
+    build_dalle_prompt_smart,
+    generate_dalle_image,
+    generate_dalle_banner,
+    generate_dalle_detail_shot,
+    get_product_image,
+    build_detail_html,
+    generate_product_copy,
+    build_product_payload,
+    save_registered_code,
+    load_registered_codes,
+    create_banner_image,
+    _get_scene_context,
 )
 from employees import (
     employee_season_planner,
@@ -274,6 +287,108 @@ async def register_products(request: Request, background_tasks: BackgroundTasks)
     limit = int(body.get("limit", 50))
     background_tasks.add_task(pipeline_register_products, excel_path, limit)
     return JSONResponse({"status": "processing", "excel": excel_path, "limit": limit})
+
+
+@app.post("/register-single")
+async def register_single_product(request: Request):
+    """
+    n8n Loop 전용 — 상품 1개 즉시 등록
+    Body: {"title": "상품명", "category": "카테고리명", "price": 15000, "image": "https://..."}
+    n8n 변수 예시: $node["Input"].json["title"]
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "JSON 파싱 실패"}, status_code=400)
+
+    product_name = str(body.get("title", "")).strip()
+    if not product_name:
+        return JSONResponse({"status": "error", "message": "title 필드 필수"}, status_code=400)
+
+    category = str(body.get("category", ""))
+    raw_price = body.get("price", 0)
+    image_url = str(body.get("image", ""))
+
+    p = {
+        "name": product_name,
+        "category": category,
+        "price": raw_price,
+        "image": image_url,
+        "code": body.get("code", ""),
+    }
+
+    registered_codes = load_registered_codes()
+    if p["code"] and p["code"] in registered_codes:
+        return JSONResponse({"status": "duplicate", "message": "이미 등록된 상품"})
+
+    try:
+        from employees import employee_ip_guardian, employee_review_analyst
+        safe, danger_kw = employee_ip_guardian(p)
+        if not safe:
+            return JSONResponse({"status": "ip_blocked", "keyword": danger_kw})
+
+        review = await employee_review_analyst(product_name, ANTHROPIC_API_KEY)
+        ai = await generate_product_copy(p, {
+            "season": "", "trends": [], "pain_points": review.get("pain_points", []),
+            "selling_points": review.get("selling_points", []),
+        })
+        price = calculate_selling_price(raw_price)
+
+        naver_img_url = await get_product_image(p)
+        if not naver_img_url:
+            return JSONResponse({"status": "error", "message": "이미지 소스 없음"}, status_code=500)
+
+        headline_txt = ai.get("headline") or product_name[:18]
+        dalle_banner_raw = await generate_dalle_banner(product_name, headline_txt, category)
+        if dalle_banner_raw:
+            banner_url = await naver_api.upload_image(dalle_banner_raw, is_banner=True)
+        else:
+            banner_url = await create_banner_image(
+                naver_img_url, headline_txt, ai.get("sub_headline", ""))
+
+        dalle_detail_raw = await generate_dalle_detail_shot(
+            product_name, ai.get("spec_hint", ""), category)
+        detail_img_url = ""
+        if dalle_detail_raw:
+            try:
+                detail_img_url = await naver_api.upload_image(dalle_detail_raw)
+            except Exception:
+                pass
+
+        detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
+
+        _, reject_kws = _get_scene_context(product_name)
+        qc_result = await run_qc_pipeline(
+            naver_img_url, product_name, detail_html, ANTHROPIC_API_KEY, reject_kws)
+
+        if not qc_result["passed"]:
+            if qc_result["stage"] == 2:
+                retry_raw = await generate_dalle_image(
+                    f"{product_name} {qc_result.get('retry_prompt','')}".strip(), category)
+                if retry_raw:
+                    retry_img = await naver_api.upload_image(retry_raw)
+                    qc2 = await run_qc_pipeline(
+                        retry_img, product_name, detail_html, ANTHROPIC_API_KEY, reject_kws)
+                    if qc2["passed"]:
+                        naver_img_url = retry_img
+                    else:
+                        return JSONResponse({"status": "qc_fail", "stage": qc2["stage"], "reason": qc2["reason"]})
+                else:
+                    return JSONResponse({"status": "qc_fail", "stage": 2, "reason": "DALL-E 재생성 실패"})
+            else:
+                return JSONResponse({"status": "qc_fail", "stage": qc_result["stage"], "reason": qc_result["reason"]})
+
+        payload = build_product_payload(p, ai, price)
+        payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
+        if detail_html:
+            payload["originProduct"]["detailContent"] = detail_html
+
+        result = await naver_api.register_product(payload)
+        save_registered_code(p["code"])
+        return JSONResponse({"status": "success", "product_name": ai.get("product_name", product_name), "price": price})
+
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 @app.post("/upload-excel")
