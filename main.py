@@ -101,6 +101,7 @@ NAVER_BASE = "https://api.commerce.naver.com/external"
 
 Path(EXCEL_FOLDER).mkdir(exist_ok=True)
 REGISTERED_CODES_FILE = "./uploads/registered_codes.json"
+CLEANUP_LOG_FILE      = "./uploads/auto_cleanup.jsonl"
 
 def load_registered_codes() -> set:
     try:
@@ -299,6 +300,25 @@ class NaverCommerceAPI:
                 headers=await self._headers()
             )
             return r.status_code in (200, 204)
+
+    async def get_product_insight(self, channel_product_no: str, days: int = 30) -> dict | None:
+        """채널상품 조회수·판매수 조회 (30일 기준)"""
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        from_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        to_date = now.strftime("%Y-%m-%d")
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(
+                    f"{NAVER_BASE}/v1/channel-products/{channel_product_no}/insights",
+                    headers=await self._headers(),
+                    params={"searchDateFrom": from_date, "searchDateTo": to_date},
+                )
+                if r.status_code == 200:
+                    return r.json()
+        except Exception as e:
+            print(f"[INSIGHT] {channel_product_no} 조회 실패: {e}", flush=True)
+        return None
 
     async def update_price(self, product_id: str, price: int) -> bool:
         """상품 가격 수정"""
@@ -1639,3 +1659,125 @@ async def pipeline_reply_inquiries() -> dict:
             print(f"[INQUIRY] ❌ {e}", flush=True)
 
     return {"replied": replied, "total": len(inquiries)}
+
+
+async def pipeline_auto_cleanup(
+    min_age_days: int = 30,
+    max_views: int = 100,
+) -> dict:
+    """파이프라인 5: 저성과 상품 자동 판매중지
+    조건 (3가지 모두 충족 시 판매중지):
+      - 등록 후 min_age_days일 이상 경과
+      - 조회수(클릭수) max_views 미만
+      - 판매 0건
+    """
+    print("[CLEANUP] 저성과 상품 검사 시작", flush=True)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=min_age_days)
+
+    results = {
+        "timestamp": now.isoformat(),
+        "checked": 0,
+        "deactivated": 0,
+        "skipped_new": 0,
+        "skipped_no_data": 0,
+        "errors": [],
+        "deactivated_list": [],
+    }
+
+    # 전체 상품 수집 (페이지 순회)
+    all_products = []
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=100)
+        except Exception as e:
+            results["errors"].append(f"상품 목록 조회 실패(p{page}): {e}")
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 100:
+            break
+        page += 1
+
+    print(f"[CLEANUP] 전체 상품: {len(all_products)}개", flush=True)
+
+    for prod in all_products:
+        try:
+            origin = prod.get("originProduct", {})
+            status = origin.get("statusType", "")
+            if status != "SALE":
+                continue
+
+            product_no    = str(prod.get("originProductNo", ""))
+            channel_no    = str(prod.get("channelProductNo", ""))
+            name          = origin.get("name", "")[:20]
+            reg_date_str  = origin.get("regDate", "")
+
+            # 등록일 파싱
+            try:
+                reg_date = datetime.fromisoformat(reg_date_str.replace("Z", "+00:00"))
+            except Exception:
+                results["skipped_no_data"] += 1
+                continue
+
+            # 아직 30일 미경과 → 스킵
+            if reg_date > cutoff:
+                results["skipped_new"] += 1
+                continue
+
+            results["checked"] += 1
+
+            # 조회수·판매 데이터 조회
+            insight = await naver_api.get_product_insight(channel_no, days=min_age_days)
+            if not insight:
+                print(f"[CLEANUP] 인사이트 없음 스킵: {name}", flush=True)
+                results["skipped_no_data"] += 1
+                continue
+
+            click_count = insight.get("clickCount")
+            order_count = insight.get("orderCount")
+
+            # 데이터 없으면 보수적으로 스킵 (잘못된 삭제 방지)
+            if click_count is None or order_count is None:
+                results["skipped_no_data"] += 1
+                continue
+
+            # 저성과 조건 3가지 동시 충족 확인
+            if int(click_count) < max_views and int(order_count) == 0:
+                ok = await naver_api.set_product_status(product_no, "SUSPENSION")
+                if ok:
+                    results["deactivated"] += 1
+                    entry = {
+                        "product_no": product_no,
+                        "name": name,
+                        "click_count": click_count,
+                        "order_count": order_count,
+                        "reg_date": reg_date_str[:10],
+                        "days_old": (now - reg_date).days,
+                    }
+                    results["deactivated_list"].append(entry)
+                    print(f"[CLEANUP] 판매중지 ✅ {name} | 조회:{click_count} 판매:{order_count} ({(now-reg_date).days}일 경과)", flush=True)
+                else:
+                    results["errors"].append(f"판매중지 실패: {name} ({product_no})")
+        except Exception as e:
+            results["errors"].append(str(e))
+
+    # 결과 로그 JSONL 저장
+    try:
+        Path(CLEANUP_LOG_FILE).parent.mkdir(exist_ok=True)
+        with open(CLEANUP_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(results, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[CLEANUP] 로그 저장 실패: {e}", flush=True)
+
+    print(
+        f"[CLEANUP] 완료 — 검사:{results['checked']} "
+        f"중지:{results['deactivated']} "
+        f"스킵(신규):{results['skipped_new']} "
+        f"스킵(데이터없음):{results['skipped_no_data']}",
+        flush=True,
+    )
+    return results

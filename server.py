@@ -814,6 +814,35 @@ async def list_products(page: int = 1, size: int = 50):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.post("/auto-cleanup")
+async def auto_cleanup(request: Request):
+    """저성과 상품 자동 판매중지 (수동 트리거 또는 월요일 자정 자동 실행)
+    Body(선택): {"min_age_days": 30, "max_views": 100}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    min_age_days = int(body.get("min_age_days", 30))
+    max_views    = int(body.get("max_views", 100))
+    from main import pipeline_auto_cleanup
+    result = await pipeline_auto_cleanup(min_age_days=min_age_days, max_views=max_views)
+    return JSONResponse(result)
+
+
+@app.get("/auto-cleanup-log")
+async def auto_cleanup_log(lines: int = 10):
+    """최근 자동 판매중지 실행 로그 조회"""
+    from main import CLEANUP_LOG_FILE
+    try:
+        with open(CLEANUP_LOG_FILE, "r", encoding="utf-8") as f:
+            all_lines = f.readlines()
+        recent = [json.loads(l) for l in all_lines[-lines:] if l.strip()]
+        return JSONResponse({"count": len(recent), "logs": recent})
+    except FileNotFoundError:
+        return JSONResponse({"count": 0, "logs": [], "message": "아직 실행 기록 없음"})
+
+
 @app.post("/deactivate-product")
 async def deactivate_product(request: Request):
     """🚫 상품 판매중지"""
@@ -985,7 +1014,8 @@ async def startup_event():
     )
     from main import (
         pipeline_process_orders, pipeline_sync_inventory,
-        pipeline_reply_inquiries, ANTHROPIC_API_KEY, MARGIN_RATE,
+        pipeline_reply_inquiries, pipeline_auto_cleanup,
+        ANTHROPIC_API_KEY, MARGIN_RATE,
     )
 
     async def job_process_orders():
@@ -1045,6 +1075,15 @@ async def startup_event():
         print("[SCHED] 플랫폼 확장 전문가", flush=True)
         await employee_platform_expander(ANTHROPIC_API_KEY)
 
+    async def job_auto_cleanup():
+        """매주 월요일 00:00 — 저성과 상품 자동 판매중지"""
+        print("[SCHED] 저성과 상품 자동 정리 시작", flush=True)
+        try:
+            result = await pipeline_auto_cleanup(min_age_days=30, max_views=100)
+            print(f"[SCHED] 정리 완료 — 중지:{result['deactivated']}개", flush=True)
+        except Exception as e:
+            print(f"[SCHED] 자동 정리 오류: {e}", flush=True)
+
     async def job_register_products():
         """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 17개 등록"""
         print("[SCHED] 상품 자동 등록 시작", flush=True)
@@ -1077,7 +1116,9 @@ async def startup_event():
     scheduler.add_job(job_review_analysis, "interval", weeks=1, id="review_analysis")
     scheduler.add_job(job_expand_platform, "interval", weeks=1, id="expand_platform")
     # 08:00 / 12:00 / 20:00 상품 등록
-    scheduler.add_job(job_register_products, "cron", hour="8,12,20",  minute=0, id="register_products_8")
+    scheduler.add_job(job_register_products, "cron", hour="8,12,20", minute=0, id="register_products_8")
+    # 매주 월요일 00:00 저성과 상품 정리
+    scheduler.add_job(job_auto_cleanup, "cron", day_of_week="mon", hour=0, minute=0, id="auto_cleanup")
 
     scheduler.start()
     print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
