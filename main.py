@@ -263,13 +263,15 @@ class NaverCommerceAPI:
             return r.status_code == 200
 
     async def list_products(self, page: int = 1, size: int = 50) -> dict:
-        """등록된 상품 목록 조회"""
-        from datetime import timedelta
+        """등록된 상품 목록 조회 (상품명/가격/상태 포함).
+        search API는 ID만 반환하므로 개별 상세 조회를 asyncio.gather로 병렬 처리."""
         now = datetime.now(timezone.utc)
+        headers = await self._headers()
         async with httpx.AsyncClient(timeout=30) as c:
+            # 1단계: 상품 ID 목록 조회
             r = await c.post(
                 f"{NAVER_BASE}/v1/products/search",
-                headers=await self._headers(),
+                headers=headers,
                 json={
                     "productStatusTypes": ["SALE", "SUSPENSION"],
                     "page": page,
@@ -281,7 +283,29 @@ class NaverCommerceAPI:
                 }
             )
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            contents = data.get("contents", [])
+
+            # 2단계: 각 상품 상세 병렬 조회
+            async def _fetch_detail(item: dict) -> dict:
+                product_no = item.get("originProductNo")
+                if not product_no:
+                    return item
+                try:
+                    dr = await c.get(
+                        f"{NAVER_BASE}/v2/products/origin-products/{product_no}",
+                        headers=headers,
+                        timeout=15,
+                    )
+                    if dr.status_code == 200:
+                        item["originProduct"] = dr.json().get("originProduct", {})
+                except Exception:
+                    pass
+                return item
+
+            enriched = await asyncio.gather(*[_fetch_detail(item) for item in contents])
+            data["contents"] = list(enriched)
+            return data
 
     async def set_product_status(self, product_id: str, status: str) -> bool:
         """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)"""
