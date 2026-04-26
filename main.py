@@ -93,6 +93,7 @@ ANTHROPIC_API_KEY   = _clean_key(os.environ.get("ANTHROPIC_API_KEY", ""))
 PEXELS_API_KEY      = _clean_key(os.environ.get("PEXELS_API_KEY", ""))
 OPENAI_API_KEY      = _clean_key(os.environ.get("OPENAI_API_KEY", ""))
 GOOGLE_AI_API_KEY   = _clean_key(os.environ.get("GOOGLE_AI_API_KEY", ""))
+FLUX_API_KEY        = _clean_key(os.environ.get("FLUX_API_KEY", ""))
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
@@ -1333,6 +1334,101 @@ async def generate_gemini_image(product_name: str, category: str = "") -> bytes 
     return None
 
 
+async def generate_flux_image(product_name: str, category: str = "") -> str | None:
+    """Flux Pro 1.1 이미지 생성 — BFL API 비동기 폴링, 이미지 URL 반환"""
+    if not FLUX_API_KEY:
+        return None
+    en_name = _get_en_name(product_name, category)
+    scene, _ = _get_scene_context(product_name)
+    prompt = (
+        f"Photorealistic professional product photography of {en_name}. "
+        f"{scene}. "
+        f"Shot with DSLR camera, natural lighting, real photo style. "
+        f"NOT AI generated, NOT cartoon, NOT synthetic. "
+        f"Authentic textures, sharp focus, clean minimal background. "
+        f"No text, no watermarks, no people."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(
+                "https://api.us1.bfl.ai/v1/flux-pro-1.1",
+                headers={"X-Key": FLUX_API_KEY, "Content-Type": "application/json"},
+                json={"prompt": prompt, "width": 1024, "height": 1024},
+            )
+            r.raise_for_status()
+            task_id = r.json().get("id")
+        if not task_id:
+            return None
+        # 결과 폴링 (최대 60초, 2초 간격)
+        for _ in range(30):
+            await asyncio.sleep(2)
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(
+                    "https://api.us1.bfl.ai/v1/get_result",
+                    headers={"X-Key": FLUX_API_KEY},
+                    params={"id": task_id},
+                )
+                data = r.json()
+            status = data.get("status")
+            if status == "Ready":
+                img_url = data.get("result", {}).get("sample")
+                if img_url:
+                    print(f"[FLUX] ✅ {product_name[:20]}", flush=True)
+                    return img_url
+                return None
+            if status not in ("Pending", "Processing"):
+                print(f"[FLUX] 실패 상태: {status}", flush=True)
+                return None
+        print(f"[FLUX] 타임아웃 (60s)", flush=True)
+    except Exception as e:
+        print(f"[FLUX] 실패: {e}", flush=True)
+    return None
+
+
+# 디지털/가전 카테고리 키워드
+_DIGITAL_CATEGORIES = ("디지털", "가전", "전자", "컴퓨터", "모바일", "IT")
+
+
+async def _is_digital_category(category: str) -> bool:
+    return any(kw in category for kw in _DIGITAL_CATEGORIES)
+
+
+async def _generate_ai_image_with_qc(
+    product_name: str, category: str, reject_kws: list
+) -> str | None:
+    """Gemini 또는 Flux로 이미지 생성 후 Vision QC — URL 반환"""
+    from employees import employee_image_inspector
+    is_digital = await _is_digital_category(category)
+    sources = (
+        [("Flux", generate_flux_image), ("Gemini", generate_gemini_image)]
+        if is_digital
+        else [("Gemini", generate_gemini_image)]
+    )
+    for label, gen_fn in sources:
+        print(f"[IMAGE] {label} 생성 중: {product_name[:20]}", flush=True)
+        raw = await gen_fn(product_name, category)
+        if not raw:
+            print(f"[IMAGE] {label} 생성 실패", flush=True)
+            continue
+        try:
+            url = (
+                await naver_api.upload_raw_image(raw)  # Gemini → bytes
+                if isinstance(raw, bytes)
+                else await naver_api.upload_image(raw)  # Flux → URL 문자열
+            )
+            qc = await employee_image_inspector(
+                url, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws
+            )
+            print(f"[IMAGE] {label} QC: {qc.get('score',0)}점 — {qc.get('recommendation','')}", flush=True)
+            if qc.get("passed", False):
+                print(f"[IMAGE] {label} ✅", flush=True)
+                return url
+            print(f"[IMAGE] {label} QC 미통과 → 다음 소스", flush=True)
+        except Exception as e:
+            print(f"[IMAGE] {label} 업로드/QC 실패: {e}", flush=True)
+    return None
+
+
 async def _is_text_heavy_image(image_url: str) -> bool:
     """배송/반품 안내 등 텍스트 과다 이미지 감지 — 세로가 가로의 2.5배 초과 시 제외"""
     try:
@@ -1374,7 +1470,7 @@ async def get_product_image(p: dict) -> str | None:
     이미지 우선순위:
     1. 오너클랜 원본 (품질 OK)
     2. Pexels 실사진 (연관성 QC 통과)
-    3. Gemini 2.0 Flash 생성
+    3. AI 생성 + Vision QC (디지털/가전: Flux→Gemini / 기타: Gemini)
     4. DALL-E 3 최종 폴백
     """
     image_url = str(p.get("image", "")).strip()
@@ -1407,33 +1503,17 @@ async def get_product_image(p: dict) -> str | None:
                 print(f"[IMAGE] Pexels ✅", flush=True)
                 return result
             else:
-                print(f"[IMAGE] Pexels 연관성 부족 → Gemini", flush=True)
+                print(f"[IMAGE] Pexels 연관성 부족 → AI 생성", flush=True)
         except Exception as e:
             print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
     else:
-        print(f"[IMAGE] Pexels 검색 실패 → Gemini", flush=True)
+        print(f"[IMAGE] Pexels 검색 실패 → AI 생성", flush=True)
 
-    # 3. Gemini 2.0 Flash 이미지 생성 + Vision QC
-    print(f"[IMAGE] Gemini 생성 중: {product_name[:20]}", flush=True)
-    gemini_bytes = await generate_gemini_image(product_name, category)
-    if gemini_bytes:
-        try:
-            gemini_url = await naver_api.upload_raw_image(gemini_bytes)
-            from employees import employee_image_inspector
-            _, reject_kws = _get_scene_context(product_name)
-            qc = await employee_image_inspector(
-                gemini_url, product_name, ANTHROPIC_API_KEY,
-                reject_keywords=reject_kws)
-            print(f"[IMAGE] Gemini QC: {qc.get('score',0)}점 — {qc.get('recommendation','')}", flush=True)
-            if qc.get("passed", False):
-                print(f"[IMAGE] Gemini ✅", flush=True)
-                return gemini_url
-            else:
-                print(f"[IMAGE] Gemini QC 미통과 → DALL-E", flush=True)
-        except Exception as e:
-            print(f"[IMAGE] Gemini 업로드/QC 실패: {e}", flush=True)
-    else:
-        print(f"[IMAGE] Gemini 생성 실패 → DALL-E", flush=True)
+    # 3. AI 생성 (디지털/가전: Flux → Gemini / 기타: Gemini)
+    _, reject_kws = _get_scene_context(product_name)
+    ai_result = await _generate_ai_image_with_qc(product_name, category, reject_kws)
+    if ai_result:
+        return ai_result
 
     # 4. DALL-E 3 최종 폴백
     print(f"[IMAGE] DALL-E 생성 중: {product_name[:20]}", flush=True)
