@@ -83,13 +83,12 @@ async def test_image_gen():
     import httpx as _httpx, base64 as _b64
     results = {}
 
-    # Gemini 직접 호출
+    # Gemini — gemini-2.0-flash-exp 로 테스트
     if GOOGLE_AI_API_KEY:
         try:
             async with _httpx.AsyncClient(timeout=30) as c:
                 r = await c.post(
-                    "https://generativelanguage.googleapis.com/v1beta/models/"
-                    "gemini-2.0-flash-preview-image-generation:generateContent",
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
                     params={"key": GOOGLE_AI_API_KEY},
                     json={
                         "contents": [{"parts": [{"text": "Professional product photo of a massage cushion"}]}],
@@ -100,26 +99,26 @@ async def test_image_gen():
             if r.status_code == 200:
                 parts = body.get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 has_img = any("inlineData" in p for p in parts)
-                results["gemini"] = f"ok(image={has_img})" if r.status_code == 200 else f"fail"
+                results["gemini"] = f"ok(image={has_img})"
             else:
-                results["gemini"] = f"http{r.status_code}:{str(body)[:200]}"
+                results["gemini"] = f"http{r.status_code}:{str(body)[:300]}"
         except Exception as e:
-            results["gemini"] = f"exception:{str(e)[:200]}"
+            results["gemini"] = f"exception:{str(e)[:300]}"
     else:
         results["gemini"] = "no_key"
 
-    # Flux 직접 호출
+    # Flux — X-Key 헤더로 api.bfl.ai 테스트
     if FLUX_API_KEY:
         try:
             async with _httpx.AsyncClient(timeout=20) as c:
                 r = await c.post(
                     "https://api.bfl.ai/v1/flux-pro-1.1",
                     headers={"X-Key": FLUX_API_KEY, "Content-Type": "application/json"},
-                    json={"prompt": "professional product photo massage cushion", "width": 1024, "height": 1024},
+                    json={"prompt": "product photo massage cushion", "width": 1024, "height": 1024},
                 )
-            results["flux_submit"] = f"http{r.status_code}:{str(r.json())[:200]}"
+            results["flux_submit"] = f"http{r.status_code}:{str(r.json())[:300]}"
         except Exception as e:
-            results["flux_submit"] = f"exception:{str(e)[:200]}"
+            results["flux_submit"] = f"exception:{type(e).__name__}:{str(e)[:300]}"
     else:
         results["flux_submit"] = "no_key"
 
