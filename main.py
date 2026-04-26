@@ -1303,9 +1303,12 @@ async def generate_gemini_image(product_name: str, category: str = "") -> bytes 
     en_name = _get_en_name(product_name, category)
     scene, _ = _get_scene_context(product_name)
     prompt = (
-        f"Professional e-commerce product photography of '{en_name}'. "
+        f"Photorealistic product photo of '{en_name}'. "
         f"{scene}. "
-        f"Clean background, studio lighting, high resolution, sharp focus. "
+        f"Natural lighting, real photo style, DSLR camera quality. "
+        f"NOT AI generated looking, NOT cartoon, NOT synthetic. "
+        f"Shot like a real photographer: sharp focus, natural shadows, "
+        f"authentic textures, clean minimal background. "
         f"No text, no watermarks, no people."
     )
     try:
@@ -1410,16 +1413,25 @@ async def get_product_image(p: dict) -> str | None:
     else:
         print(f"[IMAGE] Pexels 검색 실패 → Gemini", flush=True)
 
-    # 3. Gemini 2.0 Flash 이미지 생성
+    # 3. Gemini 2.0 Flash 이미지 생성 + Vision QC
     print(f"[IMAGE] Gemini 생성 중: {product_name[:20]}", flush=True)
     gemini_bytes = await generate_gemini_image(product_name, category)
     if gemini_bytes:
         try:
-            result = await naver_api.upload_raw_image(gemini_bytes)
-            print(f"[IMAGE] Gemini ✅", flush=True)
-            return result
+            gemini_url = await naver_api.upload_raw_image(gemini_bytes)
+            from employees import employee_image_inspector
+            _, reject_kws = _get_scene_context(product_name)
+            qc = await employee_image_inspector(
+                gemini_url, product_name, ANTHROPIC_API_KEY,
+                reject_keywords=reject_kws)
+            print(f"[IMAGE] Gemini QC: {qc.get('score',0)}점 — {qc.get('recommendation','')}", flush=True)
+            if qc.get("passed", False):
+                print(f"[IMAGE] Gemini ✅", flush=True)
+                return gemini_url
+            else:
+                print(f"[IMAGE] Gemini QC 미통과 → DALL-E", flush=True)
         except Exception as e:
-            print(f"[IMAGE] Gemini 업로드 실패: {e}", flush=True)
+            print(f"[IMAGE] Gemini 업로드/QC 실패: {e}", flush=True)
     else:
         print(f"[IMAGE] Gemini 생성 실패 → DALL-E", flush=True)
 

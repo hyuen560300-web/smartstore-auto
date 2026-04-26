@@ -435,7 +435,7 @@ JSON 배열만: ["태그1", "태그2", ...]
 
 # ─── 직원 17: Pexels 이미지 연관성 QC ────────────────────────────────────────
 async def employee_pexels_qc(image_url: str, product_name: str, anthropic_key: str) -> dict:
-    """Pexels 이미지 ↔ 상품 연관성 검증 (Sonnet Vision)"""
+    """Pexels 이미지 ↔ 상품 연관성 + 실사진 여부 검증 (Sonnet Vision)"""
     if not anthropic_key or not image_url:
         return {"relevant": True, "score": 80, "reason": "검수 생략"}
     try:
@@ -450,13 +450,22 @@ async def employee_pexels_qc(image_url: str, product_name: str, anthropic_key: s
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
     resp = await client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=150,
+        max_tokens=200,
         messages=[{
             "role": "user",
             "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}},
-                {"type": "text", "text": f"""이 이미지가 '{product_name}' 상품 대표 이미지로 적합한지 판단해줘.
-90+: 상품과 직접 관련 / 70-89: 같은 카테고리 유사 / 70 미만: 무관
+                {"type": "text", "text": f"""이 이미지가 '{product_name}' 스마트스토어 대표 이미지로 적합한지 판단해줘.
+
+🚫 즉시 0점 조건:
+- AI가 생성한 것처럼 보이는 이미지 (cartoon, synthetic, over-smooth, unnatural)
+- 상품과 전혀 무관한 사진
+
+점수 기준 (실제 사진만 해당):
+95+: 상품과 직접 관련된 고품질 실사진
+75-94: 같은 카테고리 유사 실사진
+75 미만: 연관성 부족 또는 품질 미달
+
 JSON만: {{"score": 85, "relevant": true, "reason": "한 줄 근거"}}"""}
             ]
         }]
@@ -468,10 +477,10 @@ JSON만: {{"score": 85, "relevant": true, "reason": "한 줄 근거"}}"""}
             if text.startswith("json"):
                 text = text[4:].strip()
         result = json.loads(text)
-        result["relevant"] = result.get("score", 0) >= 70
+        result["relevant"] = result.get("score", 0) >= 75
         return result
     except Exception:
-        return {"relevant": True, "score": 70, "reason": "파싱 실패"}
+        return {"relevant": True, "score": 75, "reason": "파싱 실패"}
 
 
 # ─── 직원 18: 품질검수관 (Image Inspector) ────────────────────────────────────
@@ -522,13 +531,16 @@ async def employee_image_inspector(
                     "text": f"""너는 네이버 스마트스토어 전문 품질검수관이야.
 '{product_name}'의 {img_type}를 아래 기준으로 채점해줘.
 
-채점 기준 (각 25점):
+채점 기준 (각 20점):
 1. 픽셀 깨짐/계단 현상 없음
-2. 상품 형태 왜곡 없음 + 배경 깔끔함
+2. 상품 형태 자연스럽고 배경 깔끔함
 3. 네이버 스마트스토어 메인에 쓰기에 고급스러움
 4. 밝기/채도/선명도 적절
+5. 실제 사진처럼 보임 (AI 생성 티 없음, natural photo style)
 
-🚫 즉시 0점 REJECT 조건 (발견 시 score=0):
+🚫 즉시 0점 REJECT 조건 (하나라도 해당 시 score=0):
+- AI가 그린 것처럼 보임 (cartoon, over-smooth, synthetic, unnatural texture)
+- 상품과 전혀 무관한 이미지
 {reject_clause}
 
 반드시 JSON만 출력:
@@ -536,7 +548,7 @@ async def employee_image_inspector(
   "score": 85,
   "issues": ["문제점1", "문제점2"],
   "recommendation": "개선 방향 한 줄",
-  "retry_prompt": "DALL-E 재시도 시 추가할 프롬프트 (문제 없으면 빈 문자열)"
+  "retry_prompt": "재생성 시 추가할 프롬프트 힌트 (문제 없으면 빈 문자열)"
 }}"""
                 }
             ]
@@ -550,7 +562,7 @@ async def employee_image_inspector(
             if text.startswith("json"):
                 text = text[4:].strip()
         result = json.loads(text)
-        result["passed"] = result.get("score", 0) >= 90
+        result["passed"] = result.get("score", 0) >= 95
         return result
     except Exception:
         return {"score": 75, "passed": False, "issues": ["파싱 실패"], "recommendation": "재시도 권장", "retry_prompt": ""}
