@@ -92,6 +92,7 @@ def _clean_key(k: str) -> str:
 ANTHROPIC_API_KEY   = _clean_key(os.environ.get("ANTHROPIC_API_KEY", ""))
 PEXELS_API_KEY      = _clean_key(os.environ.get("PEXELS_API_KEY", ""))
 OPENAI_API_KEY      = _clean_key(os.environ.get("OPENAI_API_KEY", ""))
+GOOGLE_AI_API_KEY   = _clean_key(os.environ.get("GOOGLE_AI_API_KEY", ""))
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
@@ -169,6 +170,19 @@ class NaverCommerceAPI:
         # ② 이미지 처리 — 배너는 860px 가로 유지, 상품컷은 1000×1000 정사각형
         image_bytes = _process_image_hq(img_resp.content, target=1000, banner=is_banner)
 
+        token = await self.get_token()
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/product-images/upload",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"imageFiles": ("image.jpg", image_bytes, "image/jpeg")}
+            )
+            r.raise_for_status()
+            return r.json()["images"][0]["url"]
+
+    async def upload_raw_image(self, raw_bytes: bytes, is_banner: bool = False) -> str:
+        """raw bytes를 직접 네이버에 업로드 (Gemini 등 URL 없는 소스용)"""
+        image_bytes = _process_image_hq(raw_bytes, target=1000, banner=is_banner)
         token = await self.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(
@@ -1229,6 +1243,40 @@ async def generate_dalle_detail_shot(product_name: str, spec_hint: str = "", cat
     return await _dalle_request(prompt, size="1024x1024", quality="hd")
 
 
+async def generate_gemini_image(product_name: str, category: str = "") -> bytes | None:
+    """Gemini 2.0 Flash 이미지 생성 — raw bytes 반환"""
+    if not GOOGLE_AI_API_KEY:
+        return None
+    en_name = _get_en_name(product_name, category)
+    scene, _ = _get_scene_context(product_name)
+    prompt = (
+        f"Professional e-commerce product photography of '{en_name}'. "
+        f"{scene}. "
+        f"Clean background, studio lighting, high resolution, sharp focus. "
+        f"No text, no watermarks, no people."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                "gemini-2.0-flash-preview-image-generation:generateContent",
+                params={"key": GOOGLE_AI_API_KEY},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+                },
+            )
+            r.raise_for_status()
+            import base64 as _b64
+            for part in r.json()["candidates"][0]["content"]["parts"]:
+                if "inlineData" in part:
+                    print(f"[GEMINI] ✅ {product_name[:20]}", flush=True)
+                    return _b64.b64decode(part["inlineData"]["data"])
+    except Exception as e:
+        print(f"[GEMINI] 실패: {e}", flush=True)
+    return None
+
+
 async def _is_text_heavy_image(image_url: str) -> bool:
     """배송/반품 안내 등 텍스트 과다 이미지 감지 — 세로가 가로의 2.5배 초과 시 제외"""
     try:
@@ -1268,12 +1316,14 @@ async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
 async def get_product_image(p: dict) -> str | None:
     """
     이미지 우선순위:
-    1. 오너클랜 원본 (품질 OK + 404 아닌 경우)
-    2. Pexels 실사진
-    3. DALL-E 3 (Pexels 실패 시 폴백)
+    1. 오너클랜 원본 (품질 OK)
+    2. Pexels 실사진 (연관성 QC 통과)
+    3. Gemini 2.0 Flash 생성
+    4. DALL-E 3 최종 폴백
     """
     image_url = str(p.get("image", "")).strip()
     product_name = str(p.get("name", ""))
+    category = str(p.get("category", ""))
 
     # 1. 오너클랜 이미지 시도
     if image_url.startswith("http"):
@@ -1301,13 +1351,26 @@ async def get_product_image(p: dict) -> str | None:
                 print(f"[IMAGE] Pexels ✅", flush=True)
                 return result
             else:
-                print(f"[IMAGE] Pexels 연관성 부족 → DALL-E", flush=True)
+                print(f"[IMAGE] Pexels 연관성 부족 → Gemini", flush=True)
         except Exception as e:
             print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
     else:
-        print(f"[IMAGE] Pexels 검색 실패 → DALL-E", flush=True)
+        print(f"[IMAGE] Pexels 검색 실패 → Gemini", flush=True)
 
-    # 3. DALL-E 3 폴백
+    # 3. Gemini 2.0 Flash 이미지 생성
+    print(f"[IMAGE] Gemini 생성 중: {product_name[:20]}", flush=True)
+    gemini_bytes = await generate_gemini_image(product_name, category)
+    if gemini_bytes:
+        try:
+            result = await naver_api.upload_raw_image(gemini_bytes)
+            print(f"[IMAGE] Gemini ✅", flush=True)
+            return result
+        except Exception as e:
+            print(f"[IMAGE] Gemini 업로드 실패: {e}", flush=True)
+    else:
+        print(f"[IMAGE] Gemini 생성 실패 → DALL-E", flush=True)
+
+    # 4. DALL-E 3 최종 폴백
     print(f"[IMAGE] DALL-E 생성 중: {product_name[:20]}", flush=True)
     dalle_url = await generate_dalle_image(product_name)
     if dalle_url:
