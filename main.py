@@ -180,27 +180,6 @@ class NaverCommerceAPI:
             return r.json()["images"][0]["url"]
 
     async def register_product(self, payload: dict) -> dict:
-        # 최종 방어층: Naver 금지 특수문자 일괄 제거 (재귀)
-        def _sanitize(obj):
-            if isinstance(obj, str):
-                return re.sub(r'[\\*?"‘’“”]', '', obj).strip()
-            if isinstance(obj, dict):
-                return {k: _sanitize(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_sanitize(x) for x in obj]
-            return obj
-
-        # name 필드만 정밀 sanitize (URL 등은 보호)
-        op = payload.get("originProduct", {})
-        if isinstance(op.get("name"), str):
-            op["name"] = re.sub(r'[\\*?"‘’“”<>|]', '', op["name"]).strip()
-            if not op["name"]:
-                op["name"] = "상품"
-        notice = op.get("detailAttribute", {}).get("productInfoProvidedNotice", {}).get("etc", {})
-        for k in ("itemName", "modelName"):
-            if isinstance(notice.get(k), str):
-                notice[k] = re.sub(r'[\\*?"‘’“”<>|]', '', notice[k]).strip() or "상세페이지 참조"
-
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(
                 f"{NAVER_BASE}/v2/products",
@@ -435,20 +414,18 @@ _AD_PATTERN = re.compile(
 def clean_product_name(name: str) -> str:
     # ① 광고성 패턴 제거
     name = _AD_PATTERN.sub(' ', name)
-    # ② 특수문자 블록 제거 (괄호류, 슬래시)
-    name = re.sub(r'[\[\](){}<>/\\|*~`^?"\'@#$%&=+]', ' ', name)
-    # ③ 모델·관리번호 제거 (영문+숫자 혼합)
-    name = re.sub(r'\b[A-Za-z]{1,5}[-_]?\d{3,}[A-Za-z0-9-]*\b', '', name)
-    name = re.sub(r'\b\d{5,}\b', '', name)
-    # ④ 나머지 특수문자 제거
-    name = re.sub(r'[^\w\s가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9\- ]', ' ', name)
+    # ② 네이버 허용 문자만 남김: 한글·영문·숫자·공백·하이픈
+    name = re.sub(r'[^가-힣ㄱ-ㆎa-zA-Z0-9\s\-]', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
-    # ⑤ 금지어 제거
+    # ③ 모델·관리번호 제거 (영문+숫자 혼합 5자리 이상)
+    name = re.sub(r'\b[A-Za-z]{1,4}\d{3,}[A-Za-z0-9\-]*\b', '', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    # ④ 금지어 제거
     words = [w for w in name.split() if w not in _NAVER_BANNED]
-    # ⑥ 중복 단어 제거 (순서 유지) — "캠핑의자 의자" → "캠핑의자"
+    # ⑤ 중복 단어 제거
     seen, deduped = set(), []
     for w in words:
-        key = w.rstrip('s').lower()  # 영문 복수형 동일 처리
+        key = w.rstrip('s').lower()
         if key not in seen:
             seen.add(key); deduped.append(w)
     result = ' '.join(deduped)[:25].strip()
@@ -1020,19 +997,9 @@ async def build_dalle_prompt_smart(
     """
     scene, _ = _get_scene_context(product_name)
 
-    # 상품명 영어 번역 (DALL-E 정확도 향상)
-    en_name = product_name
-    if ANTHROPIC_API_KEY:
-        try:
-            _c = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-            _r = await _c.messages.create(
-                model="claude-haiku-4-5-20251001", max_tokens=30,
-                messages=[{"role": "user", "content":
-                    f"Translate this Korean product name to concise English (5 words max, noun phrase only): '{product_name}'"}]
-            )
-            en_name = _r.content[0].text.strip().strip('"\'')
-        except Exception:
-            pass
+    # DALL-E용: 한글 제거 후 영문만 남기거나, 없으면 "product" 사용
+    en_name = re.sub(r'[가-힣ㄱ-ㆎ\s]', ' ', product_name).strip()
+    en_name = re.sub(r'\s+', ' ', en_name).strip() or "product"
 
     # 미분류(기본 씬) + 카테고리 있으면 Claude로 씬 보강
     is_default = scene == _DEFAULT_SCENE[0]
