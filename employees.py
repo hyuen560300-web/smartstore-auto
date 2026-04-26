@@ -335,6 +335,7 @@ async def employee_image_inspector(
     product_name: str,
     anthropic_key: str,
     is_banner: bool = False,
+    reject_keywords: list = None,
 ) -> dict:
     """
     Claude Vision으로 이미지 품질 채점 (0~100점)
@@ -354,6 +355,11 @@ async def employee_image_inspector(
         return {"score": 100, "passed": True, "issues": [f"다운로드 실패: {e}"], "recommendation": "원본 사용"}
 
     img_type = "배너 이미지" if is_banner else "대표 상품 이미지"
+    # 씬별 거부 기준 문구 생성
+    if reject_keywords:
+        reject_clause = "이미지 안에 " + " 또는 ".join(reject_keywords) + "이(가) 보이면 즉시 score=0 REJECT"
+    else:
+        reject_clause = "상품과 전혀 무관한 물체가 메인으로 보이면 score=0 REJECT"
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
 
     resp = await client.messages.create(
@@ -376,6 +382,9 @@ async def employee_image_inspector(
 2. 상품 형태 왜곡 없음 + 배경 깔끔함
 3. 네이버 스마트스토어 메인에 쓰기에 고급스러움
 4. 밝기/채도/선명도 적절
+
+🚫 즉시 0점 REJECT 조건 (발견 시 score=0):
+{reject_clause}
 
 반드시 JSON만 출력:
 {{

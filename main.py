@@ -906,45 +906,105 @@ async def _dalle_request(prompt: str, size: str = "1024x1024", quality: str = "h
         return None
 
 
+# ─── 키워드 기반 씬 컨텍스트 맵 ──────────────────────────────────────────────
+_SCENE_MAP = [
+    # (한국어 키워드 리스트, 씬 설명, 거부 키워드)
+    (["차량용","자동차","카시트","시트커버","통풍시트","차량","카매트"],
+     "installed neatly on a luxurious sedan leather car seat inside a premium vehicle interior, "
+     "soft sunlight streaming through car window, cozy and stylish atmosphere",
+     ["chair wheels","office chair","desk chair","casters","5-leg base"]),
+
+    (["주방","조리","요리","냄비","프라이팬","도마","칼","그릇","수저"],
+     "placed on a clean marble kitchen counter with soft natural morning light, "
+     "minimal Scandinavian kitchen background",
+     ["office","bedroom","car"]),
+
+    (["침실","베개","이불","매트리스","침대","수면"],
+     "displayed on a neatly made white linen bed in a bright minimalist bedroom, "
+     "soft morning light through sheer curtains",
+     ["kitchen","office","car"]),
+
+    (["욕실","목욕","샤워","비누","샴푸","바디"],
+     "arranged on a clean white bathroom shelf with soft warm lighting, "
+     "fresh and clean spa-like atmosphere",
+     ["kitchen","bedroom","car"]),
+
+    (["캠핑","아웃도어","등산","텐트","트레킹"],
+     "set up in a beautiful outdoor camping scene with lush greenery and golden hour light",
+     ["office","bedroom","kitchen"]),
+
+    (["유아","아기","베이비","신생아","어린이"],
+     "placed in a bright cheerful nursery room with soft pastel tones and gentle natural light",
+     ["office","car","kitchen"]),
+
+    (["반려동물","강아지","고양이","펫","애견"],
+     "shown with an adorable pet in a cozy warm home setting with soft natural light",
+     ["office","car"]),
+
+    (["운동","헬스","스포츠","요가","필라테스","피트니스"],
+     "displayed in a clean modern gym or yoga studio with bright motivating atmosphere",
+     ["office","bedroom","kitchen"]),
+
+    (["청소","세탁","빨래","걸레","청소기"],
+     "shown in a spotlessly clean bright home interior, demonstrating ease of cleaning",
+     ["office","car"]),
+
+    (["사무","문구","노트","펜","책상","오피스"],
+     "neatly arranged on a clean organized desk in a bright minimalist home office",
+     ["bedroom","kitchen","car"]),
+]
+
+_DEFAULT_SCENE = (
+    "placed on a warm white surface with soft morning light, "
+    "minimal Nordic home interior background, cozy lifestyle setting",
+    []
+)
+
+
+def _get_scene_context(product_name: str) -> tuple[str, list[str]]:
+    """상품명 키워드 분석 → (씬 설명, 거부 키워드 리스트)"""
+    for keywords, scene, reject in _SCENE_MAP:
+        if any(kw in product_name for kw in keywords):
+            return scene, reject
+    return _DEFAULT_SCENE
+
+
 async def generate_dalle_image(product_name: str) -> str | None:
-    """상품 연출컷 — 라이프스타일 포토리얼리스틱 1024×1024"""
+    """② 라이프스타일 상품컷 — 키워드 씬 자동 주입"""
+    scene, _ = _get_scene_context(product_name)
     prompt = (
-        f"A lifestyle product photography of '{product_name}' "
-        f"placed on a clean white wooden shelf with soft morning sunlight coming through a window. "
-        f"The product is the main focus, surrounded by minimal Nordic-style decorations. "
-        f"{_DALLE_SUFFIX}"
+        f"Photorealistic 8K high-quality lifestyle product photography. "
+        f"'{product_name}' {scene}. "
+        f"The product is the clear main subject, beautifully lit. "
+        f"No people, no text, no watermark. {_DALLE_SUFFIX}"
     )
-    print(f"[DALLE] 상품컷 생성: {product_name[:20]}", flush=True)
+    print(f"[DALLE] 상품컷: {product_name[:20]} | 씬: {scene[:40]}", flush=True)
     return await _dalle_request(prompt, size="1024x1024", quality="hd")
 
 
 async def generate_dalle_banner(product_name: str, headline: str = "") -> str | None:
-    """배너용 — 좌측 여백(Negative Space) 확보 와이드 1792×1024"""
-    txt = headline or product_name
+    """① 메인 배너 — 좌측 여백 + 키워드 씬 자동 주입"""
+    scene, _ = _get_scene_context(product_name)
     prompt = (
-        f"A wide lifestyle banner image for Korean e-commerce. "
-        f"RIGHT side: beautifully styled '{product_name}' on a warm white surface with soft shadows. "
-        f"LEFT side: large empty negative space with plain off-white background — "
-        f"this space will be used for overlaying Korean text. "
-        f"Composition ratio: 40% product, 60% empty space on left. "
-        f"{_DALLE_SUFFIX}"
+        f"Wide Korean e-commerce banner image. "
+        f"RIGHT 40%: '{product_name}' {scene}. "
+        f"LEFT 60%: large plain off-white empty negative space for text overlay. "
+        f"Clean professional composition. No text, no watermark. {_DALLE_SUFFIX}"
     )
-    print(f"[DALLE] 배너 생성: {txt[:20]}", flush=True)
+    print(f"[DALLE] 배너: {product_name[:20]}", flush=True)
     return await _dalle_request(prompt, size="1792x1024", quality="hd")
 
 
 async def generate_dalle_detail_shot(product_name: str, spec_hint: str = "") -> str | None:
-    """③ 디테일/기능 설명컷 — 소재·마감·사이즈 강조, 클로즈업 스타일"""
-    hint = spec_hint or "material texture, fine detail"
+    """④ 디테일/기능 설명컷 — 클로즈업, spec_hint 반영"""
+    hint = spec_hint if spec_hint else "material texture and fine craftsmanship"
     prompt = (
-        f"Extreme close-up product detail photography of '{product_name}'. "
-        f"Focus on {hint}. "
-        f"Flat lay on pure white background, overhead angle, studio lighting. "
-        f"Showcase quality craftsmanship and material texture clearly. "
-        f"No text, no watermark, ultra-sharp focus, 4K macro photography. "
-        f"{_DALLE_SUFFIX}"
+        f"Extreme close-up macro product photography of '{product_name}'. "
+        f"Highlight: {hint}. "
+        f"Pure white background, overhead flat lay, ultra-sharp studio lighting, "
+        f"4K macro detail, no text, no watermark. {_DALLE_SUFFIX}"
     )
-    print(f"[DALLE] 디테일컷 생성: {product_name[:20]}", flush=True)
+    print(f"[DALLE] 디테일컷: {product_name[:20]}", flush=True)
     return await _dalle_request(prompt, size="1024x1024", quality="hd")
 
 
@@ -1101,13 +1161,16 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                 results["skip"] += 1
                 continue
 
-            # ⑧ 품질검수관: 대표 이미지 검수 (최대 2회 시도)
+            # ⑧ 품질검수관: 씬 거부 기준 포함 검수 (최대 2회 시도)
             from employees import employee_image_inspector
-            qc = await employee_image_inspector(naver_img_url, str(p.get("name","")), ANTHROPIC_API_KEY)
+            _, reject_kws = _get_scene_context(str(p.get("name", "")))
+            qc = await employee_image_inspector(
+                naver_img_url, str(p.get("name","")), ANTHROPIC_API_KEY,
+                reject_keywords=reject_kws
+            )
             print(f"[검수관] 점수:{qc.get('score')} 통과:{qc.get('passed')} 이슈:{qc.get('issues')}", flush=True)
             if not qc.get("passed"):
-                # 1회 재시도 — DALL-E로 새 이미지 생성
-                print(f"[검수관] 90점 미만 → DALL-E 재시도", flush=True)
+                print(f"[검수관] 90점 미만 → DALL-E 재시도 (씬: {reject_kws})", flush=True)
                 retry_hint = qc.get("retry_prompt", "")
                 new_dalle = await generate_dalle_image(f"{p.get('name','')} {retry_hint}".strip())
                 if new_dalle:
