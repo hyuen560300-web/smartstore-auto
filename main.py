@@ -329,27 +329,35 @@ def parse_excel(filepath):
 # ─── 텍스트 정제 ─────────────────────────────────────────────────────────────
 import re
 
-_NAVER_BANNED = {"최고","제일","넘버원","1등","공짜","무료","특가","대박","혜자","최저가","최대","독점","정품보장"}
+_NAVER_BANNED = {
+    "최고","제일","넘버원","1등","공짜","무료","특가","대박","혜자","최저가",
+    "최대","독점","정품보장","즉시발송","당일발송","무조건","완전","초강력",
+    "역대급","미쳤다","개이득","레전드","신상","핫딜"
+}
+_AD_PATTERN = re.compile(
+    r'즉시발송|당일출발|최저가|무료배송|특가|광고|이벤트|[★☆◆◇■□●○▶▷]'
+)
 
 def clean_product_name(name: str) -> str:
-    # 대괄호/소괄호/슬래시 포함 내용 제거
-    name = re.sub(r'\[.*?\]|\(.*?\)|/[^\s]+', ' ', name)
-    # 모델번호/관리코드 제거 (영대문자+숫자 조합)
+    # ① 광고성 패턴 제거
+    name = _AD_PATTERN.sub(' ', name)
+    # ② 특수문자 블록 제거 (괄호류, 슬래시)
+    name = re.sub(r'[\[\](){}<>/\\|*~`^]', ' ', name)
+    # ③ 모델·관리번호 제거 (영문+숫자 혼합)
     name = re.sub(r'\b[A-Za-z]{1,5}[-_]?\d{3,}[A-Za-z0-9-]*\b', '', name)
-    name = re.sub(r'\b\d{4,}\b', '', name)
-    # 특수문자 제거
+    name = re.sub(r'\b\d{5,}\b', '', name)
+    # ④ 나머지 특수문자 제거
     name = re.sub(r'[^\w\s가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9\- ]', ' ', name)
     name = re.sub(r'\s+', ' ', name).strip()
-    # 네이버 금지어 제거
-    words = name.split()
-    words = [w for w in words if w not in _NAVER_BANNED]
-    # 중복 단어 제거 (순서 유지)
+    # ⑤ 금지어 제거
+    words = [w for w in name.split() if w not in _NAVER_BANNED]
+    # ⑥ 중복 단어 제거 (순서 유지) — "캠핑의자 의자" → "캠핑의자"
     seen, deduped = set(), []
     for w in words:
-        if w not in seen:
-            seen.add(w); deduped.append(w)
-    name = ' '.join(deduped)
-    return name[:40]
+        key = w.rstrip('s').lower()  # 영문 복수형 동일 처리
+        if key not in seen:
+            seen.add(key); deduped.append(w)
+    return ' '.join(deduped)[:25]
 
 
 # ─── 가격 계산 ────────────────────────────────────────────────────────────────
@@ -540,18 +548,20 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
 
 # ─── 이미지 디렉터: 텍스트 배너 생성 ────────────────────────────────────────
 async def create_banner_image(image_url: str, main_text: str, sub_text: str = "") -> str | None:
-    """1200×675 고품질 배너 합성 → Naver 업로드"""
+    """1000×500 헤드라인 배너 — #1a1a1a 상단바 + 고화질 저장"""
     try:
         from PIL import Image, ImageDraw, ImageFont
         import io
 
-        W, H = 1200, 675
+        W, H = 1000, 500
+        FONT_SIZE_MAIN = int(W * 0.08)   # 가로 폭의 8%
+        FONT_SIZE_SUB  = int(W * 0.042)
 
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
             r = await c.get(image_url)
             r.raise_for_status()
 
-        # 원본 이미지를 배경으로 크롭-리사이즈 (중앙 기준)
+        # 원본 이미지를 LANCZOS로 중앙 크롭-리사이즈
         orig = Image.open(io.BytesIO(r.content)).convert("RGB")
         orig_ratio = orig.width / orig.height
         target_ratio = W / H
@@ -565,18 +575,22 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
             new_h = int(new_w / target_ratio)
             top = (orig.height - new_h) // 2
             orig = orig.crop((0, top, new_w, top + new_h))
-        img = orig.resize((W, H), Image.LANCZOS).convert("RGBA")
+        img = orig.resize((W, H), Image.LANCZOS)
 
-        # 하단 40% 그라데이션 오버레이
-        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        draw_ov = ImageDraw.Draw(overlay)
-        for y in range(int(H * 0.55), H):
-            alpha = int(200 * (y - H * 0.55) / (H * 0.45))
-            draw_ov.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
-        img = Image.alpha_composite(img, overlay).convert("RGB")
-        draw = ImageDraw.Draw(img)
+        # 상단 텍스트 배너 영역: 배경색 #1a1a1a, 높이 H*0.36
+        bar_h = int(H * 0.36)
+        bar = Image.new("RGB", (W, bar_h), (26, 26, 26))  # #1a1a1a
 
-        # 폰트
+        # 하단 이미지 부분 (나머지 높이)
+        img_part = img.crop((0, 0, W, H - bar_h))
+        # 최종 합성: 상단 #1a1a1a 바 + 하단 상품 이미지
+        final = Image.new("RGB", (W, H))
+        final.paste(bar, (0, 0))
+        final.paste(img_part, (0, bar_h))
+
+        draw = ImageDraw.Draw(final)
+
+        # 폰트 (Bold)
         font_paths = [
             "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -584,19 +598,23 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
         main_font = sub_font = ImageFont.load_default()
         for fp in font_paths:
             try:
-                main_font = ImageFont.truetype(fp, 58)
-                sub_font = ImageFont.truetype(fp, 32)
+                main_font = ImageFont.truetype(fp, FONT_SIZE_MAIN)
+                sub_font  = ImageFont.truetype(fp, FONT_SIZE_SUB)
                 break
             except Exception:
                 pass
 
-        # 텍스트 (하단 중앙)
-        draw.text((W // 2, int(H * 0.72)), main_text, font=main_font, fill="white", anchor="mm")
+        # 텍스트: 상단 바 중앙
+        cy_main = int(bar_h * 0.42)
+        cy_sub  = int(bar_h * 0.78)
+        draw.text((W // 2, cy_main), main_text, font=main_font, fill="#ffffff", anchor="mm")
         if sub_text:
-            draw.text((W // 2, int(H * 0.86)), sub_text[:28], font=sub_font, fill=(230, 230, 230), anchor="mm")
+            draw.text((W // 2, cy_sub), sub_text[:30], font=sub_font, fill="#cccccc", anchor="mm")
 
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=95, subsampling=0)
+        # quality=95, optimize=True, progressive=True
+        final.save(buf, format="JPEG", quality=95, subsampling=0,
+                   optimize=True, progressive=True)
         buf.seek(0)
         token = await naver_api.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
@@ -613,91 +631,112 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
 
 
 # ─── 스마트스토어 상세페이지 HTML 빌더 ──────────────────────────────────────
+_IMG = 'style="max-width:100%;height:auto;display:block;margin:20px auto;"'
+_WRAP = ('style="max-width:860px;margin:0 auto;padding:0 16px 24px;'
+         'font-family:\'나눔고딕\',Apple SD Gothic Neo,sans-serif;color:#333;"')
+
 def build_detail_html(banner_url: str, product_img_url: str, ai: dict) -> str:
     """
-    5-섹션 설득형 상세페이지 HTML
-    ① 헤드라인 배너  ② 감성 설득 문구  ③ 상품 이미지
-    ④ 이런 분께 추천 체크리스트  ⑤ 이유 3가지 + 스펙 테이블
+    6-섹션 설득형 상세페이지
+    ① Pillow 헤드라인 배너
+    ② Intro <h2> — 상품 최대 장점 한 줄
+    ③ 이런 분께 추천 체크리스트 (3개 이상)
+    ④ 상품 이미지 + 이미지 사이 감성 문구
+    ⑤ 이유 3가지 컬러 카드
+    ⑥ 스펙 <table>
     """
-    W = "100%"
-    IMG_STYLE = f'style="max-width:100%;width:{W};height:auto;display:block;margin:0 auto;"'
-    WRAP = 'style="max-width:860px;margin:0 auto;padding:0 16px;font-family:\'나눔고딕\',Apple SD Gothic Neo,sans-serif;color:#333;"'
+    # ① Pillow 헤드라인 배너
+    sec1 = f'<img src="{banner_url}" {_IMG}>' if banner_url else ""
 
-    # ① 헤드라인 배너 (Pillow 생성 이미지)
-    sec1 = f'<img src="{banner_url}" {IMG_STYLE}>' if banner_url else ""
-
-    # ② 감성 설득 문구 섹션
+    # ② Intro — h2 태그, 상품 최대 장점
+    headline = ai.get("headline", ai.get("banner_text", ""))
     emotional = ai.get("emotional_copy", "")
     sec2 = (
-        f'<div style="background:#f0f6ff;padding:28px 24px;text-align:center;'
-        f'border-top:3px solid #1a73e8;border-bottom:3px solid #1a73e8;margin:0;">'
-        f'<p style="font-size:16px;line-height:1.9;color:#444;margin:0;">{emotional}</p>'
-        f'</div>'
-    ) if emotional else ""
+        f'<div {_WRAP}>'
+        + (f'<h2 style="font-size:22px;color:#1a1a1a;margin:28px 0 10px;line-height:1.5;">'
+           f'{headline}</h2>' if headline else "")
+        + (f'<p style="font-size:15px;line-height:1.9;color:#555;margin:0 0 8px;">'
+           f'{emotional}</p>' if emotional else "")
+        + '</div>'
+    )
 
-    # ③ 상품 이미지 (860~1000px)
-    sec3 = f'<img src="{product_img_url}" {IMG_STYLE}>' if product_img_url else ""
-
-    # ④ 이런 분께 추천 체크리스트
-    recs = [r for r in ai.get("recommend_list", []) if r]
+    # ③ 이런 분께 강력 추천 — 체크리스트 (불렛포인트 3~5개)
+    recs = [r for r in ai.get("recommend_list", []) if r][:5]
     if recs:
-        items = "".join(
-            f'<li style="padding:10px 0 10px 36px;position:relative;border-bottom:1px solid #dce8ff;'
-            f'font-size:15px;color:#333;">'
-            f'<span style="position:absolute;left:0;color:#1a73e8;font-size:18px;">✔</span>{r}</li>'
+        items_html = "".join(
+            f'<li style="padding:11px 0 11px 38px;position:relative;'
+            f'border-bottom:1px solid #dde8ff;font-size:15px;color:#333;line-height:1.6;">'
+            f'<span style="position:absolute;left:0;top:10px;color:#1a73e8;font-size:20px;'
+            f'font-weight:bold;">✔</span>{r}</li>'
             for r in recs
         )
-        sec4 = (
-            f'<div {WRAP}>'
-            f'<div style="background:#eef4ff;border-radius:12px;padding:24px 20px;margin:20px 0;">'
-            f'<h3 style="font-size:17px;color:#1a73e8;margin:0 0 16px;text-align:center;">'
-            f'💙 이런 분들께 추천드려요</h3>'
-            f'<ul style="list-style:none;padding:0;margin:0;">{items}</ul>'
+        sec3 = (
+            f'<div {_WRAP}>'
+            f'<div style="background:#eef4ff;border-radius:14px;padding:26px 22px;">'
+            f'<h3 style="font-size:17px;font-weight:bold;color:#1a73e8;margin:0 0 18px;'
+            f'text-align:center;">💙 이런 분들께 강력 추천합니다</h3>'
+            f'<ul style="list-style:none;padding:0;margin:0;">{items_html}</ul>'
             f'</div></div>'
         )
     else:
-        sec4 = ""
+        sec3 = ""
 
-    # ⑤ 이유 3가지
-    reasons = [(ai.get(f"reason_{i}", ""), c) for i, c in
-               enumerate(["#e8f5e9","#fff3e0","#fce4ec"], start=1) if ai.get(f"reason_{i}")]
-    reason_blocks = "".join(
-        f'<div style="background:{bg};border-radius:10px;padding:18px 20px;margin:10px 0;">'
-        f'<span style="font-weight:bold;font-size:22px;color:#555;">0{i}&nbsp;</span>'
-        f'<span style="font-size:15px;line-height:1.8;">{txt}</span></div>'
-        for i, (txt, bg) in enumerate(reasons, start=1)
-    )
-    if reason_blocks:
-        sec5a = (
-            f'<div {WRAP}>'
-            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;padding-left:12px;margin:28px 0 14px;">'
-            f'✅ 이 상품을 선택해야 하는 이유</h3>'
-            + reason_blocks + '</div>'
+    # ④ 상품 이미지 + 이미지 사이 감성 문구 (reason_1 사이에 삽입)
+    r1 = ai.get("reason_1", "")
+    sec4 = (
+        f'<img src="{product_img_url}" {_IMG}>'
+        + (
+            f'<div {_WRAP}>'
+            f'<p style="font-size:15px;line-height:1.9;color:#555;'
+            f'border-left:3px solid #1a73e8;padding:12px 16px;'
+            f'background:#f8fbff;margin:0;">{r1}</p>'
+            f'</div>'
+            if r1 else ""
+        )
+    ) if product_img_url else ""
+
+    # ⑤ 이유 3가지 컬러 카드 (reason_2, reason_3)
+    reason_cards = []
+    for i, bg in enumerate(["#fff3e0", "#fce4ec"], start=2):
+        txt = ai.get(f"reason_{i}", "")
+        if txt:
+            reason_cards.append(
+                f'<div style="background:{bg};border-radius:10px;padding:18px 20px;margin:10px 0;">'
+                f'<b style="font-size:20px;color:#888;">0{i}&nbsp;</b>'
+                f'<span style="font-size:15px;line-height:1.8;">{txt}</span></div>'
+            )
+    if reason_cards:
+        sec5 = (
+            f'<div {_WRAP}>'
+            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;'
+            f'padding-left:12px;margin:28px 0 14px;">✅ 이 상품을 선택해야 하는 이유</h3>'
+            + "".join(reason_cards) + '</div>'
         )
     else:
-        sec5a = ""
+        sec5 = ""
 
-    # ⑥ 스펙 테이블
+    # ⑥ 스펙 <table>
     spec_rows = ai.get("spec_rows", [])
     if spec_rows:
         rows_html = "".join(
-            f'<tr><td style="background:#f5f7fa;padding:11px 14px;font-weight:bold;'
+            f'<tr>'
+            f'<td style="background:#f5f7fa;padding:11px 14px;font-weight:bold;'
             f'width:38%;border:1px solid #ddd;font-size:14px;">{r[0]}</td>'
             f'<td style="padding:11px 14px;border:1px solid #ddd;font-size:14px;">'
             f'{r[1] if len(r) > 1 else ""}</td></tr>'
             for r in spec_rows
         )
-        sec5b = (
-            f'<div {WRAP}>'
-            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;padding-left:12px;margin:28px 0 14px;">'
-            f'📋 상품 스펙</h3>'
+        sec6 = (
+            f'<div {_WRAP}>'
+            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;'
+            f'padding-left:12px;margin:28px 0 14px;">📋 상품 스펙</h3>'
             f'<table style="width:100%;border-collapse:collapse;">{rows_html}</table>'
             f'</div>'
         )
     else:
-        sec5b = ""
+        sec6 = ""
 
-    return sec1 + sec2 + sec3 + sec4 + sec5a + sec5b
+    return sec1 + sec2 + sec3 + sec4 + sec5 + sec6
 
 
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
