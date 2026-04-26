@@ -76,6 +76,36 @@ def check_env():
     }
 
 
+@app.get("/test-image-gen")
+async def test_image_gen():
+    """Gemini / Flux / DALL-E 이미지 생성 진단"""
+    from main import generate_gemini_image, generate_flux_image, GOOGLE_AI_API_KEY, FLUX_API_KEY, OPENAI_API_KEY
+    results = {}
+
+    # Gemini
+    if GOOGLE_AI_API_KEY:
+        try:
+            raw = await generate_gemini_image("massage cushion product", "생활/건강")
+            results["gemini"] = "ok_bytes" if isinstance(raw, bytes) and len(raw) > 100 else f"fail:{raw}"
+        except Exception as e:
+            results["gemini"] = f"exception:{e}"
+    else:
+        results["gemini"] = "no_key"
+
+    # Flux
+    if FLUX_API_KEY:
+        try:
+            url = await generate_flux_image("massage cushion product", "디지털/가전")
+            results["flux"] = f"ok:{url[:60]}" if url else "fail:None"
+        except Exception as e:
+            results["flux"] = f"exception:{e}"
+    else:
+        results["flux"] = "no_key"
+
+    results["openai_billing"] = "limit_reached" if not OPENAI_API_KEY else "key_set"
+    return JSONResponse(results)
+
+
 @app.get("/test-dalle")
 async def test_dalle():
     """DALL-E 단독 동작 확인 — 실제 API 에러 노출"""
