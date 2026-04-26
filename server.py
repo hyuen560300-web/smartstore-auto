@@ -379,13 +379,17 @@ async def register_single_product(request: Request):
                 return JSONResponse({"status": "qc_fail", "stage": qc_result["stage"], "reason": qc_result["reason"]})
 
         payload = build_product_payload(p, ai, price)
+        # 상품명은 무조건 입력된 title 사용 (AI 생성 이름 덮어쓰기)
+        from main import clean_product_name
+        safe_name = clean_product_name(product_name) or product_name[:25]
+        payload["originProduct"]["name"] = safe_name
         payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
         if detail_html:
             payload["originProduct"]["detailContent"] = detail_html
 
         result = await naver_api.register_product(payload)
         save_registered_code(p["code"])
-        return JSONResponse({"status": "success", "product_name": ai.get("product_name", product_name), "price": price})
+        return JSONResponse({"status": "success", "product_name": safe_name, "price": price})
 
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
