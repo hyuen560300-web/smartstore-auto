@@ -575,7 +575,7 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
             "statusType": "SALE",
             "saleType": "NEW",
             "leafCategoryId": get_category_id(raw),
-            "name": clean_product_name(ai["product_name"]),
+            "name": clean_product_name(ai.get("product_name") or ai.get("name") or str(raw.get("name", "상품"))[:25]),
             "detailContent": ai.get("description", ai.get("emotional_copy", "")),
             "images": {
                 "representativeImage": {"url": str(raw.get("image", ""))},
@@ -1362,7 +1362,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             await naver_api.register_product(payload)
             save_registered_code(code)
             results["success"] += 1
-            print(f"[총괄] ✅ {ai['product_name']} ({price:,}원)", flush=True)
+            print(f"[총괄] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원)", flush=True)
             await asyncio.sleep(0.5)
 
         except Exception as e:
