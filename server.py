@@ -941,10 +941,148 @@ async def full_report():
 
 @app.on_event("startup")
 async def startup_event():
-    """서버 시작 시 Drive 인덱스 자동 복구"""
+    """서버 시작 시 Drive 인덱스 자동 복구 + 스케줄러 시작"""
     if not _load_drive_index():
         _save_drive_index(DRIVE_FILE_IDS_PERMANENT)
         print(f"[STARTUP] Drive 인덱스 자동 복구 완료: {len(DRIVE_FILE_IDS_PERMANENT)}개", flush=True)
+
+    # ── APScheduler: n8n 워크플로우 3개 대체 ─────────────────────────────────
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from employees import (
+        employee_stock_guardian, employee_trend_scout,
+        employee_accounting_manager, employee_season_planner,
+        employee_error_auditor, employee_shortform_creator,
+        employee_ad_analyst, employee_review_analyst,
+        employee_event_manager, employee_blog_manager,
+        employee_platform_expander,
+    )
+    from main import (
+        pipeline_process_orders, pipeline_sync_inventory,
+        pipeline_reply_inquiries, ANTHROPIC_API_KEY, MARGIN_RATE,
+    )
+
+    async def job_process_orders():
+        print("[SCHED] 주문 처리", flush=True)
+        await pipeline_process_orders()
+
+    async def job_error_audit():
+        print("[SCHED] 에러 감사원", flush=True)
+        await employee_error_auditor(ANTHROPIC_API_KEY)
+
+    async def job_reply_inquiries():
+        print("[SCHED] 고객 문의 답변", flush=True)
+        await pipeline_reply_inquiries()
+
+    async def job_stock_alert():
+        print("[SCHED] 품절 방지 알림이", flush=True)
+        await employee_stock_guardian(naver_api, ANTHROPIC_API_KEY)
+
+    async def job_sync_inventory():
+        print("[SCHED] 재고 동기화", flush=True)
+        await pipeline_sync_inventory()
+
+    async def job_trend_scout():
+        print("[SCHED] 트렌드 스카우터", flush=True)
+        await employee_trend_scout()
+
+    async def job_daily_report():
+        print("[SCHED] 일일 리포트", flush=True)
+        orders = await naver_api.get_all_orders(1)
+        await employee_accounting_manager(orders, MARGIN_RATE)
+
+    async def job_season_plan():
+        print("[SCHED] 시즌 기획자", flush=True)
+        employee_season_planner()
+
+    async def job_shortform():
+        print("[SCHED] 숏폼 제작자", flush=True)
+        await employee_shortform_creator(naver_api, ANTHROPIC_API_KEY)
+
+    async def job_ad_analysis():
+        print("[SCHED] 광고 분석가", flush=True)
+        await employee_ad_analyst(naver_api, ANTHROPIC_API_KEY)
+
+    async def job_event_manager():
+        print("[SCHED] 이벤트 매니저", flush=True)
+        await employee_event_manager(ANTHROPIC_API_KEY)
+
+    async def job_blog_manager():
+        print("[SCHED] 블로그 포스팅 매니저", flush=True)
+        await employee_blog_manager(ANTHROPIC_API_KEY)
+
+    async def job_review_analysis():
+        print("[SCHED] 리뷰 분석가", flush=True)
+        await employee_review_analyst("인기 상품", ANTHROPIC_API_KEY)
+
+    async def job_expand_platform():
+        print("[SCHED] 플랫폼 확장 전문가", flush=True)
+        await employee_platform_expander(ANTHROPIC_API_KEY)
+
+    async def job_register_products():
+        """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 17개 등록"""
+        print("[SCHED] 상품 자동 등록 시작", flush=True)
+        try:
+            excel_path = await _next_excel_internal()
+            if excel_path:
+                await pipeline_register_products(excel_path, limit=17)
+        except Exception as e:
+            print(f"[SCHED] 상품 등록 오류: {e}", flush=True)
+
+    scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+
+    # 1시간
+    scheduler.add_job(job_process_orders,  "interval", hours=1, id="process_orders")
+    scheduler.add_job(job_error_audit,     "interval", hours=1, id="error_audit")
+    # 2시간
+    scheduler.add_job(job_reply_inquiries, "interval", hours=2, id="reply_inquiries")
+    scheduler.add_job(job_stock_alert,     "interval", hours=2, id="stock_alert")
+    # 6시간
+    scheduler.add_job(job_sync_inventory,  "interval", hours=6, id="sync_inventory")
+    scheduler.add_job(job_trend_scout,     "interval", hours=6, id="trend_scout")
+    # 매일
+    scheduler.add_job(job_daily_report,    "interval", hours=24, id="daily_report")
+    scheduler.add_job(job_season_plan,     "interval", hours=24, id="season_plan")
+    scheduler.add_job(job_shortform,       "interval", hours=24, id="shortform")
+    scheduler.add_job(job_ad_analysis,     "interval", hours=24, id="ad_analysis")
+    # 매주
+    scheduler.add_job(job_event_manager,   "interval", weeks=1, id="event_manager")
+    scheduler.add_job(job_blog_manager,    "interval", weeks=1, id="blog_manager")
+    scheduler.add_job(job_review_analysis, "interval", weeks=1, id="review_analysis")
+    scheduler.add_job(job_expand_platform, "interval", weeks=1, id="expand_platform")
+    # 08:00 / 12:00 / 20:00 상품 등록
+    scheduler.add_job(job_register_products, "cron", hour="8,12,20",  minute=0, id="register_products_8")
+
+    scheduler.start()
+    print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
+
+
+async def _next_excel_internal() -> str | None:
+    """스케줄러용 내부 next-excel — /next-excel 엔드포인트와 동일 로직"""
+    file_ids = _load_drive_index()
+    if not file_ids:
+        file_ids = await _scan_drive_folder()
+        if file_ids:
+            _save_drive_index(file_ids)
+        else:
+            file_ids = [FALLBACK_FILE_ID]
+    try:
+        with open(EXCEL_PROGRESS) as f:
+            progress = json.load(f)
+    except Exception:
+        progress = {"current_index": 0}
+    idx = progress.get("current_index", 0) % len(file_ids)
+    file_id = file_ids[idx]
+    url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+        r = await c.get(url)
+        r.raise_for_status()
+    save_path = Path(EXCEL_FOLDER) / "ownerclan_latest.xlsx"
+    save_path.write_bytes(r.content)
+    progress["current_index"] = (idx + 1) % len(file_ids)
+    with open(EXCEL_PROGRESS, "w") as f:
+        json.dump(progress, f)
+    print(f"[SCHED] Excel 다운로드 완료: {file_id} ({len(r.content)//1024}KB)", flush=True)
+    return str(save_path)
 
 
 if __name__ == "__main__":
