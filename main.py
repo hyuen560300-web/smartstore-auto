@@ -1557,6 +1557,64 @@ async def generate_flux_image(product_name: str, category: str = "") -> str | No
     return None
 
 
+async def generate_flux_bg_edit(
+    image_url: str, product_name: str, category: str = ""
+) -> str | None:
+    """Flux Kontext — 원본 제품 형태 유지, 배경만 라이프스타일로 교체"""
+    if not FLUX_API_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            r = await c.get(_extract_hq_url(image_url))
+            r.raise_for_status()
+        import base64 as _b64
+        img_b64 = _b64.b64encode(r.content).decode()
+    except Exception as e:
+        print(f"[FLUX_BG] 원본 다운로드 실패: {e}", flush=True)
+        return None
+
+    scene, _ = _get_scene_context(product_name)
+    prompt = (
+        f"Keep the product object exactly as-is — same shape, color, texture, and all details. "
+        f"Replace ONLY the background with a lifestyle scene: {scene}. "
+        f"The product stays centered and unchanged. "
+        f"Natural lighting, photorealistic, high quality. No text, no watermarks."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(
+                "https://api.bfl.ai/v1/flux-kontext-pro",
+                headers={"X-Key": FLUX_API_KEY, "Content-Type": "application/json"},
+                json={"prompt": prompt, "input_image": img_b64,
+                      "width": 1024, "height": 1024},
+            )
+            r.raise_for_status()
+            resp_json = r.json()
+            task_id = resp_json.get("id")
+            polling_url = resp_json.get("polling_url") or f"https://api.bfl.ai/v1/get_result?id={task_id}"
+        if not task_id:
+            return None
+        for _ in range(30):
+            await asyncio.sleep(2)
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(polling_url, headers={"X-Key": FLUX_API_KEY})
+                data = r.json()
+            status = data.get("status")
+            if status == "Ready":
+                img_url = data.get("result", {}).get("sample")
+                if img_url:
+                    print(f"[FLUX_BG] ✅ {product_name[:20]}", flush=True)
+                    return img_url
+                return None
+            if status not in ("Pending", "Processing"):
+                print(f"[FLUX_BG] 실패 상태: {status}", flush=True)
+                return None
+        print(f"[FLUX_BG] 타임아웃", flush=True)
+    except Exception as e:
+        print(f"[FLUX_BG] 실패: {e}", flush=True)
+    return None
+
+
 # 디지털/가전 카테고리 키워드
 _DIGITAL_CATEGORIES = ("디지털", "가전", "전자", "컴퓨터", "모바일", "IT")
 
@@ -1643,22 +1701,32 @@ async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
 async def get_product_image(p: dict) -> str | None:
     """
     이미지 우선순위:
-    1. 오너클랜 원본 (품질 OK)
-    2. Pexels 실사진 (연관성 QC 통과)
-    3. AI 생성 + Vision QC (디지털/가전: Flux→Gemini / 기타: Gemini)
+    1. 오너클랜 원본 + Flux Kontext 배경 교체 (실패 시 원본 그대로)
+    2. Pexels 실사진 (QC 통과)
+    3. AI 생성 + Vision QC (Pexels < 60: Flux → Gemini / 이상: Gemini)
     4. DALL-E 3 최종 폴백
     """
     image_url = str(p.get("image", "")).strip()
     product_name = str(p.get("name", ""))
     category = str(p.get("category", ""))
 
-    # 1. 오너클랜 이미지 시도
+    # 1. 오너클랜 원본 — Flux Kontext로 배경 교체 → 실패 시 원본 그대로 사용
     if image_url.startswith("http"):
         ok, reason, w, h = await _check_image_quality(image_url)
         if ok:
+            print(f"[IMAGE] Flux 배경 교체 시도: {product_name[:20]}", flush=True)
+            edited_url = await generate_flux_bg_edit(image_url, product_name, category)
+            if edited_url:
+                try:
+                    result = await naver_api.upload_image(edited_url)
+                    print(f"[IMAGE] Flux 배경교체 ✅", flush=True)
+                    return result
+                except Exception as e:
+                    print(f"[IMAGE] Flux 배경교체 업로드 실패: {e}", flush=True)
+            # 배경 교체 실패 → 원본 폴백
             try:
                 result = await naver_api.upload_image(image_url)
-                print(f"[IMAGE] 오너클랜 ✅ {w}×{h}", flush=True)
+                print(f"[IMAGE] 오너클랜 원본 ✅ {w}×{h}", flush=True)
                 return result
             except Exception as e:
                 print(f"[IMAGE] 오너클랜 업로드 실패: {e}", flush=True)
