@@ -1724,39 +1724,56 @@ async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
 
 async def get_product_image(p: dict) -> str | None:
     """
-    이미지 우선순위 (모든 AI 이미지 Vision QC 95점 이상만 통과):
-    1. 오너클랜 원본 + Flux Kontext 배경교체 → QC 95+ 통과? 사용 : 원본 그대로
-    2. Pexels 실사진 (QC 75+ 통과 시)
-    3. AI 생성 + QC 95+ (Pexels<60: Flux→Gemini / 이상: Gemini)
-    4. DALL-E + QC 95+ → 미달 시 원본 폴백
-    5. 최종 AI + QC 95+ → 미달 시 원본 폴백 / 원본 없으면 불가피 사용
+    이미지 우선순위:
+    1. Pexels 실사진    — QC 75점 이상
+    2. Gemini 생성      — QC 75점 이상
+    3. 오너클랜 원본    — QC 없이 그대로 사용
+    4. Flux 2 Pro 생성  — QC 95점 이상 (원본 없을 때만)
+    5. DALL-E           — QC 95점 이상 (최후 수단: 미달이라도 사용)
     """
-    image_url = str(p.get("image", "")).strip()
+    image_url    = str(p.get("image", "")).strip()
     product_name = str(p.get("name", ""))
-    category = str(p.get("category", ""))
+    category     = str(p.get("category", ""))
+    _, reject_kws = _get_scene_context(product_name)
+    from employees import employee_pexels_qc, employee_image_inspector
 
-    # 1. 오너클랜 원본 — Flux Kontext 배경 교체 → QC 95점 이상만 사용, 미달 시 원본
+    # ── 1. Pexels QC 75점 이상 ───────────────────────────────────────────────
+    print(f"[IMAGE] Pexels 검색: {product_name[:20]}", flush=True)
+    pexels_url = await search_pexels_image(product_name)
+    if pexels_url:
+        try:
+            qc = await employee_pexels_qc(pexels_url, product_name, ANTHROPIC_API_KEY)
+            score = qc.get("score", 0)
+            print(f"[IMAGE] Pexels QC {score}점 — {qc.get('reason','')}", flush=True)
+            if score >= 75:
+                result = await naver_api.upload_image(pexels_url)
+                print(f"[IMAGE] Pexels ✅", flush=True)
+                return result
+            print(f"[IMAGE] Pexels {score}점 미달 → Gemini", flush=True)
+        except Exception as e:
+            print(f"[IMAGE] Pexels 실패: {e}", flush=True)
+
+    # ── 2. Gemini QC 75점 이상 ───────────────────────────────────────────────
+    print(f"[IMAGE] Gemini 생성: {product_name[:20]}", flush=True)
+    gemini_raw = await generate_gemini_image(product_name, category)
+    if gemini_raw:
+        try:
+            gemini_result = await naver_api.upload_raw_image(gemini_raw)
+            qc = await employee_image_inspector(
+                gemini_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
+            score = qc.get("score", 0)
+            print(f"[IMAGE] Gemini QC {score}점", flush=True)
+            if score >= 75:
+                print(f"[IMAGE] Gemini ✅", flush=True)
+                return gemini_result
+            print(f"[IMAGE] Gemini {score}점 미달 → 오너클랜 원본", flush=True)
+        except Exception as e:
+            print(f"[IMAGE] Gemini 실패: {e}", flush=True)
+
+    # ── 3. 오너클랜 원본 (QC 없이) ──────────────────────────────────────────
     if image_url.startswith("http"):
         ok, reason, w, h = await _check_image_quality(image_url)
         if ok:
-            from employees import employee_image_inspector
-            _, _rej_kws = _get_scene_context(product_name)
-            print(f"[IMAGE] Flux 배경 교체 시도: {product_name[:20]}", flush=True)
-            edited_url = await generate_flux_bg_edit(image_url, product_name, category)
-            if edited_url:
-                try:
-                    edited_result = await naver_api.upload_image(edited_url)
-                    qc = await employee_image_inspector(
-                        edited_result, product_name, ANTHROPIC_API_KEY, reject_keywords=_rej_kws)
-                    score = qc.get("score", 0)
-                    print(f"[IMAGE] Flux 배경교체 QC: {score}점", flush=True)
-                    if qc.get("passed", False):
-                        print(f"[IMAGE] Flux 배경교체 ✅", flush=True)
-                        return edited_result
-                    print(f"[IMAGE] Flux 배경교체 {score}점 미달 → 원본 사용", flush=True)
-                except Exception as e:
-                    print(f"[IMAGE] Flux 배경교체 업로드 실패: {e}", flush=True)
-            # 배경 교체 실패 or QC 미달 → 원본 그대로
             try:
                 result = await naver_api.upload_image(image_url)
                 print(f"[IMAGE] 오너클랜 원본 ✅ {w}×{h}", flush=True)
@@ -1766,99 +1783,41 @@ async def get_product_image(p: dict) -> str | None:
         else:
             print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
 
-    # 2. Pexels 실사진 + 연관성 QC
-    pexels_score = 0
-    print(f"[IMAGE] Pexels 검색 중: {product_name[:20]}", flush=True)
-    pexels_url = await search_pexels_image(product_name)
-    if pexels_url:
-        try:
-            from employees import employee_pexels_qc
-            qc = await employee_pexels_qc(pexels_url, product_name, ANTHROPIC_API_KEY)
-            pexels_score = qc.get("score", 0)
-            print(f"[IMAGE] Pexels QC: {pexels_score}점 — {qc.get('reason','')}", flush=True)
-            if qc.get("relevant", True):
-                result = await naver_api.upload_image(pexels_url)
-                print(f"[IMAGE] Pexels ✅", flush=True)
-                return result
-            next_src = "Flux" if pexels_score < 60 else "Gemini"
-            print(f"[IMAGE] Pexels {pexels_score}점 미통과 → {next_src}", flush=True)
-        except Exception as e:
-            print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
-    else:
-        print(f"[IMAGE] Pexels 검색 실패 → Flux", flush=True)
+    # ── 4. Flux — 원본 없을 때만, QC 95점 이상 ──────────────────────────────
+    if not image_url.startswith("http"):
+        print(f"[IMAGE] Flux 생성(원본 없음): {product_name[:20]}", flush=True)
+        flux_url = await generate_flux_image(product_name, category)
+        if flux_url:
+            try:
+                flux_result = await naver_api.upload_image(flux_url)
+                qc = await employee_image_inspector(
+                    flux_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
+                score = qc.get("score", 0)
+                print(f"[IMAGE] Flux QC {score}점", flush=True)
+                if score >= 95:
+                    print(f"[IMAGE] Flux ✅", flush=True)
+                    return flux_result
+                print(f"[IMAGE] Flux {score}점 미달 → DALL-E", flush=True)
+            except Exception as e:
+                print(f"[IMAGE] Flux 실패: {e}", flush=True)
 
-    # 3. AI 생성 — Pexels QC 점수 기반 선택
-    #    score < 60 (미검색 포함) → Flux 우선 → Gemini 폴백
-    #    score >= 60              → Gemini 바로
-    _, reject_kws = _get_scene_context(product_name)
-    use_flux = pexels_score < 60
-    ai_result = await _generate_ai_image_with_qc(product_name, category, reject_kws, use_flux_first=use_flux)
-    if ai_result:
-        return ai_result
-
-    # 4. DALL-E 3 폴백 — QC 95점 이상만 사용, 미달 시 원본 폴백
-    print(f"[IMAGE] DALL-E 생성 중: {product_name[:20]}", flush=True)
+    # ── 5. DALL-E QC 95점 이상, 미달이라도 최후 수단으로 사용 ─────────────
+    print(f"[IMAGE] DALL-E 생성: {product_name[:20]}", flush=True)
     dalle_url = await generate_dalle_image(product_name)
     if dalle_url:
         try:
             dalle_result = await naver_api.upload_image(dalle_url)
-            from employees import employee_image_inspector
             qc = await employee_image_inspector(
                 dalle_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
             score = qc.get("score", 0)
-            print(f"[IMAGE] DALL-E QC: {score}점", flush=True)
-            if qc.get("passed", False):
+            print(f"[IMAGE] DALL-E QC {score}점", flush=True)
+            if score >= 95:
                 print(f"[IMAGE] DALL-E ✅", flush=True)
-                return dalle_result
-            # QC 미달 → 원본 있으면 원본 폴백
-            if image_url.startswith("http"):
-                try:
-                    orig = await naver_api.upload_image(image_url)
-                    print(f"[IMAGE] DALL-E {score}점 미달 → 원본 폴백 ✅", flush=True)
-                    return orig
-                except Exception:
-                    pass
-            print(f"[IMAGE] DALL-E {score}점 미달 (원본 없음)", flush=True)
+            else:
+                print(f"[IMAGE] DALL-E {score}점 미달이나 최후 수단 사용", flush=True)
+            return dalle_result
         except Exception as e:
-            print(f"[IMAGE] DALL-E 업로드 실패: {e}", flush=True)
-
-    # 5. AI 최종 시도 — QC 95점 기준, 미달 시 원본 폴백, 원본 없으면 불가피 사용
-    print(f"[IMAGE] AI 최종 시도: {product_name[:20]}", flush=True)
-    from employees import employee_image_inspector
-    last_fns = (
-        [generate_flux_image, generate_gemini_image] if use_flux
-        else [generate_gemini_image, generate_flux_image]
-    )
-    for gen_fn in last_fns:
-        raw = await gen_fn(product_name, category)
-        if not raw:
-            continue
-        try:
-            url = (
-                await naver_api.upload_raw_image(raw)
-                if isinstance(raw, bytes)
-                else await naver_api.upload_image(raw)
-            )
-            qc = await employee_image_inspector(
-                url, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
-            score = qc.get("score", 0)
-            print(f"[IMAGE] AI 최종 QC: {score}점", flush=True)
-            if qc.get("passed", False):
-                print(f"[IMAGE] AI 최종 ✅", flush=True)
-                return url
-            # QC 미달 → 원본 있으면 원본 폴백
-            if image_url.startswith("http"):
-                try:
-                    orig = await naver_api.upload_image(image_url)
-                    print(f"[IMAGE] AI {score}점 미달 → 원본 폴백 ✅", flush=True)
-                    return orig
-                except Exception:
-                    pass
-            # 원본도 없으면 QC 미달이라도 사용 (이미지 없는 것보다 낫다)
-            print(f"[IMAGE] AI {score}점 미달이나 원본 없어 불가피 사용", flush=True)
-            return url
-        except Exception as e:
-            print(f"[IMAGE] AI 최종 업로드 실패: {e}", flush=True)
+            print(f"[IMAGE] DALL-E 실패: {e}", flush=True)
 
     print(f"[IMAGE] ❌ 모든 소스 실패: {product_name[:20]}", flush=True)
     return None
