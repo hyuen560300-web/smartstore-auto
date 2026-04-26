@@ -341,10 +341,14 @@ async def register_single_product(request: Request):
             product_name, category, review.get("selling_points", []), ANTHROPIC_API_KEY)
         ai["tags"] = seo_tags
 
-        # Tool 2: 최적 가격 산정
+        # Tool 2: 경쟁사 가격 수집 → 최적 가격 산정
+        from main import search_naver_shopping
+        competitor_prices = await search_naver_shopping(product_name)
         price_result = await employee_price_optimizer(
-            product_name, category, raw_price, ANTHROPIC_API_KEY)
+            product_name, category, raw_price, ANTHROPIC_API_KEY,
+            competitor_prices=competitor_prices)
         price = price_result["suggested_price"]
+        print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
 
         naver_img_url = await get_product_image(p)
         if not naver_img_url:

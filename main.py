@@ -919,6 +919,39 @@ async def search_pexels_image(product_name: str) -> str | None:
     return None
 
 
+# ─── 네이버 쇼핑 검색 — 경쟁사 가격/키워드 수집 ──────────────────────────────
+async def search_naver_shopping(query: str, display: int = 10) -> list:
+    """네이버 쇼핑 검색 API로 경쟁사 상위 상품 가격·키워드 수집"""
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://openapi.naver.com/v1/search/shop.json",
+                headers={
+                    "X-Naver-Client-Id": NAVER_CLIENT_ID,
+                    "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+                },
+                params={"query": query, "display": display, "sort": "sim"},
+            )
+            r.raise_for_status()
+        items = r.json().get("items", [])
+        results = []
+        for item in items:
+            price = int(item.get("lprice", 0))
+            if price > 0:
+                results.append({
+                    "title": re.sub(r"<[^>]+>", "", item.get("title", "")),
+                    "price": price,
+                    "mall": item.get("mallName", ""),
+                })
+        print(f"[쇼핑검색] '{query[:15]}' → {len(results)}개 경쟁 상품 수집", flush=True)
+        return results
+    except Exception as e:
+        print(f"[쇼핑검색] 실패: {e}", flush=True)
+        return []
+
+
 # ─── DALL-E 3 공통 스타일 접미사 ─────────────────────────────────────────────
 # ─── 브랜드 글로벌 비주얼 가이드라인 (모든 이미지 공통 적용) ─────────────────
 _DALLE_SUFFIX = (
@@ -1452,10 +1485,12 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             ai["tags"] = seo_tags
             print(f"[태그생성] {seo_tags[:3]}...", flush=True)
 
-            # Tool 2: 최적 가격 산정
+            # Tool 2: 경쟁사 가격 수집 → 최적 가격 산정
+            competitor_prices = await search_naver_shopping(str(p.get("name", "")))
             price_result = await employee_price_optimizer(
                 str(p.get("name", "")), str(p.get("category", "")),
-                int(p.get("price", 0)), ANTHROPIC_API_KEY)
+                int(p.get("price", 0)), ANTHROPIC_API_KEY,
+                competitor_prices=competitor_prices)
             price = price_result["suggested_price"]
             print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
 

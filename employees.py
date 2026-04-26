@@ -346,17 +346,39 @@ async def employee_keyword_translator(product_name: str, category: str, anthropi
 
 
 # ─── 직원 15: 가격 최적화 분석가 ────────────────────────────────────────────
-async def employee_price_optimizer(product_name: str, category: str, cost_price: int, anthropic_key: str) -> dict:
-    """경쟁사 가격 분석 기반 최적 판매가 제안 (Sonnet)"""
+async def employee_price_optimizer(
+    product_name: str,
+    category: str,
+    cost_price: int,
+    anthropic_key: str,
+    competitor_prices: list = None,
+) -> dict:
+    """경쟁사 실시간 가격 데이터 기반 최적 판매가 제안 (Sonnet)"""
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+
+    # 경쟁사 가격 데이터 요약
+    comp_context = ""
+    if competitor_prices:
+        prices = [c["price"] for c in competitor_prices if c.get("price", 0) > 0]
+        if prices:
+            avg = int(sum(prices) / len(prices))
+            lo, hi = min(prices), max(prices)
+            comp_context = (
+                f"\n\n[실시간 네이버 쇼핑 경쟁사 데이터]\n"
+                f"수집 상품 수: {len(prices)}개\n"
+                f"가격 범위: {lo:,}원 ~ {hi:,}원\n"
+                f"평균가: {avg:,}원\n"
+                f"상위 3개: {[f'{c[\"title\"][:12]} {c[\"price\"]:,}원' for c in competitor_prices[:3]]}"
+            )
+
     resp = await client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=200,
         system=[{"type": "text", "text": "네이버 스마트스토어 가격 전략 전문가. 반드시 JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": f"""
-상품명: '{product_name}', 카테고리: '{category}', 원가: {cost_price:,}원
+상품명: '{product_name}', 카테고리: '{category}', 원가: {cost_price:,}원{comp_context}
 
-최적 판매가 제안 (마진율 최소 15%, 심리적 가격대 적용).
+최적 판매가 제안 (마진율 최소 15%, 심리적 가격대 적용, 경쟁사 평균가 기준 포지셔닝).
 JSON만 출력:
 {{"suggested_price": 28000, "margin_rate": 0.25, "reason": "근거 한 줄"}}
 """}]
