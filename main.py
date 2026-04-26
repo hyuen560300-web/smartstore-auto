@@ -492,6 +492,8 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
   "reason_2": "사야 하는 이유 2 — 차별점/기술력 강조 (40자 이내)",
   "reason_3": "사야 하는 이유 3 — 시즌/트렌드/절약 연결 (40자 이내)",
   "spec_rows": [["항목","값"],["항목","값"],["항목","값"],["항목","값"],["항목","값"]],
+  "spec_hint": "디테일컷 DALL-E 프롬프트용 힌트 — 소재·기능·특징 영어 10단어 이내 (예: soft microfiber texture and adjustable buckle)",
+  "compare_points": ["타사 대비 차별점 1 (30자)", "차별점 2", "차별점 3"],
   "tags": ["태그1","태그2","태그3","태그4","태그5"]
 }}"""
         }]
@@ -708,108 +710,115 @@ _IMG = 'style="max-width:100%;height:auto;display:block;margin:20px auto;"'
 _WRAP = ('style="max-width:860px;margin:0 auto;padding:0 16px 24px;'
          'font-family:\'나눔고딕\',Apple SD Gothic Neo,sans-serif;color:#333;"')
 
-def build_detail_html(banner_url: str, product_img_url: str, ai: dict) -> str:
+def build_detail_html(
+    banner_url: str,
+    product_img_url: str,
+    ai: dict,
+    detail_img_url: str = "",
+) -> str:
     """
-    6-섹션 설득형 상세페이지
-    ① Pillow 헤드라인 배너
-    ② Intro <h2> — 상품 최대 장점 한 줄
-    ③ 이런 분께 추천 체크리스트 (3개 이상)
-    ④ 상품 이미지 + 이미지 사이 감성 문구
-    ⑤ 이유 3가지 컬러 카드
-    ⑥ 스펙 <table>
+    5-타입 스마트스토어 표준 상세페이지
+    ① 메인 인트로 (배너) — 훅
+    ② 실제 사용컷 (라이프스타일) + 감성 문구
+    ③ 이런 분께 추천 체크리스트
+    ④ 디테일/기능컷 + 스펙 테이블
+    ⑤ 비교/인증 + 배송/공지 고정
     """
-    # ① Pillow 헤드라인 배너
-    sec1 = f'<img src="{banner_url}" {_IMG}>' if banner_url else ""
-
-    # ② Intro — h2 태그, 상품 최대 장점
-    headline = ai.get("headline", ai.get("banner_text", ""))
-    emotional = ai.get("emotional_copy", "")
-    sec2 = (
+    # ① 메인 인트로 배너
+    sec1 = (
+        f'<img src="{banner_url}" {_IMG}>'
         f'<div {_WRAP}>'
-        + (f'<h2 style="font-size:22px;color:#1a1a1a;margin:28px 0 10px;line-height:1.5;">'
-           f'{headline}</h2>' if headline else "")
-        + (f'<p style="font-size:15px;line-height:1.9;color:#555;margin:0 0 8px;">'
-           f'{emotional}</p>' if emotional else "")
+        + (f'<h2 style="font-size:22px;color:#1a1a1a;margin:20px 0 8px;line-height:1.5;">'
+           f'{ai.get("headline","")}</h2>' if ai.get("headline") else "")
+        + (f'<p style="font-size:15px;line-height:1.9;color:#555;margin:0;">'
+           f'{ai.get("emotional_copy","")}</p>' if ai.get("emotional_copy") else "")
         + '</div>'
-    )
+    ) if banner_url else ""
 
-    # ③ 이런 분께 강력 추천 — 체크리스트 (불렛포인트 3~5개)
+    # ② 실제 사용컷 (라이프스타일) + 감성 문구 3가지
+    r1, r2, r3 = ai.get("reason_1",""), ai.get("reason_2",""), ai.get("reason_3","")
+    reason_blocks = "".join(
+        f'<div style="background:{bg};border-radius:10px;padding:16px 18px;margin:8px 0;">'
+        f'<b style="font-size:18px;color:#888;">0{i} </b>'
+        f'<span style="font-size:15px;line-height:1.8;">{txt}</span></div>'
+        for i, (txt, bg) in enumerate([
+            (r1,"#e8f5e9"),(r2,"#fff3e0"),(r3,"#fce4ec")
+        ], start=1) if txt
+    )
+    sec2 = (
+        f'<img src="{product_img_url}" {_IMG}>'
+        f'<div {_WRAP}>'
+        f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;padding-left:12px;margin:20px 0 14px;">'
+        f'✅ 이 상품을 선택해야 하는 이유</h3>'
+        + reason_blocks + '</div>'
+    ) if product_img_url else ""
+
+    # ③ 이런 분께 추천 체크리스트
     recs = [r for r in ai.get("recommend_list", []) if r][:5]
     if recs:
         items_html = "".join(
-            f'<li style="padding:11px 0 11px 38px;position:relative;'
-            f'border-bottom:1px solid #dde8ff;font-size:15px;color:#333;line-height:1.6;">'
-            f'<span style="position:absolute;left:0;top:10px;color:#1a73e8;font-size:20px;'
-            f'font-weight:bold;">✔</span>{r}</li>'
+            f'<li style="padding:10px 0 10px 36px;position:relative;'
+            f'border-bottom:1px solid #dde8ff;font-size:15px;line-height:1.6;">'
+            f'<span style="position:absolute;left:0;top:9px;color:#1a73e8;font-size:20px;font-weight:bold;">✔</span>'
+            f'{r}</li>'
             for r in recs
         )
         sec3 = (
             f'<div {_WRAP}>'
-            f'<div style="background:#eef4ff;border-radius:14px;padding:26px 22px;">'
-            f'<h3 style="font-size:17px;font-weight:bold;color:#1a73e8;margin:0 0 18px;'
-            f'text-align:center;">💙 이런 분들께 강력 추천합니다</h3>'
+            f'<div style="background:#eef4ff;border-radius:14px;padding:24px 20px;">'
+            f'<h3 style="font-size:17px;color:#1a73e8;margin:0 0 16px;text-align:center;">'
+            f'💙 이런 분들께 강력 추천합니다</h3>'
             f'<ul style="list-style:none;padding:0;margin:0;">{items_html}</ul>'
             f'</div></div>'
         )
     else:
         sec3 = ""
 
-    # ④ 상품 이미지 + 이미지 사이 감성 문구 (reason_1 사이에 삽입)
-    r1 = ai.get("reason_1", "")
-    sec4 = (
-        f'<img src="{product_img_url}" {_IMG}>'
-        + (
-            f'<div {_WRAP}>'
-            f'<p style="font-size:15px;line-height:1.9;color:#555;'
-            f'border-left:3px solid #1a73e8;padding:12px 16px;'
-            f'background:#f8fbff;margin:0;">{r1}</p>'
-            f'</div>'
-            if r1 else ""
-        )
-    ) if product_img_url else ""
-
-    # ⑤ 이유 3가지 컬러 카드 (reason_2, reason_3)
-    reason_cards = []
-    for i, bg in enumerate(["#fff3e0", "#fce4ec"], start=2):
-        txt = ai.get(f"reason_{i}", "")
-        if txt:
-            reason_cards.append(
-                f'<div style="background:{bg};border-radius:10px;padding:18px 20px;margin:10px 0;">'
-                f'<b style="font-size:20px;color:#888;">0{i}&nbsp;</b>'
-                f'<span style="font-size:15px;line-height:1.8;">{txt}</span></div>'
-            )
-    if reason_cards:
-        sec5 = (
-            f'<div {_WRAP}>'
-            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;'
-            f'padding-left:12px;margin:28px 0 14px;">✅ 이 상품을 선택해야 하는 이유</h3>'
-            + "".join(reason_cards) + '</div>'
-        )
-    else:
-        sec5 = ""
-
-    # ⑥ 스펙 <table>
+    # ④ 디테일/기능 설명컷 + 스펙 테이블
     spec_rows = ai.get("spec_rows", [])
+    spec_html = ""
     if spec_rows:
         rows_html = "".join(
-            f'<tr>'
-            f'<td style="background:#f5f7fa;padding:11px 14px;font-weight:bold;'
-            f'width:38%;border:1px solid #ddd;font-size:14px;">{r[0]}</td>'
-            f'<td style="padding:11px 14px;border:1px solid #ddd;font-size:14px;">'
-            f'{r[1] if len(r) > 1 else ""}</td></tr>'
+            f'<tr><td style="background:#f5f7fa;padding:10px 14px;font-weight:bold;width:38%;'
+            f'border:1px solid #ddd;font-size:14px;">{r[0]}</td>'
+            f'<td style="padding:10px 14px;border:1px solid #ddd;font-size:14px;">'
+            f'{r[1] if len(r)>1 else ""}</td></tr>'
             for r in spec_rows
         )
-        sec6 = (
-            f'<div {_WRAP}>'
-            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;'
-            f'padding-left:12px;margin:28px 0 14px;">📋 상품 스펙</h3>'
+        spec_html = (
+            f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;padding-left:12px;margin:24px 0 12px;">'
+            f'📋 상품 스펙</h3>'
             f'<table style="width:100%;border-collapse:collapse;">{rows_html}</table>'
-            f'</div>'
         )
-    else:
-        sec6 = ""
+    sec4 = (
+        (f'<img src="{detail_img_url}" {_IMG}>' if detail_img_url else "")
+        + (f'<div {_WRAP}>{spec_html}</div>' if spec_html else "")
+    )
 
-    html = sec1 + sec2 + sec3 + sec4 + sec5 + sec6
+    # ⑤ 비교/인증 + 배송/공지 고정
+    compare = [c for c in ai.get("compare_points", []) if c]
+    compare_html = ""
+    if compare:
+        items = "".join(f'<li style="padding:8px 0;font-size:14px;color:#444;">⭐ {c}</li>' for c in compare)
+        compare_html = (
+            f'<div style="background:#fffde7;border-radius:10px;padding:20px;margin:16px 0;">'
+            f'<h4 style="font-size:15px;color:#f57f17;margin:0 0 10px;">🏆 타사 대비 차별점</h4>'
+            f'<ul style="list-style:none;padding:0;margin:0;">{items}</ul></div>'
+        )
+    delivery_html = (
+        '<div style="background:#f5f5f5;border-top:2px solid #ddd;padding:20px 16px;margin-top:24px;'
+        'font-size:13px;color:#666;line-height:1.8;">'
+        '<b style="color:#333;">📦 배송 안내</b><br>'
+        '· 주문 후 1~3일 이내 출고 (주말·공휴일 제외)<br>'
+        '· 도서산간 지역 추가 배송비 발생 가능<br><br>'
+        '<b style="color:#333;">🔄 교환/반품 안내</b><br>'
+        '· 수령 후 7일 이내 교환/반품 가능<br>'
+        '· 단순 변심 반품 시 왕복 배송비 고객 부담<br>'
+        '· 불량/오배송 시 무료 교환/반품</div>'
+    )
+    sec5 = f'<div {_WRAP}>{compare_html}</div>' + delivery_html
+
+    html = sec1 + sec2 + sec3 + sec4 + sec5
 
     # ⑦ 모든 섹션이 비어있으면 최소 폴백 HTML 강제 생성
     if not html.strip():
@@ -922,6 +931,21 @@ async def generate_dalle_banner(product_name: str, headline: str = "") -> str | 
     )
     print(f"[DALLE] 배너 생성: {txt[:20]}", flush=True)
     return await _dalle_request(prompt, size="1792x1024", quality="hd")
+
+
+async def generate_dalle_detail_shot(product_name: str, spec_hint: str = "") -> str | None:
+    """③ 디테일/기능 설명컷 — 소재·마감·사이즈 강조, 클로즈업 스타일"""
+    hint = spec_hint or "material texture, fine detail"
+    prompt = (
+        f"Extreme close-up product detail photography of '{product_name}'. "
+        f"Focus on {hint}. "
+        f"Flat lay on pure white background, overhead angle, studio lighting. "
+        f"Showcase quality craftsmanship and material texture clearly. "
+        f"No text, no watermark, ultra-sharp focus, 4K macro photography. "
+        f"{_DALLE_SUFFIX}"
+    )
+    print(f"[DALLE] 디테일컷 생성: {product_name[:20]}", flush=True)
+    return await _dalle_request(prompt, size="1024x1024", quality="hd")
 
 
 async def _is_text_heavy_image(image_url: str) -> bool:
@@ -1125,9 +1149,20 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                     ai.get("sub_headline") or ai.get("sub_text", "")
                 )
 
+            # ⑩ 디테일/기능 설명컷 생성
+            detail_img_url = ""
+            spec_hint = ai.get("spec_hint", "")
+            dalle_detail_raw = await generate_dalle_detail_shot(str(p.get("name","")), spec_hint)
+            if dalle_detail_raw:
+                try:
+                    detail_img_url = await naver_api.upload_image(dalle_detail_raw)
+                    print(f"[DALLE] 디테일컷 업로드 완료", flush=True)
+                except Exception:
+                    pass
+
             payload = build_product_payload(p, ai, price)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
-            detail_html = build_detail_html(banner_url, naver_img_url, ai)
+            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
 
