@@ -180,8 +180,15 @@ async def register_products_debug():
         # DALL-E 직접 테스트
         from main import generate_dalle_image, _dalle_request, OPENAI_API_KEY
         return_data["openai_key_set"] = bool(OPENAI_API_KEY)
-        dalle_test = await generate_dalle_image(str(p.get("name", "상품")))
-        return_data["dalle_url"] = dalle_test[:60] if dalle_test else "DALL-E 실패"
+        try:
+            dalle_test = await _dalle_request(
+                f"white background product photo, {p.get('name','product')}",
+                size="1024x1024", quality="standard"
+            )
+            return_data["dalle_url"] = dalle_test[:80] if dalle_test else "DALL-E None"
+        except Exception as de:
+            return_data["dalle_url"] = f"DALL-E 에러: {str(de)[:100]}"
+            dalle_test = None
 
         img_url = await get_product_image(p)
         return_data["image"] = img_url[:60] if img_url else "이미지 없음"
