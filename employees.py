@@ -327,3 +327,76 @@ JSON 출력:
         return json.loads(text)
     except Exception:
         return {}
+
+
+# ─── 직원 18: 품질검수관 (Image Inspector) ────────────────────────────────────
+async def employee_image_inspector(
+    image_url: str,
+    product_name: str,
+    anthropic_key: str,
+    is_banner: bool = False,
+) -> dict:
+    """
+    Claude Vision으로 이미지 품질 채점 (0~100점)
+    반환: {score, passed, issues, recommendation, retry_prompt}
+    """
+    if not anthropic_key or not image_url:
+        return {"score": 100, "passed": True, "issues": [], "recommendation": "검수 생략"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        import base64 as _b64
+        img_b64 = _b64.standard_b64encode(r.content).decode()
+        media_type = "image/jpeg"
+    except Exception as e:
+        return {"score": 100, "passed": True, "issues": [f"다운로드 실패: {e}"], "recommendation": "원본 사용"}
+
+    img_type = "배너 이미지" if is_banner else "대표 상품 이미지"
+    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+
+    resp = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": img_b64}
+                },
+                {
+                    "type": "text",
+                    "text": f"""너는 네이버 스마트스토어 전문 품질검수관이야.
+'{product_name}'의 {img_type}를 아래 기준으로 채점해줘.
+
+채점 기준 (각 25점):
+1. 픽셀 깨짐/계단 현상 없음
+2. 상품 형태 왜곡 없음 + 배경 깔끔함
+3. 네이버 스마트스토어 메인에 쓰기에 고급스러움
+4. 밝기/채도/선명도 적절
+
+반드시 JSON만 출력:
+{{
+  "score": 85,
+  "issues": ["문제점1", "문제점2"],
+  "recommendation": "개선 방향 한 줄",
+  "retry_prompt": "DALL-E 재시도 시 추가할 프롬프트 (문제 없으면 빈 문자열)"
+}}"""
+                }
+            ]
+        }]
+    )
+
+    try:
+        text = resp.content[0].text.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:].strip()
+        result = json.loads(text)
+        result["passed"] = result.get("score", 0) >= 90
+        return result
+    except Exception:
+        return {"score": 75, "passed": False, "issues": ["파싱 실패"], "recommendation": "재시도 권장", "retry_prompt": ""}

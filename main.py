@@ -1020,17 +1020,51 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                 results["skip"] += 1
                 continue
 
-            # ⑧ 이미지 디렉터: DALL-E 3 배너 우선 → 실패 시 Pillow 배너 폴백
+            # ⑧ 품질검수관: 대표 이미지 검수 (최대 2회 시도)
+            from employees import employee_image_inspector
+            qc = await employee_image_inspector(naver_img_url, str(p.get("name","")), ANTHROPIC_API_KEY)
+            print(f"[검수관] 점수:{qc.get('score')} 통과:{qc.get('passed')} 이슈:{qc.get('issues')}", flush=True)
+            if not qc.get("passed"):
+                # 1회 재시도 — DALL-E로 새 이미지 생성
+                print(f"[검수관] 90점 미만 → DALL-E 재시도", flush=True)
+                retry_hint = qc.get("retry_prompt", "")
+                new_dalle = await generate_dalle_image(f"{p.get('name','')} {retry_hint}".strip())
+                if new_dalle:
+                    retry_img = await naver_api.upload_image(new_dalle)
+                    qc2 = await employee_image_inspector(retry_img, str(p.get("name","")), ANTHROPIC_API_KEY)
+                    print(f"[검수관] 재시도 점수:{qc2.get('score')}", flush=True)
+                    if qc2.get("passed"):
+                        naver_img_url = retry_img
+                    else:
+                        # 2회 모두 실패 → 반려 리포트 로그
+                        reject_msg = (
+                            f"[반려] {p.get('name','')} | "
+                            f"1차:{qc.get('score')}점 이슈:{qc.get('issues')} | "
+                            f"2차:{qc2.get('score')}점 이슈:{qc2.get('issues')}"
+                        )
+                        print(reject_msg, flush=True)
+                        results["fail"] += 1
+                        results["errors"].append(reject_msg)
+                        continue
+
+            # ⑨ 배너 생성: DALL-E 3 배너 우선 → 실패 시 Pillow 폴백
             headline_txt = ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18]
             dalle_banner_raw = await generate_dalle_banner(str(p.get("name", "")), headline_txt)
             if dalle_banner_raw:
-                # DALL-E 배너도 1000px 고화질 처리 후 Naver 업로드
                 banner_url = await naver_api.upload_image(dalle_banner_raw)
-                print(f"[DALLE] 배너 업로드 완료", flush=True)
+                # 배너도 검수
+                bqc = await employee_image_inspector(banner_url, str(p.get("name","")), ANTHROPIC_API_KEY, is_banner=True)
+                print(f"[검수관] 배너점수:{bqc.get('score')}", flush=True)
+                if not bqc.get("passed"):
+                    # 배너 검수 실패 → Pillow 폴백
+                    print(f"[검수관] 배너 기준 미달 → Pillow 폴백", flush=True)
+                    banner_url = await create_banner_image(
+                        naver_img_url, headline_txt,
+                        ai.get("sub_headline") or ai.get("sub_text", "")
+                    )
             else:
                 banner_url = await create_banner_image(
-                    naver_img_url,
-                    headline_txt,
+                    naver_img_url, headline_txt,
                     ai.get("sub_headline") or ai.get("sub_text", "")
                 )
 
