@@ -935,8 +935,11 @@ async def _is_text_heavy_image(image_url: str) -> bool:
         return False
 
 
-async def _check_image_quality(image_url: str) -> tuple[bool, int, int]:
-    """이미지 다운로드 후 품질 체크 — (사용가능, 가로, 세로)"""
+async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
+    """
+    이미지 품질 체크 — (사용가능여부, 사유, 가로, 세로)
+    사유: "ok" | "too_small" | "text_heavy" | "error"
+    """
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
             r = await c.get(_extract_hq_url(image_url))
@@ -944,40 +947,39 @@ async def _check_image_quality(image_url: str) -> tuple[bool, int, int]:
         from PIL import Image
         img = Image.open(_io.BytesIO(r.content))
         w, h = img.size
-        # 세로:가로 2.5배 초과 → 배송안내 이미지
         if h > w * 2.5:
-            return False, w, h
-        # 최소 500px 미만 → 화질 불량
-        if min(w, h) < 500:
-            return False, w, h
-        return True, w, h
-    except Exception:
-        return False, 0, 0
+            return False, "text_heavy", w, h
+        if min(w, h) < 300:     # 300px 미만만 거부 (너무 작은 것만)
+            return False, "too_small", w, h
+        return True, "ok", w, h
+    except Exception as e:
+        return True, "error", 0, 0  # 체크 실패 시 원본 그대로 사용
 
 
 async def get_product_image(p: dict) -> str | None:
-    """이미지 품질 체크 → 500px 미만/배송안내 → DALL-E 강제"""
+    """이미지 품질 체크 → 300px 미만/배송안내 → DALL-E → Pexels → None"""
     image_url = str(p.get("image", "")).strip()
 
-    # 1. 오너클랜 이미지 품질 체크 후 사용
+    # 1. 오너클랜 이미지 품질 체크
     if image_url.startswith("http"):
-        ok, w, h = await _check_image_quality(image_url)
+        ok, reason, w, h = await _check_image_quality(image_url)
         if ok:
             try:
                 return await naver_api.upload_image(image_url)
             except Exception:
-                print(f"[IMAGE] 오너클랜 업로드 실패, Pexels 폴백", flush=True)
-        else:
-            print(f"[IMAGE] 원본 화질 불량({w}×{h}) → DALL-E 직행", flush=True)
-            # 500px 미만이면 Pexels 건너뛰고 바로 DALL-E
-            if min(w, h) < 500:
-                dalle_url = await generate_dalle_image(str(p.get("name", "")))
-                if dalle_url:
-                    try:
-                        return await naver_api.upload_image(dalle_url)
-                    except Exception:
-                        pass
-                return None
+                print(f"[IMAGE] 오너클랜 업로드 실패 → Pexels 폴백", flush=True)
+        elif reason == "too_small":
+            # 너무 작으면 DALL-E 직행
+            print(f"[IMAGE] 원본 {w}×{h} 너무 작음 → DALL-E", flush=True)
+            dalle_url = await generate_dalle_image(str(p.get("name", "")))
+            if dalle_url:
+                try:
+                    return await naver_api.upload_image(dalle_url)
+                except Exception:
+                    pass
+            # DALL-E 실패 시 Pexels로 계속
+        elif reason == "text_heavy":
+            print(f"[IMAGE] 배송안내 이미지 제외 → Pexels 폴백", flush=True)
 
     # 2. Pexels 폴백
     pexels_url = await search_pexels_image(str(p.get("name", "")))
