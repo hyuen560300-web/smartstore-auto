@@ -172,9 +172,21 @@ async def register_products_debug():
         return JSONResponse({"step": "get_image", "error": str(e), **return_data})
 
     try:
+        from main import build_detail_html, create_banner_image
         price = calculate_selling_price(p["price"])
         payload = build_product_payload(p, ai, price)
         payload["originProduct"]["images"]["representativeImage"]["url"] = img_url
+
+        # 상세페이지 HTML 생성 (디버그도 동일하게 적용)
+        banner_url = await create_banner_image(
+            img_url,
+            ai.get("headline") or ai.get("banner_text") or str(p.get("name",""))[:18],
+            ai.get("sub_headline") or ai.get("sub_text", "")
+        )
+        detail_html = build_detail_html(banner_url, img_url, ai)
+        payload["originProduct"]["detailContent"] = detail_html
+        return_data["detail_length"] = len(detail_html)
+
         result = await naver_api.register_product(payload)
         save_registered_code(str(p.get("code", "")))
         return_data["naver_result"] = str(result)[:100]

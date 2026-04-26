@@ -805,7 +805,23 @@ def build_detail_html(banner_url: str, product_img_url: str, ai: dict) -> str:
     else:
         sec6 = ""
 
-    return sec1 + sec2 + sec3 + sec4 + sec5 + sec6
+    html = sec1 + sec2 + sec3 + sec4 + sec5 + sec6
+
+    # ⑦ 모든 섹션이 비어있으면 최소 폴백 HTML 강제 생성
+    if not html.strip():
+        name = ai.get("product_name", "상품")
+        html = (
+            f'<div {_WRAP}>'
+            f'<h2 style="font-size:20px;color:#1a1a1a;margin:24px 0 12px;">{name}</h2>'
+            f'<p style="font-size:15px;line-height:1.9;color:#555;margin:0 0 20px;">'
+            f'고객님의 일상을 더욱 편리하고 풍요롭게 만들어 드리는 상품입니다.</p>'
+            f'<ul style="font-size:15px;line-height:2;color:#444;padding-left:20px;">'
+            f'<li>우수한 품질로 오랫동안 사용 가능합니다</li>'
+            f'<li>빠른 배송으로 신속하게 받아보실 수 있습니다</li>'
+            f'<li>상품에 대한 문의는 스토어 문의하기를 이용해 주세요</li>'
+            f'</ul></div>'
+        )
+    return html
 
 
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
@@ -919,19 +935,49 @@ async def _is_text_heavy_image(image_url: str) -> bool:
         return False
 
 
+async def _check_image_quality(image_url: str) -> tuple[bool, int, int]:
+    """이미지 다운로드 후 품질 체크 — (사용가능, 가로, 세로)"""
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            r = await c.get(_extract_hq_url(image_url))
+            r.raise_for_status()
+        from PIL import Image
+        img = Image.open(_io.BytesIO(r.content))
+        w, h = img.size
+        # 세로:가로 2.5배 초과 → 배송안내 이미지
+        if h > w * 2.5:
+            return False, w, h
+        # 최소 500px 미만 → 화질 불량
+        if min(w, h) < 500:
+            return False, w, h
+        return True, w, h
+    except Exception:
+        return False, 0, 0
+
+
 async def get_product_image(p: dict) -> str | None:
-    """오너클랜 이미지 (텍스트 과다 제외) → Pexels 폴백 → DALL-E 폴백 → None"""
+    """이미지 품질 체크 → 500px 미만/배송안내 → DALL-E 강제"""
     image_url = str(p.get("image", "")).strip()
 
-    # 1. 오너클랜 이미지 시도 (텍스트 과다 이미지 제외)
+    # 1. 오너클랜 이미지 품질 체크 후 사용
     if image_url.startswith("http"):
-        if await _is_text_heavy_image(image_url):
-            print(f"[IMAGE] 텍스트 과다 이미지 제외 → Pexels 폴백", flush=True)
-        else:
+        ok, w, h = await _check_image_quality(image_url)
+        if ok:
             try:
                 return await naver_api.upload_image(image_url)
             except Exception:
-                print(f"[IMAGE] 오너클랜 이미지 실패, Pexels 검색 중...", flush=True)
+                print(f"[IMAGE] 오너클랜 업로드 실패, Pexels 폴백", flush=True)
+        else:
+            print(f"[IMAGE] 원본 화질 불량({w}×{h}) → DALL-E 직행", flush=True)
+            # 500px 미만이면 Pexels 건너뛰고 바로 DALL-E
+            if min(w, h) < 500:
+                dalle_url = await generate_dalle_image(str(p.get("name", "")))
+                if dalle_url:
+                    try:
+                        return await naver_api.upload_image(dalle_url)
+                    except Exception:
+                        pass
+                return None
 
     # 2. Pexels 폴백
     pexels_url = await search_pexels_image(str(p.get("name", "")))
