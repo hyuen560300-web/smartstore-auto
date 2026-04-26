@@ -1163,7 +1163,9 @@ _PRODUCT_KEYWORD_MAP = {
     "시트커버":    ["seat", "cover"],
     "쿠션":        ["cushion"],
     # 안마/마사지
-    "마사지":      ["massage"],
+    "안마기":      ["neck", "shoulder", "massager", "device"],
+    "마사지기":    ["electric", "massager", "device", "machine"],
+    "마사지":      ["massage", "device"],
     # 침구/수면
     "베개":        ["pillow"],
     # 음료용품
@@ -1397,14 +1399,17 @@ async def _is_digital_category(category: str) -> bool:
 
 
 async def _generate_ai_image_with_qc(
-    product_name: str, category: str, reject_kws: list
+    product_name: str, category: str, reject_kws: list,
+    use_flux_first: bool = False,
 ) -> str | None:
-    """Gemini 또는 Flux로 이미지 생성 후 Vision QC — URL 반환"""
+    """이미지 생성 후 Vision QC — URL 반환
+    use_flux_first=True (Pexels QC < 60): Flux → Gemini
+    use_flux_first=False (Pexels QC >= 60): Gemini only
+    """
     from employees import employee_image_inspector
-    is_digital = await _is_digital_category(category)
     sources = (
         [("Flux", generate_flux_image), ("Gemini", generate_gemini_image)]
-        if is_digital
+        if use_flux_first
         else [("Gemini", generate_gemini_image)]
     )
     for label, gen_fn in sources:
@@ -1494,27 +1499,32 @@ async def get_product_image(p: dict) -> str | None:
             print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
 
     # 2. Pexels 실사진 + 연관성 QC
+    pexels_score = 0
     print(f"[IMAGE] Pexels 검색 중: {product_name[:20]}", flush=True)
     pexels_url = await search_pexels_image(product_name)
     if pexels_url:
         try:
             from employees import employee_pexels_qc
             qc = await employee_pexels_qc(pexels_url, product_name, ANTHROPIC_API_KEY)
-            print(f"[IMAGE] Pexels QC: {qc.get('score',0)}점 — {qc.get('reason','')}", flush=True)
+            pexels_score = qc.get("score", 0)
+            print(f"[IMAGE] Pexels QC: {pexels_score}점 — {qc.get('reason','')}", flush=True)
             if qc.get("relevant", True):
                 result = await naver_api.upload_image(pexels_url)
                 print(f"[IMAGE] Pexels ✅", flush=True)
                 return result
-            else:
-                print(f"[IMAGE] Pexels 연관성 부족 → AI 생성", flush=True)
+            next_src = "Flux" if pexels_score < 60 else "Gemini"
+            print(f"[IMAGE] Pexels {pexels_score}점 미통과 → {next_src}", flush=True)
         except Exception as e:
             print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
     else:
-        print(f"[IMAGE] Pexels 검색 실패 → AI 생성", flush=True)
+        print(f"[IMAGE] Pexels 검색 실패 → Flux", flush=True)
 
-    # 3. AI 생성 (디지털/가전: Flux → Gemini / 기타: Gemini)
+    # 3. AI 생성 — Pexels QC 점수 기반 선택
+    #    score < 60 (미검색 포함) → Flux 우선 → Gemini 폴백
+    #    score >= 60              → Gemini 바로
     _, reject_kws = _get_scene_context(product_name)
-    ai_result = await _generate_ai_image_with_qc(product_name, category, reject_kws)
+    use_flux = pexels_score < 60
+    ai_result = await _generate_ai_image_with_qc(product_name, category, reject_kws, use_flux_first=use_flux)
     if ai_result:
         return ai_result
 
@@ -1531,9 +1541,8 @@ async def get_product_image(p: dict) -> str | None:
 
     # 5. AI 최종 시도 — QC 없이 (DALL-E 빌링 한도 등 완전 실패 시 보험)
     print(f"[IMAGE] AI 최종 시도(QC 스킵): {product_name[:20]}", flush=True)
-    is_dig = await _is_digital_category(category)
     last_fns = (
-        [generate_flux_image, generate_gemini_image] if is_dig
+        [generate_flux_image, generate_gemini_image] if use_flux
         else [generate_gemini_image, generate_flux_image]
     )
     for gen_fn in last_fns:
