@@ -430,7 +430,8 @@ def clean_product_name(name: str) -> str:
         key = w.rstrip('s').lower()  # 영문 복수형 동일 처리
         if key not in seen:
             seen.add(key); deduped.append(w)
-    return ' '.join(deduped)[:25]
+    result = ' '.join(deduped)[:25].strip()
+    return result if result else name[:25]
 
 
 # ─── 가격 계산 ────────────────────────────────────────────────────────────────
