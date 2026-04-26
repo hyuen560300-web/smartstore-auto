@@ -504,8 +504,13 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
     end = text.rfind("}") + 1
     if start != -1 and end > start:
         text = text[start:end]
+    _BAD_NAME_PATTERNS = ("불완전", "오류", "에러", "유효하지", "입력된", "BAD_REQUEST", "error", "invalid")
     try:
-        return json.loads(text)
+        result = json.loads(text)
+        pname = result.get("product_name", "")
+        if not pname or any(p in pname for p in _BAD_NAME_PATTERNS):
+            result["product_name"] = product.get("name", "상품")[:25]
+        return result
     except Exception:
         name = product.get("name", "상품")[:25]
         return {
@@ -994,6 +999,20 @@ async def build_dalle_prompt_smart(
     """
     scene, _ = _get_scene_context(product_name)
 
+    # 상품명 영어 번역 (DALL-E 정확도 향상)
+    en_name = product_name
+    if ANTHROPIC_API_KEY:
+        try:
+            _c = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+            _r = await _c.messages.create(
+                model="claude-haiku-4-5-20251001", max_tokens=30,
+                messages=[{"role": "user", "content":
+                    f"Translate this Korean product name to concise English (5 words max, noun phrase only): '{product_name}'"}]
+            )
+            en_name = _r.content[0].text.strip().strip('"\'')
+        except Exception:
+            pass
+
     # 미분류(기본 씬) + 카테고리 있으면 Claude로 씬 보강
     is_default = scene == _DEFAULT_SCENE[0]
     if is_default and ANTHROPIC_API_KEY and category:
@@ -1015,7 +1034,7 @@ async def build_dalle_prompt_smart(
     if shot_type == "detail":
         highlight = spec_hint if spec_hint else "material texture and fine craftsmanship"
         return (
-            f"Extreme close-up macro product photography of '{product_name}'. "
+            f"Extreme close-up macro product photography of '{en_name}'. "
             f"Highlight: {highlight}. "
             f"Pure white background, overhead flat lay, ultra-sharp studio lighting. "
             f"{_DALLE_SUFFIX}"
@@ -1023,14 +1042,14 @@ async def build_dalle_prompt_smart(
     elif shot_type == "banner":
         return (
             f"Wide Korean e-commerce banner image. "
-            f"RIGHT 40%: '{product_name}' {scene}. "
+            f"RIGHT 40%: '{en_name}' {scene}. "
             f"LEFT 60%: large plain off-white empty negative space for text overlay. "
             f"Clean professional composition. No text, no watermark. {_DALLE_SUFFIX}"
         )
     else:  # lifestyle
         return (
             f"Photorealistic 8K lifestyle product photography. "
-            f"'{product_name}' {scene}. "
+            f"'{en_name}' {scene}. "
             f"The product is the clear main subject, beautifully lit. "
             f"No people, no text, no watermark. {_DALLE_SUFFIX}"
         )
