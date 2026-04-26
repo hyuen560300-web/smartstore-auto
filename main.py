@@ -621,8 +621,8 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
                 "productInfoProvidedNotice": {
                     "productInfoProvidedNoticeType": "ETC",
                     "etc": {
-                        "itemName": str(raw.get("name", "상세페이지 참조")),
-                        "modelName": str(raw.get("name", "상세페이지 참조")),
+                        "itemName": clean_product_name(ai.get("product_name") or str(raw.get("name", ""))) or "상세페이지 참조",
+                        "modelName": clean_product_name(ai.get("product_name") or str(raw.get("name", ""))) or "상세페이지 참조",
                         "manufacturer": str(raw.get("manufacturer", "상세페이지 참조")) or "상세페이지 참조",
                         "customerServicePhoneNumber": AS_PHONE,
                         "returnCostReason": "상세페이지 참조",
