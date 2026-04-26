@@ -322,7 +322,10 @@ async def register_single_product(request: Request):
         return JSONResponse({"status": "duplicate", "message": "이미 등록된 상품"})
 
     try:
-        from employees import employee_ip_guardian, employee_review_analyst
+        from employees import (
+            employee_ip_guardian, employee_review_analyst,
+            employee_price_optimizer, employee_tag_generator,
+        )
         safe, danger_kw = employee_ip_guardian(p)
         if not safe:
             return JSONResponse({"status": "ip_blocked", "keyword": danger_kw})
@@ -332,7 +335,16 @@ async def register_single_product(request: Request):
             "season": "", "trends": [], "pain_points": review.get("pain_points", []),
             "selling_points": review.get("selling_points", []),
         })
-        price = calculate_selling_price(raw_price)
+
+        # Tool 3: SEO 태그 생성
+        seo_tags = await employee_tag_generator(
+            product_name, category, review.get("selling_points", []), ANTHROPIC_API_KEY)
+        ai["tags"] = seo_tags
+
+        # Tool 2: 최적 가격 산정
+        price_result = await employee_price_optimizer(
+            product_name, category, raw_price, ANTHROPIC_API_KEY)
+        price = price_result["suggested_price"]
 
         naver_img_url = await get_product_image(p)
         if not naver_img_url:
@@ -385,7 +397,7 @@ async def register_single_product(request: Request):
             else:
                 return JSONResponse({"status": "qc_fail", "stage": qc_result["stage"], "reason": qc_result["reason"]})
 
-        payload = build_product_payload(p, ai, price)
+        payload = build_product_payload(p, ai, price, tags=ai.get("tags"))
         # 상품명은 무조건 입력된 title 사용 (AI 생성 이름 덮어쓰기)
         from main import clean_product_name
         safe_name = clean_product_name(product_name) or product_name[:25]

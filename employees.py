@@ -329,6 +329,125 @@ JSON 출력:
         return {}
 
 
+# ─── 직원 14: DALL-E 키워드 번역가 ─────────────────────────────────────────
+async def employee_keyword_translator(product_name: str, category: str, anthropic_key: str) -> str:
+    """상품명 → DALL-E 최적화 영어 키워드 (Haiku)"""
+    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+    resp = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=60,
+        system=[{"type": "text", "text": "Convert Korean product names to concise English keywords for DALL-E. Output only 3-6 English words, no explanation, no brand names.", "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": f"Product: '{product_name}', category: '{category}'"}]
+    )
+    result = resp.content[0].text.strip()
+    if any('가' <= c <= '힣' for c in result):
+        return category or "lifestyle product"
+    return result[:80]
+
+
+# ─── 직원 15: 가격 최적화 분석가 ────────────────────────────────────────────
+async def employee_price_optimizer(product_name: str, category: str, cost_price: int, anthropic_key: str) -> dict:
+    """경쟁사 가격 분석 기반 최적 판매가 제안 (Sonnet)"""
+    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+    resp = await client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=200,
+        system=[{"type": "text", "text": "네이버 스마트스토어 가격 전략 전문가. 반드시 JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": f"""
+상품명: '{product_name}', 카테고리: '{category}', 원가: {cost_price:,}원
+
+최적 판매가 제안 (마진율 최소 15%, 심리적 가격대 적용).
+JSON만 출력:
+{{"suggested_price": 28000, "margin_rate": 0.25, "reason": "근거 한 줄"}}
+"""}]
+    )
+    try:
+        text = resp.content[0].text.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:].strip()
+        result = json.loads(text)
+        price = int(result.get("suggested_price", 0))
+        if price < cost_price * 1.1 or price > cost_price * 5:
+            price = round(cost_price * 1.15 / 10) * 10
+        result["suggested_price"] = price
+        return result
+    except Exception:
+        return {"suggested_price": round(cost_price * 1.15 / 10) * 10, "reason": "기본 마진 적용"}
+
+
+# ─── 직원 16: 네이버 SEO 태그 생성자 ────────────────────────────────────────
+async def employee_tag_generator(product_name: str, category: str, selling_points: list, anthropic_key: str) -> list:
+    """네이버 검색 최적화 태그 자동 생성 (Haiku)"""
+    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+    sp_text = ", ".join(selling_points[:3]) if selling_points else ""
+    resp = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        system=[{"type": "text", "text": "네이버 쇼핑 검색 최적화 전문가. 반드시 JSON 배열만 출력.", "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": f"""
+상품명: '{product_name}', 카테고리: '{category}', 셀링포인트: {sp_text}
+
+구매자가 실제 검색할 키워드 중심으로 태그 10개 생성. 각 태그 최대 15자.
+JSON 배열만: ["태그1", "태그2", ...]
+"""}]
+    )
+    try:
+        text = resp.content[0].text.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:].strip()
+        tags = json.loads(text)
+        if isinstance(tags, list):
+            return [str(t)[:15] for t in tags[:10] if t]
+    except Exception:
+        pass
+    return [product_name[:8], category[:8], "추천", "인기", "가성비"]
+
+
+# ─── 직원 17: Pexels 이미지 연관성 QC ────────────────────────────────────────
+async def employee_pexels_qc(image_url: str, product_name: str, anthropic_key: str) -> dict:
+    """Pexels 이미지 ↔ 상품 연관성 검증 (Sonnet Vision)"""
+    if not anthropic_key or not image_url:
+        return {"relevant": True, "score": 80, "reason": "검수 생략"}
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        import base64 as _b64
+        img_b64 = _b64.standard_b64encode(r.content).decode()
+    except Exception as e:
+        return {"relevant": True, "score": 70, "reason": f"다운로드 실패: {e}"}
+
+    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+    resp = await client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=150,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}},
+                {"type": "text", "text": f"""이 이미지가 '{product_name}' 상품 대표 이미지로 적합한지 판단해줘.
+90+: 상품과 직접 관련 / 70-89: 같은 카테고리 유사 / 70 미만: 무관
+JSON만: {{"score": 85, "relevant": true, "reason": "한 줄 근거"}}"""}
+            ]
+        }]
+    )
+    try:
+        text = resp.content[0].text.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:].strip()
+        result = json.loads(text)
+        result["relevant"] = result.get("score", 0) >= 70
+        return result
+    except Exception:
+        return {"relevant": True, "score": 70, "reason": "파싱 실패"}
+
+
 # ─── 직원 18: 품질검수관 (Image Inspector) ────────────────────────────────────
 async def employee_image_inspector(
     image_url: str,

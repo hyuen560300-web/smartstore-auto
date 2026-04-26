@@ -567,7 +567,7 @@ def get_category_id(product: dict) -> int:
     return DEFAULT_CATEGORY_ID
 
 
-def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
+def build_product_payload(raw: dict, ai: dict, selling_price: int, tags: list = None) -> dict:
     is_free = str(raw.get("delivery_type", "")).strip() in ("무료배송", "무료")
     try:
         delivery_fee = int(float(str(raw.get("delivery_fee", 3000)).replace(",", "")))
@@ -637,6 +637,7 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
                     },
                 },
                 **({"sellerCodeInfo": {"sellerManagementCode": str(raw.get("code", ""))}} if raw.get("code") else {}),
+                **({"searchTagInfo": {"searchTagList": tags[:10]}} if tags else {}),
             },
         },
         "smartstoreChannelProduct": {
@@ -997,8 +998,12 @@ async def build_dalle_prompt_smart(
     """
     scene, _ = _get_scene_context(product_name)
 
-    # DALL-E용: 카테고리 기반 영어 제품명
-    en_name = _get_en_name(product_name, category)
+    # DALL-E용: AI 키워드 번역 (Haiku) → 정적 맵 폴백
+    try:
+        from employees import employee_keyword_translator
+        en_name = await employee_keyword_translator(product_name, category, ANTHROPIC_API_KEY)
+    except Exception:
+        en_name = _get_en_name(product_name, category)
 
     # 미분류(기본 씬) + 카테고리 있으면 Claude로 씬 보강
     is_default = scene == _DEFAULT_SCENE[0]
@@ -1283,14 +1288,20 @@ async def get_product_image(p: dict) -> str | None:
         else:
             print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
 
-    # 2. Pexels 실사진
+    # 2. Pexels 실사진 + 연관성 QC
     print(f"[IMAGE] Pexels 검색 중: {product_name[:20]}", flush=True)
     pexels_url = await search_pexels_image(product_name)
     if pexels_url:
         try:
-            result = await naver_api.upload_image(pexels_url)
-            print(f"[IMAGE] Pexels ✅", flush=True)
-            return result
+            from employees import employee_pexels_qc
+            qc = await employee_pexels_qc(pexels_url, product_name, ANTHROPIC_API_KEY)
+            print(f"[IMAGE] Pexels QC: {qc.get('score',0)}점 — {qc.get('reason','')}", flush=True)
+            if qc.get("relevant", True):
+                result = await naver_api.upload_image(pexels_url)
+                print(f"[IMAGE] Pexels ✅", flush=True)
+                return result
+            else:
+                print(f"[IMAGE] Pexels 연관성 부족 → DALL-E", flush=True)
         except Exception as e:
             print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
     else:
@@ -1319,7 +1330,8 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
     """파이프라인 1: 전 직원 협업 — 소싱→IP→시즌→트렌드→리뷰→설명→이미지→등록"""
     from employees import (
         employee_sourcing_manager, employee_ip_guardian,
-        employee_season_planner, employee_trend_scout, employee_review_analyst
+        employee_season_planner, employee_trend_scout, employee_review_analyst,
+        employee_price_optimizer, employee_tag_generator,
     )
     print(f"[총괄] 상품 등록 시작: {excel_path}", flush=True)
     products = parse_excel(excel_path)
@@ -1369,7 +1381,20 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                 "selling_points": review.get("selling_points", []),
             }
             ai = await generate_product_copy(p, context)
-            price = calculate_selling_price(p["price"])
+
+            # Tool 3: SEO 태그 생성
+            seo_tags = await employee_tag_generator(
+                str(p.get("name", "")), str(p.get("category", "")),
+                review.get("selling_points", []), ANTHROPIC_API_KEY)
+            ai["tags"] = seo_tags
+            print(f"[태그생성] {seo_tags[:3]}...", flush=True)
+
+            # Tool 2: 최적 가격 산정
+            price_result = await employee_price_optimizer(
+                str(p.get("name", "")), str(p.get("category", "")),
+                int(p.get("price", 0)), ANTHROPIC_API_KEY)
+            price = price_result["suggested_price"]
+            print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
 
             # ⑦ 이미지 디렉터: 메인 이미지
             _cat = str(p.get("category", ""))
@@ -1442,7 +1467,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                     results["fail"] += 1; results["errors"].append(reject_msg)
                     continue
 
-            payload = build_product_payload(p, ai, price)
+            payload = build_product_payload(p, ai, price, tags=ai.get("tags"))
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
