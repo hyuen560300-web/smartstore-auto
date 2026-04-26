@@ -339,21 +339,28 @@ async def register_single_product(request: Request):
             return JSONResponse({"status": "error", "message": "이미지 소스 없음"}, status_code=500)
 
         headline_txt = ai.get("headline") or product_name[:18]
-        dalle_banner_raw = await generate_dalle_banner(product_name, headline_txt, category)
-        if dalle_banner_raw:
-            banner_url = await naver_api.upload_image(dalle_banner_raw, is_banner=True)
-        else:
+        if image_url:
+            # 원본 이미지 있으면 DALL-E 배너 스킵
             banner_url = await create_banner_image(
                 naver_img_url, headline_txt, ai.get("sub_headline", ""))
+        else:
+            dalle_banner_raw = await generate_dalle_banner(product_name, headline_txt, category)
+            if dalle_banner_raw:
+                banner_url = await naver_api.upload_image(dalle_banner_raw, is_banner=True)
+            else:
+                banner_url = await create_banner_image(
+                    naver_img_url, headline_txt, ai.get("sub_headline", ""))
 
-        dalle_detail_raw = await generate_dalle_detail_shot(
-            product_name, ai.get("spec_hint", ""), category)
         detail_img_url = ""
-        if dalle_detail_raw:
-            try:
-                detail_img_url = await naver_api.upload_image(dalle_detail_raw)
-            except Exception:
-                pass
+        if not image_url:
+            # 원본 이미지 없을 때만 DALL-E 상세컷 생성
+            dalle_detail_raw = await generate_dalle_detail_shot(
+                product_name, ai.get("spec_hint", ""), category)
+            if dalle_detail_raw:
+                try:
+                    detail_img_url = await naver_api.upload_image(dalle_detail_raw)
+                except Exception:
+                    pass
 
         detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
 
