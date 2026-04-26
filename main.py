@@ -180,6 +180,27 @@ class NaverCommerceAPI:
             return r.json()["images"][0]["url"]
 
     async def register_product(self, payload: dict) -> dict:
+        # 최종 방어층: Naver 금지 특수문자 일괄 제거 (재귀)
+        def _sanitize(obj):
+            if isinstance(obj, str):
+                return re.sub(r'[\\*?"‘’“”]', '', obj).strip()
+            if isinstance(obj, dict):
+                return {k: _sanitize(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_sanitize(x) for x in obj]
+            return obj
+
+        # name 필드만 정밀 sanitize (URL 등은 보호)
+        op = payload.get("originProduct", {})
+        if isinstance(op.get("name"), str):
+            op["name"] = re.sub(r'[\\*?"‘’“”<>|]', '', op["name"]).strip()
+            if not op["name"]:
+                op["name"] = "상품"
+        notice = op.get("detailAttribute", {}).get("productInfoProvidedNotice", {}).get("etc", {})
+        for k in ("itemName", "modelName"):
+            if isinstance(notice.get(k), str):
+                notice[k] = re.sub(r'[\\*?"‘’“”<>|]', '', notice[k]).strip() or "상세페이지 참조"
+
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(
                 f"{NAVER_BASE}/v2/products",
