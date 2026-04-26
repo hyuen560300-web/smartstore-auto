@@ -481,7 +481,7 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int) -> dict:
             "saleType": "NEW",
             "leafCategoryId": get_category_id(raw),
             "name": clean_product_name(ai["product_name"]),
-            "detailContent": ai["description"],
+            "detailContent": ai.get("description", ai.get("emotional_copy", "")),
             "images": {
                 "representativeImage": {"url": str(raw.get("image", ""))},
                 "optionalImages": [],
