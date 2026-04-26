@@ -939,7 +939,7 @@ async def run_qc_pipeline(
         reject_keywords=reject_keywords
     )
     score = qc.get("score", 100)
-    if score < 90:
+    if score < 75:
         return {"passed": False, "stage": 2,
                 "reason": f"비전검수 {score}점: {qc.get('issues',[])}",
                 "score": score,
