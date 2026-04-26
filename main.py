@@ -1153,52 +1153,219 @@ _CATEGORY_EN_MAP = {
 }
 
 # 상품명 키워드 → 영어 토큰 (삽입 순서 = 조합 순서)
+# 긴 키워드를 먼저 배치해 부분 매칭 오류 방지
 _PRODUCT_KEYWORD_MAP = {
-    # 자동차/차량 — 앞에 두어 수식어로 쓰임
-    "차량용":      ["automotive"],
-    "자동차":      ["automotive"],
-    "카시트":      ["car", "seat"],
-    # 시트/쿠션류
-    "통풍시트":    ["ventilated", "seat"],
-    "시트커버":    ["seat", "cover"],
-    "쿠션":        ["cushion"],
-    # 안마/마사지
-    "안마기":      ["neck", "shoulder", "massager", "device"],
-    "마사지기":    ["electric", "massager", "device", "machine"],
-    "마사지":      ["massage", "device"],
-    # 침구/수면
-    "베개":        ["pillow"],
-    # 음료용품
-    "텀블러":      ["tumbler", "bottle"],
-    # 소형 가전
-    "가습기":      ["humidifier"],
-    "에어프라이어": ["air", "fryer"],
-    "청소기":      ["vacuum", "cleaner"],
-    # 의류/패션
-    "운동화":      ["sneakers"],
-    "가방":        ["bag"],
-    "지갑":        ["wallet"],
-    # 화장품
-    "선크림":      ["sunscreen"],
-    "선블록":      ["sunscreen"],
-    # 육아
-    "유아용품":    ["baby", "product"],
-    "기저귀":      ["diaper"],
-    "젖병":        ["baby", "bottle"],
-    # 주방
-    "에어프라이":  ["air", "fryer"],
-    "냄비":        ["cooking", "pot"],
-    "프라이팬":    ["frying", "pan"],
-    # 반려동물
-    "강아지":      ["dog", "pet"],
-    "고양이":      ["cat", "pet"],
-    "펫":          ["pet"],
-    # 스포츠/레저
-    "덤벨":        ["dumbbell"],
-    "요가":        ["yoga", "mat"],
-    "캠핑":        ["camping", "outdoor"],
-    "텐트":        ["tent", "camping"],
+    # ── 자동차/차량 ───────────────────────────────────────────────────────────
+    "차량용":        ["automotive", "car"],
+    "자동차":        ["automotive", "car"],
+    "카시트":        ["car", "seat"],
+    "통풍시트":      ["ventilated", "car", "seat", "cushion"],
+    "시트커버":      ["car", "seat", "cover"],
+    "카매트":        ["car", "floor", "mat"],
+    "핸들커버":      ["steering", "wheel", "cover"],
+    "차량용품":      ["automotive", "car", "accessory"],
+
+    # ── 디지털/가전: 생활 가전 ────────────────────────────────────────────────
+    "에어프라이어":  ["air", "fryer", "kitchen", "appliance"],
+    "에어프라이":    ["air", "fryer", "kitchen", "appliance"],
+    "전자레인지":    ["microwave", "oven", "kitchen", "appliance"],
+    "냉장고":        ["refrigerator", "home", "appliance"],
+    "세탁기":        ["washing", "machine", "home", "appliance"],
+    "식기세척기":    ["dishwasher", "kitchen", "appliance"],
+    "공기청정기":    ["air", "purifier", "home", "appliance"],
+    "제습기":        ["dehumidifier", "home", "appliance"],
+    "가습기":        ["humidifier", "home", "appliance"],
+    "선풍기":        ["electric", "fan", "appliance"],
+    "서큘레이터":    ["air", "circulator", "fan", "appliance"],
+    "에어컨":        ["air", "conditioner", "appliance"],
+    "청소기":        ["vacuum", "cleaner", "appliance"],
+    "스팀청소기":    ["steam", "cleaner", "appliance"],
+    "로봇청소기":    ["robot", "vacuum", "cleaner"],
+    "정수기":        ["water", "purifier", "dispenser"],
+    "전기포트":      ["electric", "kettle", "appliance"],
+    "전기밥솥":      ["electric", "rice", "cooker"],
+    "인덕션":        ["induction", "cooktop", "kitchen"],
+    "토스터":        ["toaster", "kitchen", "appliance"],
+    "블렌더":        ["blender", "mixer", "kitchen"],
+    "커피머신":      ["coffee", "machine", "maker"],
+
+    # ── 디지털: IT/모바일 ─────────────────────────────────────────────────────
+    "노트북":        ["laptop", "computer", "device"],
+    "태블릿":        ["tablet", "computer", "device"],
+    "스마트폰":      ["smartphone", "mobile", "device"],
+    "핸드폰":        ["smartphone", "mobile", "device"],
+    "스마트워치":    ["smartwatch", "wearable", "device"],
+    "이어폰":        ["earphone", "audio", "device"],
+    "헤드폰":        ["headphone", "audio", "device"],
+    "헤드셋":        ["headset", "audio", "device"],
+    "블루투스이어폰":["bluetooth", "earphone", "wireless"],
+    "무선이어폰":    ["wireless", "earphone", "audio"],
+    "스피커":        ["bluetooth", "speaker", "audio", "device"],
+    "충전기":        ["USB", "charger", "cable", "device"],
+    "보조배터리":    ["portable", "battery", "power", "bank"],
+    "케이블":        ["charging", "cable", "USB", "connector"],
+    "허브":          ["USB", "hub", "adapter", "device"],
+    "마우스":        ["mouse", "computer", "accessory"],
+    "키보드":        ["keyboard", "computer", "accessory"],
+    "모니터":        ["monitor", "display", "screen"],
+    "웹캠":          ["webcam", "camera", "device"],
+    "카메라":        ["digital", "camera", "device"],
+    "액션캠":        ["action", "camera", "sports"],
+    "드론":          ["drone", "aerial", "camera"],
+    "프린터":        ["printer", "office", "device"],
+    "블루투스":      ["bluetooth", "wireless", "device"],
+
+    # ── 안마/마사지 ───────────────────────────────────────────────────────────
+    "안마기":        ["neck", "shoulder", "massager", "device"],
+    "안마의자":      ["massage", "chair", "recliner"],
+    "마사지기":      ["electric", "massager", "device", "machine"],
+    "마사지건":      ["massage", "gun", "percussion", "device"],
+    "마사지":        ["massage", "device"],
+    "찜질기":        ["heating", "pad", "therapy", "device"],
+    "온열매트":      ["heated", "mat", "electric", "blanket"],
+
+    # ── 수면/침구 ────────────────────────────────────────────────────────────
+    "베개":          ["pillow", "sleep"],
+    "메모리폼":      ["memory", "foam", "pillow"],
+    "이불":          ["blanket", "comforter", "bedding"],
+    "매트리스":      ["mattress", "bed", "sleep"],
+    "수면안대":      ["sleep", "eye", "mask"],
+
+    # ── 음료/보온 ────────────────────────────────────────────────────────────
+    "텀블러":        ["tumbler", "insulated", "bottle"],
+    "보온병":        ["insulated", "thermos", "bottle"],
+    "물병":          ["water", "bottle"],
+    "머그컵":        ["mug", "cup", "drinkware"],
+
+    # ── 주방용품 ────────────────────────────────────────────────────────────
+    "냄비":          ["cooking", "pot", "kitchen"],
+    "프라이팬":      ["frying", "pan", "cookware"],
+    "도마":          ["cutting", "board", "kitchen"],
+    "칼":            ["kitchen", "knife", "cooking"],
+    "밀폐용기":      ["food", "storage", "container"],
+    "냄비받침":      ["pot", "holder", "kitchen"],
+    "수납함":        ["storage", "organizer", "box"],
+    "쓰레기통":      ["trash", "bin", "waste", "basket"],
+
+    # ── 패션의류 ────────────────────────────────────────────────────────────
+    "티셔츠":        ["t-shirt", "clothing", "apparel"],
+    "후드티":        ["hoodie", "sweatshirt", "clothing"],
+    "맨투맨":        ["sweatshirt", "clothing", "apparel"],
+    "니트":          ["knit", "sweater", "clothing"],
+    "코트":          ["coat", "outerwear", "clothing"],
+    "패딩":          ["padded", "jacket", "winter", "clothing"],
+    "청바지":        ["jeans", "denim", "pants"],
+    "슬랙스":        ["slacks", "dress", "pants"],
+    "원피스":        ["dress", "clothing", "apparel"],
+    "블라우스":      ["blouse", "top", "clothing"],
+    "레깅스":        ["leggings", "activewear"],
+    "수영복":        ["swimsuit", "swimwear"],
+
+    # ── 패션잡화/신발 ────────────────────────────────────────────────────────
+    "운동화":        ["sneakers", "shoes", "footwear"],
+    "구두":          ["dress", "shoes", "leather", "footwear"],
+    "슬리퍼":        ["slippers", "sandals", "footwear"],
+    "부츠":          ["boots", "footwear"],
+    "백팩":          ["backpack", "bag", "accessory"],
+    "가방":          ["bag", "handbag", "accessory"],
+    "숄더백":        ["shoulder", "bag", "accessory"],
+    "크로스백":      ["crossbody", "bag", "accessory"],
+    "지갑":          ["wallet", "leather", "accessory"],
+    "카드지갑":      ["card", "wallet", "accessory"],
+    "모자":          ["hat", "cap", "accessory"],
+    "선글라스":      ["sunglasses", "eyewear", "accessory"],
+    "벨트":          ["belt", "leather", "accessory"],
+    "스카프":        ["scarf", "shawl", "accessory"],
+
+    # ── 화장품/미용 ──────────────────────────────────────────────────────────
+    "선크림":        ["sunscreen", "SPF", "skincare"],
+    "선블록":        ["sunscreen", "SPF", "skincare"],
+    "마스크팩":      ["face", "mask", "sheet", "skincare"],
+    "세럼":          ["serum", "essence", "skincare"],
+    "크림":          ["moisturizer", "cream", "skincare"],
+    "토너":          ["toner", "skincare", "lotion"],
+    "폼클렌저":      ["foam", "cleanser", "skincare"],
+    "샴푸":          ["shampoo", "hair", "care"],
+    "린스":          ["conditioner", "hair", "care"],
+    "트리트먼트":    ["hair", "treatment", "mask"],
+    "드라이기":      ["hair", "dryer", "styling"],
+    "고데기":        ["hair", "straightener", "curler"],
+    "립스틱":        ["lipstick", "lip", "makeup"],
+    "파운데이션":    ["foundation", "makeup", "cosmetic"],
+    "아이섀도":      ["eyeshadow", "eye", "makeup"],
+    "향수":          ["perfume", "fragrance"],
+    "바디워시":      ["body", "wash", "shower", "gel"],
+    "핸드크림":      ["hand", "cream", "lotion"],
+
+    # ── 건강/의료 ────────────────────────────────────────────────────────────
+    "혈압계":        ["blood", "pressure", "monitor"],
+    "체온계":        ["thermometer", "health", "device"],
+    "체중계":        ["weight", "scale", "body"],
+    "보조기":        ["support", "brace", "orthopedic"],
+    "무릎보호대":    ["knee", "support", "brace"],
+    "허리보호대":    ["back", "lumbar", "support", "brace"],
+
+    # ── 출산/육아 ────────────────────────────────────────────────────────────
+    "유아용품":      ["baby", "infant", "product"],
+    "아기":          ["baby", "infant"],
+    "기저귀":        ["diaper", "baby"],
+    "젖병":          ["baby", "bottle", "feeding"],
+    "유모차":        ["baby", "stroller", "pram"],
+    "아기띠":        ["baby", "carrier", "wrap"],
+    "장난감":        ["toy", "children", "play"],
+    "블록":          ["building", "blocks", "toy"],
+    "인형":          ["doll", "stuffed", "toy"],
+
+    # ── 반려동물 ────────────────────────────────────────────────────────────
+    "강아지":        ["dog", "pet", "canine"],
+    "고양이":        ["cat", "pet", "feline"],
+    "펫":            ["pet", "animal", "accessory"],
+    "반려동물":      ["pet", "animal", "care"],
+    "사료":          ["pet", "food", "nutrition"],
+    "리드줄":        ["dog", "leash", "collar"],
+    "캣타워":        ["cat", "tree", "tower"],
+
+    # ── 스포츠/레저 ──────────────────────────────────────────────────────────
+    "덤벨":          ["dumbbell", "weight", "fitness"],
+    "아령":          ["dumbbell", "weight", "fitness"],
+    "바벨":          ["barbell", "weight", "gym"],
+    "요가":          ["yoga", "mat", "fitness"],
+    "필라테스":      ["pilates", "fitness", "mat"],
+    "헬스":          ["fitness", "gym", "equipment"],
+    "러닝화":        ["running", "shoes", "athletic"],
+    "자전거":        ["bicycle", "bike", "cycling"],
+    "수영":          ["swimming", "water", "sports"],
+    "등산":          ["hiking", "outdoor", "mountain"],
+    "텐트":          ["camping", "tent", "outdoor"],
+    "캠핑":          ["camping", "outdoor", "gear"],
+    "낚시":          ["fishing", "rod", "outdoor"],
+    "골프":          ["golf", "club", "sports"],
+
+    # ── 가구/인테리어 ────────────────────────────────────────────────────────
+    "소파":          ["sofa", "couch", "furniture"],
+    "의자":          ["chair", "furniture", "seating"],
+    "책상":          ["desk", "table", "furniture"],
+    "침대":          ["bed", "frame", "furniture"],
+    "수납장":        ["cabinet", "storage", "furniture"],
+    "선반":          ["shelf", "rack", "storage"],
+    "커튼":          ["curtain", "window", "decor"],
+    "러그":          ["rug", "carpet", "floor", "decor"],
+    "조명":          ["lamp", "light", "lighting"],
+    "화분":          ["flower", "pot", "plant"],
+
+    # ── 식품 ────────────────────────────────────────────────────────────────
+    "홍삼":          ["red", "ginseng", "health", "supplement"],
+    "비타민":        ["vitamin", "supplement", "health"],
+    "단백질":        ["protein", "supplement", "nutrition"],
+    "견과류":        ["nuts", "dried", "fruit", "snack"],
+    "커피":          ["coffee", "drink", "beverage"],
+    "차":            ["tea", "herbal", "beverage"],
+
+    # ── 시트/쿠션 (자동차 외) ────────────────────────────────────────────────
+    "쿠션":          ["cushion", "pad", "comfort"],
+    "방석":          ["seat", "cushion", "pad"],
 }
+
 
 def _get_en_name(product_name: str, category: str) -> str:
     """상품명 키워드 조합 우선, 없으면 카테고리 폴백"""
