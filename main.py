@@ -1313,21 +1313,26 @@ async def generate_gemini_image(product_name: str, category: str = "") -> bytes 
         f"No text, no watermarks, no people."
     )
     try:
-        async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                "gemini-2.0-flash-preview-image-generation:generateContent",
-                params={"key": GOOGLE_AI_API_KEY},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-                },
-            )
-            r.raise_for_status()
-            import base64 as _b64
-            for part in r.json()["candidates"][0]["content"]["parts"]:
+        import base64 as _b64
+        for model in (
+            "gemini-2.0-flash-exp",
+            "gemini-2.0-flash-preview-image-generation",
+        ):
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    params={"key": GOOGLE_AI_API_KEY},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+                    },
+                )
+            if r.status_code != 200:
+                print(f"[GEMINI] {model} → HTTP{r.status_code}", flush=True)
+                continue
+            for part in r.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
                 if "inlineData" in part:
-                    print(f"[GEMINI] ✅ {product_name[:20]}", flush=True)
+                    print(f"[GEMINI] ✅ {model} {product_name[:20]}", flush=True)
                     return _b64.b64decode(part["inlineData"]["data"])
     except Exception as e:
         print(f"[GEMINI] 실패: {e}", flush=True)
@@ -1351,7 +1356,7 @@ async def generate_flux_image(product_name: str, category: str = "") -> str | No
     try:
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.post(
-                "https://api.us1.bfl.ai/v1/flux-pro-1.1",
+                "https://api.bfl.ai/v1/flux-pro-1.1",
                 headers={"X-Key": FLUX_API_KEY, "Content-Type": "application/json"},
                 json={"prompt": prompt, "width": 1024, "height": 1024},
             )
@@ -1364,7 +1369,7 @@ async def generate_flux_image(product_name: str, category: str = "") -> str | No
             await asyncio.sleep(2)
             async with httpx.AsyncClient(timeout=15) as c:
                 r = await c.get(
-                    "https://api.us1.bfl.ai/v1/get_result",
+                    "https://api.bfl.ai/v1/get_result",
                     headers={"X-Key": FLUX_API_KEY},
                     params={"id": task_id},
                 )

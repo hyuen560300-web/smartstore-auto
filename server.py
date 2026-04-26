@@ -113,7 +113,7 @@ async def test_image_gen():
         try:
             async with _httpx.AsyncClient(timeout=20) as c:
                 r = await c.post(
-                    "https://api.us1.bfl.ai/v1/flux-pro-1.1",
+                    "https://api.bfl.ai/v1/flux-pro-1.1",
                     headers={"X-Key": FLUX_API_KEY, "Content-Type": "application/json"},
                     json={"prompt": "professional product photo massage cushion", "width": 1024, "height": 1024},
                 )
