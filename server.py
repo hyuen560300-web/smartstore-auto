@@ -177,8 +177,14 @@ async def register_products_debug():
         return JSONResponse({"step": "generate_copy", "error": str(e), **return_data})
 
     try:
+        # DALL-E 직접 테스트
+        from main import generate_dalle_image, _dalle_request, OPENAI_API_KEY
+        return_data["openai_key_set"] = bool(OPENAI_API_KEY)
+        dalle_test = await generate_dalle_image(str(p.get("name", "상품")))
+        return_data["dalle_url"] = dalle_test[:60] if dalle_test else "DALL-E 실패"
+
         img_url = await get_product_image(p)
-        return_data["image"] = img_url[:50] if img_url else "이미지 없음"
+        return_data["image"] = img_url[:60] if img_url else "이미지 없음"
         if not img_url:
             return JSONResponse({"step": "image", "error": "이미지 없음 → 등록 제외", **return_data})
     except Exception as e:
