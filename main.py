@@ -42,34 +42,34 @@ def _extract_hq_url(url: str) -> str:
     return clean.strip('?&')
 
 
-def _process_image_hq(raw_bytes: bytes, target: int = 1000) -> bytes:
+def _process_image_hq(raw_bytes: bytes, target: int = 1000, banner: bool = False) -> bytes:
     """
-    1000×1000 흰 캔버스 중앙 배치 + LANCZOS 고화질 리사이징
-    - 비율 유지하며 target 안에 맞춤
-    - 남는 공간은 흰색(#ffffff) 패딩
-    - quality=95, subsampling=0, optimize, progressive
+    상품컷: 1000×1000 흰 캔버스 중앙 배치 (정사각형 패딩)
+    배너:  가로 860px 유지, 비율 그대로 리사이징 (찌그러짐 방지)
+    필터: 축소=LANCZOS, 업스케일=BICUBIC
+    저장: quality=95, subsampling=0, optimize, progressive
     """
     try:
         from PIL import Image
         img = Image.open(_io.BytesIO(raw_bytes)).convert("RGB")
         w, h = img.size
 
-        # 비율 유지 리사이징 (target 안에 맞춤)
-        scale = min(target / w, target / h)
-        if scale < 1.0:  # 축소 시 LANCZOS
-            new_w, new_h = int(w * scale), int(h * scale)
-            img = img.resize((new_w, new_h), Image.LANCZOS)
-        elif scale > 1.0:  # 업스케일 시 BICUBIC (더 선명)
-            new_w, new_h = int(w * scale), int(h * scale)
-            img = img.resize((new_w, new_h), Image.BICUBIC)
+        if banner:
+            # 배너: 가로 860px에 맞춰 비율 유지 리사이징
+            target_w = 860
+            scale = target_w / w
+            new_w, new_h = target_w, max(1, int(h * scale))
+            filt = Image.LANCZOS if scale < 1.0 else Image.BICUBIC
+            img = img.resize((new_w, new_h), filt)
+            canvas = img  # 배너는 패딩 없이 그대로
         else:
-            new_w, new_h = w, h
-
-        # 흰 캔버스 중앙 배치
-        canvas = Image.new("RGB", (target, target), (255, 255, 255))
-        offset_x = (target - new_w) // 2
-        offset_y = (target - new_h) // 2
-        canvas.paste(img, (offset_x, offset_y))
+            # 상품컷: 1000×1000 흰 캔버스 중앙 배치
+            scale = min(target / w, target / h)
+            filt = Image.LANCZOS if scale < 1.0 else Image.BICUBIC
+            new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+            img = img.resize((new_w, new_h), filt)
+            canvas = Image.new("RGB", (target, target), (255, 255, 255))
+            canvas.paste(img, ((target - new_w) // 2, (target - new_h) // 2))
 
         buf = _io.BytesIO()
         canvas.save(buf, format="JPEG", quality=95, subsampling=0,
@@ -153,7 +153,7 @@ class NaverCommerceAPI:
             "Content-Type": "application/json",
         }
 
-    async def upload_image(self, image_url: str) -> str:
+    async def upload_image(self, image_url: str, is_banner: bool = False) -> str:
         # ① 원본 고해상도 URL 추출 (썸네일 접미사 제거)
         clean_url = _extract_hq_url(image_url)
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
@@ -162,8 +162,8 @@ class NaverCommerceAPI:
                 img_resp = await c.get(image_url)
             img_resp.raise_for_status()
 
-        # ② 1000×1000 흰 캔버스 패딩 + 고화질 저장
-        image_bytes = _process_image_hq(img_resp.content)
+        # ② 이미지 처리 — 배너는 860px 가로 유지, 상품컷은 1000×1000 정사각형
+        image_bytes = _process_image_hq(img_resp.content, target=1000, banner=is_banner)
 
         token = await self.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
@@ -1051,7 +1051,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             headline_txt = ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18]
             dalle_banner_raw = await generate_dalle_banner(str(p.get("name", "")), headline_txt)
             if dalle_banner_raw:
-                banner_url = await naver_api.upload_image(dalle_banner_raw)
+                banner_url = await naver_api.upload_image(dalle_banner_raw, is_banner=True)
                 # 배너도 검수
                 bqc = await employee_image_inspector(banner_url, str(p.get("name","")), ANTHROPIC_API_KEY, is_banner=True)
                 print(f"[검수관] 배너점수:{bqc.get('score')}", flush=True)
