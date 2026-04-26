@@ -957,47 +957,52 @@ async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
 
 
 async def get_product_image(p: dict) -> str | None:
-    """이미지 품질 체크 → 300px 미만/배송안내 → DALL-E → Pexels → None"""
+    """
+    이미지 우선순위:
+    1. 오너클랜 원본 (품질 OK + 404 아닌 경우)
+    2. DALL-E 3 (원본 실패 시 우선)
+    3. Pexels (DALL-E 실패 시)
+    """
     image_url = str(p.get("image", "")).strip()
+    product_name = str(p.get("name", ""))
 
-    # 1. 오너클랜 이미지 품질 체크
+    # 1. 오너클랜 이미지 시도
     if image_url.startswith("http"):
         ok, reason, w, h = await _check_image_quality(image_url)
         if ok:
             try:
-                return await naver_api.upload_image(image_url)
-            except Exception:
-                print(f"[IMAGE] 오너클랜 업로드 실패 → Pexels 폴백", flush=True)
-        elif reason == "too_small":
-            # 너무 작으면 DALL-E 직행
-            print(f"[IMAGE] 원본 {w}×{h} 너무 작음 → DALL-E", flush=True)
-            dalle_url = await generate_dalle_image(str(p.get("name", "")))
-            if dalle_url:
-                try:
-                    return await naver_api.upload_image(dalle_url)
-                except Exception:
-                    pass
-            # DALL-E 실패 시 Pexels로 계속
-        elif reason == "text_heavy":
-            print(f"[IMAGE] 배송안내 이미지 제외 → Pexels 폴백", flush=True)
+                result = await naver_api.upload_image(image_url)
+                print(f"[IMAGE] 오너클랜 ✅ {w}×{h}", flush=True)
+                return result
+            except Exception as e:
+                print(f"[IMAGE] 오너클랜 업로드 실패: {e}", flush=True)
+        else:
+            print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
 
-    # 2. Pexels 폴백
-    pexels_url = await search_pexels_image(str(p.get("name", "")))
-    if pexels_url:
-        try:
-            return await naver_api.upload_image(pexels_url)
-        except Exception:
-            pass
-
-    # 3. DALL-E 폴백
-    print(f"[IMAGE] Pexels 실패, DALL-E 생성 중...", flush=True)
-    dalle_url = await generate_dalle_image(str(p.get("name", "")))
+    # 2. DALL-E 3 폴백 (첫 번째 폴백)
+    print(f"[IMAGE] DALL-E 생성 중: {product_name[:20]}", flush=True)
+    dalle_url = await generate_dalle_image(product_name)
     if dalle_url:
         try:
-            return await naver_api.upload_image(dalle_url)
-        except Exception:
-            pass
+            result = await naver_api.upload_image(dalle_url)
+            print(f"[IMAGE] DALL-E ✅", flush=True)
+            return result
+        except Exception as e:
+            print(f"[IMAGE] DALL-E 업로드 실패: {e}", flush=True)
+    else:
+        print(f"[IMAGE] DALL-E 생성 실패 → Pexels", flush=True)
 
+    # 3. Pexels 폴백
+    pexels_url = await search_pexels_image(product_name)
+    if pexels_url:
+        try:
+            result = await naver_api.upload_image(pexels_url)
+            print(f"[IMAGE] Pexels ✅", flush=True)
+            return result
+        except Exception as e:
+            print(f"[IMAGE] Pexels 업로드 실패: {e}", flush=True)
+
+    print(f"[IMAGE] ❌ 모든 소스 실패: {product_name[:20]}", flush=True)
     return None
 
 

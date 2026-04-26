@@ -49,6 +49,19 @@ def health():
     return {"status": "ok", "service": "smartstore_auto", "version": "3.0"}
 
 
+@app.get("/check-env")
+def check_env():
+    """API 키 설정 여부 확인"""
+    return {
+        "ANTHROPIC_API_KEY": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY")),
+        "PEXELS_API_KEY": bool(os.environ.get("PEXELS_API_KEY")),
+        "PIXABAY_API_KEY": bool(os.environ.get("PIXABAY_API_KEY")),
+        "NAVER_CLIENT_ID": bool(os.environ.get("NAVER_CLIENT_ID")),
+        "GOOGLE_API_KEY": bool(os.environ.get("GOOGLE_API_KEY")),
+    }
+
+
 @app.get("/debug-naver")
 async def debug_naver():
     """네이버 API 인증 진단"""
