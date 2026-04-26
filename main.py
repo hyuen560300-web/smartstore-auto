@@ -1515,7 +1515,7 @@ async def get_product_image(p: dict) -> str | None:
     if ai_result:
         return ai_result
 
-    # 4. DALL-E 3 최종 폴백
+    # 4. DALL-E 3 폴백
     print(f"[IMAGE] DALL-E 생성 중: {product_name[:20]}", flush=True)
     dalle_url = await generate_dalle_image(product_name)
     if dalle_url:
@@ -1525,6 +1525,27 @@ async def get_product_image(p: dict) -> str | None:
             return result
         except Exception as e:
             print(f"[IMAGE] DALL-E 업로드 실패: {e}", flush=True)
+
+    # 5. AI 최종 시도 — QC 없이 (DALL-E 빌링 한도 등 완전 실패 시 보험)
+    print(f"[IMAGE] AI 최종 시도(QC 스킵): {product_name[:20]}", flush=True)
+    is_dig = await _is_digital_category(category)
+    last_fns = (
+        [generate_flux_image, generate_gemini_image] if is_dig
+        else [generate_gemini_image, generate_flux_image]
+    )
+    for gen_fn in last_fns:
+        raw = await gen_fn(product_name, category)
+        if raw:
+            try:
+                url = (
+                    await naver_api.upload_raw_image(raw)
+                    if isinstance(raw, bytes)
+                    else await naver_api.upload_image(raw)
+                )
+                print(f"[IMAGE] AI 최종 ✅ (QC 없음)", flush=True)
+                return url
+            except Exception as e:
+                print(f"[IMAGE] AI 최종 업로드 실패: {e}", flush=True)
 
     print(f"[IMAGE] ❌ 모든 소스 실패: {product_name[:20]}", flush=True)
     return None
