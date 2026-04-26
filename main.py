@@ -499,10 +499,10 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
         }]
     )
     text = resp.content[0].text.strip()
-    if "```" in text:
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:].strip()
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start != -1 and end > start:
+        text = text[start:end]
     return json.loads(text)
 
 
