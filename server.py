@@ -180,15 +180,19 @@ async def register_products_debug():
         # DALL-E 직접 테스트
         from main import generate_dalle_image, _dalle_request, OPENAI_API_KEY
         return_data["openai_key_set"] = bool(OPENAI_API_KEY)
+        # OpenAI API 직접 호출 테스트
+        import httpx as _httpx
         try:
-            dalle_test = await _dalle_request(
-                f"white background product photo, {p.get('name','product')}",
-                size="1024x1024", quality="standard"
-            )
-            return_data["dalle_url"] = dalle_test[:80] if dalle_test else "DALL-E None"
+            async with _httpx.AsyncClient(timeout=60) as _c:
+                _r = await _c.post(
+                    "https://api.openai.com/v1/images/generations",
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                    json={"model": "dall-e-3", "prompt": "white background product photo", "n": 1, "size": "1024x1024", "quality": "standard"}
+                )
+                return_data["dalle_status"] = _r.status_code
+                return_data["dalle_url"] = str(_r.json()).replace('"', '')[:120]
         except Exception as de:
-            return_data["dalle_url"] = f"DALL-E 에러: {str(de)[:100]}"
-            dalle_test = None
+            return_data["dalle_url"] = f"에러: {str(de)[:100]}"
 
         img_url = await get_product_image(p)
         return_data["image"] = img_url[:60] if img_url else "이미지 없음"
