@@ -66,13 +66,27 @@ def health():
 def check_env():
     """API 키 설정 여부 확인"""
     return {
-        "ANTHROPIC_API_KEY": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY")),
-        "PEXELS_API_KEY": bool(os.environ.get("PEXELS_API_KEY")),
-        "PIXABAY_API_KEY": bool(os.environ.get("PIXABAY_API_KEY")),
-        "NAVER_CLIENT_ID": bool(os.environ.get("NAVER_CLIENT_ID")),
-        "GOOGLE_API_KEY": bool(os.environ.get("GOOGLE_API_KEY")),
+        "ANTHROPIC_API_KEY":  bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "OPENAI_API_KEY":     bool(os.environ.get("OPENAI_API_KEY")),
+        "PEXELS_API_KEY":     bool(os.environ.get("PEXELS_API_KEY")),
+        "GOOGLE_AI_API_KEY":  bool(os.environ.get("GOOGLE_AI_API_KEY")),
+        "FLUX_API_KEY":       bool(os.environ.get("FLUX_API_KEY")),
+        "NAVER_CLIENT_ID":    bool(os.environ.get("NAVER_CLIENT_ID")),
+        "GOOGLE_API_KEY":     bool(os.environ.get("GOOGLE_API_KEY")),
     }
+
+
+@app.get("/test-dalle")
+async def test_dalle():
+    """DALL-E 단독 동작 확인"""
+    from main import generate_dalle_image, OPENAI_API_KEY
+    if not OPENAI_API_KEY:
+        return JSONResponse({"status": "skip", "reason": "OPENAI_API_KEY 없음"})
+    try:
+        url = await generate_dalle_image("product photo test")
+        return JSONResponse({"status": "ok" if url else "fail", "url": url})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
 
 
 @app.get("/debug-naver")
