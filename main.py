@@ -1724,30 +1724,39 @@ async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
 
 async def get_product_image(p: dict) -> str | None:
     """
-    이미지 우선순위:
-    1. 오너클랜 원본 + Flux Kontext 배경 교체 (실패 시 원본 그대로)
-    2. Pexels 실사진 (QC 통과)
-    3. AI 생성 + Vision QC (Pexels < 60: Flux → Gemini / 이상: Gemini)
-    4. DALL-E 3 최종 폴백
+    이미지 우선순위 (모든 AI 이미지 Vision QC 95점 이상만 통과):
+    1. 오너클랜 원본 + Flux Kontext 배경교체 → QC 95+ 통과? 사용 : 원본 그대로
+    2. Pexels 실사진 (QC 75+ 통과 시)
+    3. AI 생성 + QC 95+ (Pexels<60: Flux→Gemini / 이상: Gemini)
+    4. DALL-E + QC 95+ → 미달 시 원본 폴백
+    5. 최종 AI + QC 95+ → 미달 시 원본 폴백 / 원본 없으면 불가피 사용
     """
     image_url = str(p.get("image", "")).strip()
     product_name = str(p.get("name", ""))
     category = str(p.get("category", ""))
 
-    # 1. 오너클랜 원본 — Flux Kontext로 배경 교체 → 실패 시 원본 그대로 사용
+    # 1. 오너클랜 원본 — Flux Kontext 배경 교체 → QC 95점 이상만 사용, 미달 시 원본
     if image_url.startswith("http"):
         ok, reason, w, h = await _check_image_quality(image_url)
         if ok:
+            from employees import employee_image_inspector
+            _, _rej_kws = _get_scene_context(product_name)
             print(f"[IMAGE] Flux 배경 교체 시도: {product_name[:20]}", flush=True)
             edited_url = await generate_flux_bg_edit(image_url, product_name, category)
             if edited_url:
                 try:
-                    result = await naver_api.upload_image(edited_url)
-                    print(f"[IMAGE] Flux 배경교체 ✅", flush=True)
-                    return result
+                    edited_result = await naver_api.upload_image(edited_url)
+                    qc = await employee_image_inspector(
+                        edited_result, product_name, ANTHROPIC_API_KEY, reject_keywords=_rej_kws)
+                    score = qc.get("score", 0)
+                    print(f"[IMAGE] Flux 배경교체 QC: {score}점", flush=True)
+                    if qc.get("passed", False):
+                        print(f"[IMAGE] Flux 배경교체 ✅", flush=True)
+                        return edited_result
+                    print(f"[IMAGE] Flux 배경교체 {score}점 미달 → 원본 사용", flush=True)
                 except Exception as e:
                     print(f"[IMAGE] Flux 배경교체 업로드 실패: {e}", flush=True)
-            # 배경 교체 실패 → 원본 폴백
+            # 배경 교체 실패 or QC 미달 → 원본 그대로
             try:
                 result = await naver_api.upload_image(image_url)
                 print(f"[IMAGE] 오너클랜 원본 ✅ {w}×{h}", flush=True)
@@ -1787,36 +1796,69 @@ async def get_product_image(p: dict) -> str | None:
     if ai_result:
         return ai_result
 
-    # 4. DALL-E 3 폴백
+    # 4. DALL-E 3 폴백 — QC 95점 이상만 사용, 미달 시 원본 폴백
     print(f"[IMAGE] DALL-E 생성 중: {product_name[:20]}", flush=True)
     dalle_url = await generate_dalle_image(product_name)
     if dalle_url:
         try:
-            result = await naver_api.upload_image(dalle_url)
-            print(f"[IMAGE] DALL-E ✅", flush=True)
-            return result
+            dalle_result = await naver_api.upload_image(dalle_url)
+            from employees import employee_image_inspector
+            qc = await employee_image_inspector(
+                dalle_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
+            score = qc.get("score", 0)
+            print(f"[IMAGE] DALL-E QC: {score}점", flush=True)
+            if qc.get("passed", False):
+                print(f"[IMAGE] DALL-E ✅", flush=True)
+                return dalle_result
+            # QC 미달 → 원본 있으면 원본 폴백
+            if image_url.startswith("http"):
+                try:
+                    orig = await naver_api.upload_image(image_url)
+                    print(f"[IMAGE] DALL-E {score}점 미달 → 원본 폴백 ✅", flush=True)
+                    return orig
+                except Exception:
+                    pass
+            print(f"[IMAGE] DALL-E {score}점 미달 (원본 없음)", flush=True)
         except Exception as e:
             print(f"[IMAGE] DALL-E 업로드 실패: {e}", flush=True)
 
-    # 5. AI 최종 시도 — QC 없이 (DALL-E 빌링 한도 등 완전 실패 시 보험)
-    print(f"[IMAGE] AI 최종 시도(QC 스킵): {product_name[:20]}", flush=True)
+    # 5. AI 최종 시도 — QC 95점 기준, 미달 시 원본 폴백, 원본 없으면 불가피 사용
+    print(f"[IMAGE] AI 최종 시도: {product_name[:20]}", flush=True)
+    from employees import employee_image_inspector
     last_fns = (
         [generate_flux_image, generate_gemini_image] if use_flux
         else [generate_gemini_image, generate_flux_image]
     )
     for gen_fn in last_fns:
         raw = await gen_fn(product_name, category)
-        if raw:
-            try:
-                url = (
-                    await naver_api.upload_raw_image(raw)
-                    if isinstance(raw, bytes)
-                    else await naver_api.upload_image(raw)
-                )
-                print(f"[IMAGE] AI 최종 ✅ (QC 없음)", flush=True)
+        if not raw:
+            continue
+        try:
+            url = (
+                await naver_api.upload_raw_image(raw)
+                if isinstance(raw, bytes)
+                else await naver_api.upload_image(raw)
+            )
+            qc = await employee_image_inspector(
+                url, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
+            score = qc.get("score", 0)
+            print(f"[IMAGE] AI 최종 QC: {score}점", flush=True)
+            if qc.get("passed", False):
+                print(f"[IMAGE] AI 최종 ✅", flush=True)
                 return url
-            except Exception as e:
-                print(f"[IMAGE] AI 최종 업로드 실패: {e}", flush=True)
+            # QC 미달 → 원본 있으면 원본 폴백
+            if image_url.startswith("http"):
+                try:
+                    orig = await naver_api.upload_image(image_url)
+                    print(f"[IMAGE] AI {score}점 미달 → 원본 폴백 ✅", flush=True)
+                    return orig
+                except Exception:
+                    pass
+            # 원본도 없으면 QC 미달이라도 사용 (이미지 없는 것보다 낫다)
+            print(f"[IMAGE] AI {score}점 미달이나 원본 없어 불가피 사용", flush=True)
+            return url
+        except Exception as e:
+            print(f"[IMAGE] AI 최종 업로드 실패: {e}", flush=True)
 
     print(f"[IMAGE] ❌ 모든 소스 실패: {product_name[:20]}", flush=True)
     return None
