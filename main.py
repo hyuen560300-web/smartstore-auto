@@ -997,9 +997,8 @@ async def build_dalle_prompt_smart(
     """
     scene, _ = _get_scene_context(product_name)
 
-    # DALL-E용: 한글 제거 후 영문만 남기거나, 없으면 "product" 사용
-    en_name = re.sub(r'[가-힣ㄱ-ㆎ\s]', ' ', product_name).strip()
-    en_name = re.sub(r'\s+', ' ', en_name).strip() or "product"
+    # DALL-E용: 카테고리 기반 영어 제품명
+    en_name = _get_en_name(product_name, category)
 
     # 미분류(기본 씬) + 카테고리 있으면 Claude로 씬 보강
     is_default = scene == _DEFAULT_SCENE[0]
@@ -1060,6 +1059,35 @@ async def _dalle_request(prompt: str, size: str = "1024x1024", quality: str = "h
     except Exception as e:
         print(f"[DALLE] 실패: {e}", flush=True)
         return None
+
+
+# ─── 카테고리별 DALL-E 영어 제품명 맵 ───────────────────────────────────────
+_CATEGORY_EN_MAP = {
+    "생활/건강":    "health and lifestyle product",
+    "패션잡화":     "fashion accessory",
+    "스포츠/레저":  "sports and leisure item",
+    "가구/인테리어": "home interior furniture item",
+    "패션의류":     "fashion clothing apparel",
+    "디지털/가전":  "electronic digital device",
+    "화장품/미용":  "beauty cosmetic skincare product",
+    "식품":        "food and health food item",
+    "출산/육아":    "baby and parenting item",
+    "자동차용품":   "car interior automotive accessory",
+    "주방용품":     "kitchen cooking utensil",
+    "반려동물":     "pet accessory",
+    "운동/스포츠":  "fitness sports equipment",
+    "청소용품":     "cleaning household tool",
+}
+
+def _get_en_name(product_name: str, category: str) -> str:
+    """카테고리 기반으로 DALL-E용 영어 제품 설명 반환"""
+    top_cat = category.split(">")[0].strip() if category else ""
+    if top_cat in _CATEGORY_EN_MAP:
+        return _CATEGORY_EN_MAP[top_cat]
+    # 카테고리 매핑 없으면 상품명에서 영문만 추출, 없으면 기본값
+    en_only = re.sub(r'[가-힣ㄱ-ㆎ\s]', ' ', product_name).strip()
+    en_only = re.sub(r'\s+', ' ', en_only).strip()
+    return en_only if len(en_only) > 3 else "lifestyle product"
 
 
 # ─── 키워드 기반 씬 컨텍스트 맵 ──────────────────────────────────────────────
