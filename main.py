@@ -96,12 +96,31 @@ class NaverCommerceAPI:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
             img_resp = await c.get(image_url)
             img_resp.raise_for_status()
+
+        # 1000×1000 이상으로 업스케일 후 고화질 저장
+        try:
+            from PIL import Image
+            import io as _io
+            img = Image.open(_io.BytesIO(img_resp.content)).convert("RGB")
+            w, h = img.size
+            target = 1000
+            if w < target or h < target:
+                scale = target / min(w, h)
+                new_w, new_h = int(w * scale), int(h * scale)
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+            buf = _io.BytesIO()
+            img.save(buf, format="JPEG", quality=95, subsampling=0,
+                     optimize=True, progressive=True)
+            image_bytes = buf.getvalue()
+        except Exception:
+            image_bytes = img_resp.content
+
         token = await self.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(
                 f"{NAVER_BASE}/v1/product-images/upload",
                 headers={"Authorization": f"Bearer {token}"},
-                files={"imageFiles": ("image.jpg", img_resp.content, "image/jpeg")}
+                files={"imageFiles": ("image.jpg", image_bytes, "image/jpeg")}
             )
             r.raise_for_status()
             return r.json()["images"][0]["url"]
