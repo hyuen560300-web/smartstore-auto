@@ -434,6 +434,18 @@ def _dg_img_url(thumb: str) -> str:
     return f"{DOMEGGOOK_IMG_BASE}{thumb}"
 
 
+def _dg_stt_to_original(url: str) -> str:
+    """도매꾹 _stt_NNN.png (센터크롭 스탬프) → _img_760 (원본 비율) URL 변환.
+    _stt_ 썸네일은 정사각형 센터크롭이라 상품 상하가 잘려 보임.
+    _img_760 은 원본 비율을 유지한 최대 760px 이미지.
+    예: xxx_stt_330.png?hash=abc → xxx_img_760?hash=abc"""
+    if not url or "_stt_" not in url:
+        return url
+    # _stt_NNN.png → _img_760 (확장자 .png 제거, 크기를 760으로 교체)
+    import re as _re2
+    return _re2.sub(r'_stt_\d+\.png', '_img_760', url)
+
+
 async def _dg_item_detail(item_no: str) -> dict:
     """도매꾹 상품 상세 조회 ver=4.5 (getItemView).
     반환: data["domeggook"] 내부 dict (basis/price/qty/thumb 포함). 실패 시 {}."""
@@ -467,12 +479,14 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     if price <= 0:
         return None
 
-    # 이미지: 상세 original > 상세 large > 목록 thumb 순
-    thumb_obj = detail.get("thumb", {}) if detail else {}
+    # 이미지 우선순위: 상세 original > 상세 large > 목록 thumb(_img_760 변환)
+    # 목록의 thumb은 _stt_330.png(센터크롭) → _img_760(원본 비율)으로 변환 필수
+    thumb_obj  = detail.get("thumb", {}) if detail else {}
+    list_thumb = _dg_stt_to_original(str(item.get("thumb", "")))  # 크롭 → 원본 비율
     image = (
-        thumb_obj.get("original") or
-        thumb_obj.get("large") or
-        str(item.get("thumb", ""))
+        thumb_obj.get("original") or   # getItemView: 원본 비율 760px
+        thumb_obj.get("large") or      # getItemView: 원본 비율 330px
+        list_thumb                     # getItemList: _stt→_img 변환된 760px
     )
 
     # 카테고리: 상세 basis.section (예: "생활/주방 > 수납/정리")
