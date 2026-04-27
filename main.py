@@ -435,7 +435,8 @@ def _dg_img_url(thumb: str) -> str:
 
 
 async def _dg_item_detail(item_no: str) -> dict:
-    """도매꾹 상품 상세 조회 ver=4.5 (getItemView). 실패 시 {} 반환."""
+    """도매꾹 상품 상세 조회 ver=4.5 (getItemView).
+    반환: data["domeggook"] 내부 dict (basis/price/qty/thumb 포함). 실패 시 {}."""
     if not DOMEGGOOK_API_KEY:
         return {}
     try:
@@ -445,14 +446,18 @@ async def _dg_item_detail(item_no: str) -> dict:
                 "aid": DOMEGGOOK_API_KEY, "no": item_no, "om": "json",
             })
             r.raise_for_status()
-            return r.json()
+            return r.json().get("domeggook", {})
     except Exception as e:
         print(f"[DOMEGGOOK] 상세조회 실패({item_no}): {e}", flush=True)
         return {}
 
 
 def _dg_to_product(item: dict, detail: dict) -> dict | None:
-    """도매꾹 item + detail → 내부 product dict 변환. 필수 필드 없으면 None."""
+    """도매꾹 getItemList item + getItemView detail → 내부 product dict.
+    실제 응답 구조 기반:
+      item: {no, title, thumb(풀URL), price, deli}
+      detail: {basis:{title,section,keywords}, price:{dome}, qty:{inventory}, thumb:{original,large}}
+    """
     no   = str(item.get("no", "")).strip()
     name = str(item.get("title", "") or "").strip()
     if not no or not name:
@@ -462,27 +467,26 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     if price <= 0:
         return None
 
-    # 이미지: 상세 > 목록 순서로 우선
-    basis   = detail.get("basis", {}) if detail else {}
-    img_obj = detail.get("image", {}) if detail else {}
-    thumb   = img_obj.get("thumb") or img_obj.get("main") or item.get("thumb", "")
-    image   = _dg_img_url(str(thumb))
+    # 이미지: 상세 original > 상세 large > 목록 thumb 순
+    thumb_obj = detail.get("thumb", {}) if detail else {}
+    image = (
+        thumb_obj.get("original") or
+        thumb_obj.get("large") or
+        str(item.get("thumb", ""))
+    )
 
-    # 카테고리 — basis 내 다양한 키 시도
-    category = ""
-    for ck in ("카테고리명", "카테고리", "category", "대분류"):
-        if basis.get(ck):
-            category = str(basis[ck])
-            break
+    # 카테고리: 상세 basis.section (예: "생활/주방 > 수납/정리")
+    basis    = detail.get("basis", {}) if detail else {}
+    category = str(basis.get("section") or basis.get("keywords") or "").split(">")[0].strip()
 
-    # 재고
-    qty = detail.get("qty", {}) if detail else {}
-    stock = min(_to_int(str(qty.get("stock", 100))) or 100, 100)
+    # 재고: qty.inventory (기본 100 캡)
+    qty   = detail.get("qty", {}) if detail else {}
+    stock = min(_to_int(str(qty.get("inventory", 100))) or 100, 100)
 
     return {
-        "code":     f"DG_{no}",   # 중복 방지 고유코드
+        "code":     f"DG_{no}",
         "name":     name,
-        "price":    price,        # 도매가 = 공급가
+        "price":    price,       # 도매꾹 도매가 = 공급가
         "image":    image,
         "category": category,
         "stock":    stock,
@@ -498,7 +502,12 @@ async def fetch_domeggook_products(
     max_price: int = 150000,
 ) -> list[dict]:
     """도매꾹 키워드 검색 → 상세 병렬 조회 → product dict 리스트 반환.
-    pool_size: sourcing manager에게 넘길 후보 수 (limit의 3배 권장)."""
+    pool_size: sourcing manager에게 넘길 후보 수 (limit의 3배 권장).
+
+    정확한 파라미터명 (오류 발생 주의):
+      sz=페이지당수, mnp/mxp=가격범위, who=S(판매자부담=무료배송), org=kr(국산), market=dome
+    응답 구조: data["domeggook"]["list"]["item"]
+    """
     if not DOMEGGOOK_API_KEY:
         print("[DOMEGGOOK] DOMEGGOOK_API_KEY 없음", flush=True)
         return []
@@ -515,15 +524,19 @@ async def fetch_domeggook_products(
                 r = await c.get(DOMEGGOOK_API_URL, params={
                     "ver": "4.1", "mode": "getItemList",
                     "aid": DOMEGGOOK_API_KEY,
+                    "market": "dome",
                     "kw": kw, "om": "json",
-                    "minPrice": str(min_price), "maxPrice": str(max_price),
-                    "deli": "free",       # 무료배송 상품만
-                    "origin": "domestic", # 국내 상품만
-                    "rows": "30",
+                    "mnp": str(min_price), "mxp": str(max_price),
+                    "who": "S",    # 판매자 배송비 부담 (구매자 무료)
+                    "org": "kr",   # 국산 상품만
+                    "sz": "30",    # 페이지당 30개
+                    "pg": "1",
+                    "so": "rd",    # 추천도순
                 })
                 r.raise_for_status()
                 data = r.json()
-            items = data.get("item", [])
+            # 실제 응답: data["domeggook"]["list"]["item"]
+            items = data.get("domeggook", {}).get("list", {}).get("item", [])
             if not isinstance(items, list):
                 items = []
             added = 0
@@ -533,7 +546,8 @@ async def fetch_domeggook_products(
                     seen.add(no)
                     raw_items.append(it)
                     added += 1
-            print(f"[DOMEGGOOK] '{kw}' → +{added}개 (누적 {len(raw_items)})", flush=True)
+            total = data.get("domeggook", {}).get("header", {}).get("numberOfItems", "?")
+            print(f"[DOMEGGOOK] '{kw}' → +{added}개 (전체 {total}개, 누적 {len(raw_items)})", flush=True)
             await asyncio.sleep(0.35)   # API 제한 180req/min 준수
         except Exception as e:
             print(f"[DOMEGGOOK] '{kw}' 검색 오류: {e}", flush=True)
@@ -541,13 +555,20 @@ async def fetch_domeggook_products(
     if not raw_items:
         return []
 
-    # 상세 병렬 조회
+    # 상세 병렬 조회 (asyncio.gather 한 번에 너무 많으면 API 제한 → 10개씩 청크)
     candidates = raw_items[:pool_size]
     print(f"[DOMEGGOOK] 상세 조회 시작: {len(candidates)}개", flush=True)
-    details = await asyncio.gather(
-        *[_dg_item_detail(str(it["no"])) for it in candidates],
-        return_exceptions=True,
-    )
+    details: list = []
+    chunk_size = 10
+    for i in range(0, len(candidates), chunk_size):
+        chunk = candidates[i:i + chunk_size]
+        chunk_results = await asyncio.gather(
+            *[_dg_item_detail(str(it["no"])) for it in chunk],
+            return_exceptions=True,
+        )
+        details.extend(chunk_results)
+        if i + chunk_size < len(candidates):
+            await asyncio.sleep(0.5)
 
     products = []
     for it, det in zip(candidates, details):
