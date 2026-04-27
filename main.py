@@ -296,7 +296,7 @@ class NaverCommerceAPI:
             )
             return r.status_code == 200
 
-    async def list_products(self, page: int = 1, size: int = 50) -> dict:
+    async def list_products(self, page: int = 1, size: int = 50, days: int = 365) -> dict:
         """등록된 상품 목록 조회 (상품명/가격/상태 포함).
         search API는 ID만 반환하므로 개별 상세 조회를 asyncio.gather로 병렬 처리."""
         now = datetime.now(timezone.utc)
@@ -313,7 +313,7 @@ class NaverCommerceAPI:
                         "size": size,
                         "orderType": "NO",
                         "periodType": "PROD_REG_DAY",
-                        "fromDate": (now - timedelta(days=365)).strftime("%Y-%m-%d"),
+                        "fromDate": (now - timedelta(days=days)).strftime("%Y-%m-%d"),
                         "toDate": now.strftime("%Y-%m-%d"),
                     }
                 )

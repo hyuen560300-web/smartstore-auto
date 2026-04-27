@@ -7,7 +7,7 @@ import os
 import json
 import sys
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, BackgroundTasks, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from pathlib import Path
@@ -933,14 +933,34 @@ async def expand_platform(request: Request):
 
 @app.get("/list-products")
 async def list_products(page: int = 1, size: int = 50):
-    """📦 등록된 상품 목록 조회"""
+    """📦 등록된 상품 목록 조회 — 최신 도매꾹 신규 상품만 반환 (오너클랜 구 상품 제외)"""
     try:
-        result = await naver_api.list_products(page, size)
+        new_product_days = int(os.environ.get("NEW_PRODUCT_DAYS", "90"))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=new_product_days)
+
+        result = await naver_api.list_products(page, size, days=new_product_days)
         products = result.get("contents", [])
+
+        def _reg_dt(p: dict) -> datetime:
+            raw = p.get("originProduct", {}).get("regDate", "")
+            if not raw:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            try:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except Exception:
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+        # cutoff 이후 등록된 신규 상품만 선택 후 최신순 정렬
+        filtered = sorted(
+            [p for p in products if _reg_dt(p) >= cutoff],
+            key=_reg_dt,
+            reverse=True,
+        )
+
         return JSONResponse({
-            "total": result.get("totalElements", 0),
+            "total": len(filtered),
             "page": page,
-            "count": len(products),
+            "count": len(filtered),
             "products": [
                 {
                     "id": p.get("originProductNo"),
@@ -960,8 +980,9 @@ async def list_products(page: int = 1, size: int = 50):
                         .get("naverShoppingSearchInfo", {})
                         .get("categoryName", "")
                     ),
+                    "regDate": p.get("originProduct", {}).get("regDate", ""),
                 }
-                for p in products
+                for p in filtered
             ]
         })
     except Exception as e:
