@@ -353,8 +353,8 @@ class NaverCommerceAPI:
             data["contents"] = enriched
             return data
 
-    async def update_product(self, product_id: str, payload: dict) -> bool:
-        """상품 정보 수정 (이미지 URL, 설명 등 부분 업데이트)."""
+    async def update_product(self, product_id: str, payload: dict) -> tuple[bool, str]:
+        """상품 정보 수정. 반환: (성공여부, 에러메시지)"""
         try:
             async with httpx.AsyncClient(timeout=60) as c:
                 r = await c.put(
@@ -362,13 +362,15 @@ class NaverCommerceAPI:
                     headers=await self._headers(),
                     json={"originProduct": payload},
                 )
-            ok = r.status_code == 200
-            if not ok:
-                print(f"[UPDATE] HTTP {r.status_code} ({product_id}): {r.text[:300]}", flush=True)
-            return ok
+            if r.status_code == 200:
+                return True, ""
+            msg = f"HTTP {r.status_code}: {r.text[:400]}"
+            print(f"[UPDATE] ❌ ({product_id}): {msg}", flush=True)
+            return False, msg
         except Exception as e:
-            print(f"[UPDATE] 상품 수정 실패({product_id}): {e}", flush=True)
-            return False
+            msg = str(e)[:200]
+            print(f"[UPDATE] 상품 수정 실패({product_id}): {msg}", flush=True)
+            return False, msg
 
     async def set_product_status(self, product_id: str, status: str) -> bool:
         """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)"""
@@ -2564,7 +2566,7 @@ async def pipeline_fix_products(
 
     results = {
         "total": 0, "image_fixed": 0, "description_fixed": 0,
-        "skipped": 0, "errors": [], "products": [],
+        "updated": 0, "skipped": 0, "errors": [], "products": [],
     }
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -2707,12 +2709,14 @@ async def pipeline_fix_products(
                 full_payload = {k: v for k, v in origin.items() if k not in _READONLY}
                 full_payload.update(update_payload)   # 이미지/설명 덮어씌우기
 
-                ok = await naver_api.update_product(product_id, full_payload)
+                ok, err_msg = await naver_api.update_product(product_id, full_payload)
                 prod_log["updated"] = ok
                 if ok:
+                    results["updated"] += 1
                     print(f"  [UPDATE] ✅ {product_id}", flush=True)
                 else:
-                    print(f"  [UPDATE] ❌ {product_id}", flush=True)
+                    print(f"  [UPDATE] ❌ {product_id}: {err_msg}", flush=True)
+                    results["errors"].append(f"{name[:20]}: {err_msg}")
             except Exception as e:
                 results["errors"].append(f"{name[:20]}: {str(e)[:60]}")
 
