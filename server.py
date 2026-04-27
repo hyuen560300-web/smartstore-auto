@@ -941,25 +941,28 @@ async def list_products(page: int = 1, size: int = 50):
         result = await naver_api.list_products(page, size, days=new_product_days)
         products = result.get("contents", [])
 
-        def _reg_dt(p: dict) -> datetime:
+        def _sort_key(p: dict) -> tuple:
+            # (regDate 파싱값, originProductNo) 내림차순 — regDate 없으면 ID로 대체
             raw = p.get("originProduct", {}).get("regDate", "")
-            if not raw:
-                return datetime.min.replace(tzinfo=timezone.utc)
             try:
-                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else datetime.min.replace(tzinfo=timezone.utc)
             except Exception:
-                return datetime.min.replace(tzinfo=timezone.utc)
+                dt = datetime.min.replace(tzinfo=timezone.utc)
+            return (dt, int(p.get("originProductNo") or 0))
 
-        # cutoff 이후 등록된 신규 상품만 선택 후 최신순 정렬
-        # 아직 도매꾹 상품이 없을 경우 전체 상품 최신순으로 폴백
+        def _reg_dt(p: dict) -> datetime:
+            return _sort_key(p)[0]
+
+        # cutoff 이후 등록된 신규 상품만 선택 후 최신순 정렬 (ID 보조키)
+        # 아직 도매꾹 상품이 없을 경우 전체 상품 최신순(ID 기준)으로 폴백
         filtered = sorted(
             [p for p in products if _reg_dt(p) >= cutoff],
-            key=_reg_dt,
+            key=_sort_key,
             reverse=True,
         )
         if not filtered:
             result_all = await naver_api.list_products(page, size, days=365)
-            filtered = sorted(result_all.get("contents", []), key=_reg_dt, reverse=True)
+            filtered = sorted(result_all.get("contents", []), key=_sort_key, reverse=True)
 
         return JSONResponse({
             "total": len(filtered),
