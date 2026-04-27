@@ -2555,7 +2555,9 @@ async def pipeline_fix_products(
     - 설명: Claude 전문 판매자 스타일로 재생성
     batch_size: 한 번에 처리할 상품 수 (Naver API 제한 준수)
     """
-    from employees import employee_pexels_qc, employee_image_inspector
+    from employees import (
+        employee_pexels_qc, employee_image_inspector, employee_season_planner,
+    )
 
     results = {
         "total": 0, "image_fixed": 0, "description_fixed": 0,
@@ -2667,7 +2669,9 @@ async def pipeline_fix_products(
                     results["description_fixed"] += 1
                     prod_log["description"] = "fixed"
             except Exception as e:
-                print(f"  [DESC] 설명 생성 실패: {e}", flush=True)
+                err_msg = f"{name[:20]} 설명오류: {str(e)[:80]}"
+                print(f"  [DESC] {err_msg}", flush=True)
+                results["errors"].append(err_msg)
 
         # ── Naver API 업데이트 ───────────────────────────────────────────────
         if update_payload:
