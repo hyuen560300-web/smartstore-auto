@@ -906,45 +906,43 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int, tags: list = 
 
 # ─── 이미지 디렉터: 텍스트 배너 생성 ────────────────────────────────────────
 async def create_banner_image(image_url: str, main_text: str, sub_text: str = "") -> str | None:
-    """1000×500 헤드라인 배너 — #1a1a1a 상단바 + 고화질 저장"""
+    """1000×1000 헤드라인 배너 — #1a1a1a 상단바 + contain 방식 (crop 없음) + 고화질 저장"""
     try:
         from PIL import Image, ImageDraw, ImageFont
         io = _io
 
-        W, H = 1000, 500
-        FONT_SIZE_MAIN = int(W * 0.08)   # 가로 폭의 8%
-        FONT_SIZE_SUB  = int(W * 0.042)
+        W, H = 1000, 1000
+        FONT_SIZE_MAIN = int(W * 0.075)  # 가로 폭의 7.5%
+        FONT_SIZE_SUB  = int(W * 0.040)
 
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
             r = await c.get(image_url)
             r.raise_for_status()
 
-        # 원본 이미지를 LANCZOS로 중앙 크롭-리사이즈
+        # ─ contain 방식: 비율 유지 + 패딩 (crop 절대 금지) ─────────────────
         orig = Image.open(io.BytesIO(r.content)).convert("RGB")
-        orig_ratio = orig.width / orig.height
-        target_ratio = W / H
-        if orig_ratio > target_ratio:
-            new_h = orig.height
-            new_w = int(new_h * target_ratio)
-            left = (orig.width - new_w) // 2
-            orig = orig.crop((left, 0, left + new_w, new_h))
-        else:
-            new_w = orig.width
-            new_h = int(new_w / target_ratio)
-            top = (orig.height - new_h) // 2
-            orig = orig.crop((0, top, new_w, top + new_h))
-        img = orig.resize((W, H), Image.LANCZOS)
 
-        # 상단 텍스트 배너 영역: 배경색 #1a1a1a, 높이 H*0.36
-        bar_h = int(H * 0.36)
-        bar = Image.new("RGB", (W, bar_h), (26, 26, 26))  # #1a1a1a
+        # 상단 #1a1a1a 텍스트 바 (H의 32%)
+        bar_h  = int(H * 0.32)
+        img_h  = H - bar_h             # 이미지 영역 높이 (나머지 68%)
 
-        # 하단 이미지 부분 (나머지 높이)
-        img_part = img.crop((0, 0, W, H - bar_h))
-        # 최종 합성: 상단 #1a1a1a 바 + 하단 상품 이미지
-        final = Image.new("RGB", (W, H))
+        # 이미지 영역(W×img_h) 안에 비율 유지로 배치 — 절대 crop 안 함
+        scale  = min(W / orig.width, img_h / orig.height)
+        new_w  = max(1, int(orig.width  * scale))
+        new_h  = max(1, int(orig.height * scale))
+        resized = orig.resize((new_w, new_h), Image.LANCZOS)
+
+        # 캔버스: 흰 배경 1000×1000
+        final = Image.new("RGB", (W, H), (255, 255, 255))
+
+        # 상단 바 붙이기
+        bar = Image.new("RGB", (W, bar_h), (26, 26, 26))
         final.paste(bar, (0, 0))
-        final.paste(img_part, (0, bar_h))
+
+        # 이미지를 이미지 영역 중앙에 배치
+        img_x = (W    - new_w) // 2
+        img_y = bar_h + (img_h - new_h) // 2
+        final.paste(resized, (img_x, img_y))
 
         draw = ImageDraw.Draw(final)
 
