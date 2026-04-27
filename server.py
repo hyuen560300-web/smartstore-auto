@@ -45,6 +45,10 @@ from main import (
     load_registered_codes,
     create_banner_image,
     _get_scene_context,
+    pipeline_register_from_domeggook,
+    fetch_domeggook_products,
+    DOMEGGOOK_API_KEY,
+    _DG_KEYWORDS,
 )
 from employees import (
     employee_season_planner,
@@ -365,6 +369,55 @@ async def register_products(request: Request, background_tasks: BackgroundTasks)
     limit = int(body.get("limit", 50))
     background_tasks.add_task(pipeline_register_products, excel_path, limit)
     return JSONResponse({"status": "processing", "excel": excel_path, "limit": limit})
+
+
+@app.post("/register-domeggook")
+async def register_from_domeggook(request: Request, background_tasks: BackgroundTasks):
+    """도매꾹 API 소싱 → 스마트스토어 상품 등록 (백그라운드 실행).
+    Body(선택): {"limit": 10, "keywords": ["생활용품","뷰티"], "min_price": 3000, "max_price": 150000}
+    DOMEGGOOK_API_KEY 환경변수 필수."""
+    if not DOMEGGOOK_API_KEY:
+        return JSONResponse(
+            {"status": "error", "message": "DOMEGGOOK_API_KEY 환경변수가 설정되지 않았습니다."},
+            status_code=400,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    limit     = int(body.get("limit", 10))
+    keywords  = body.get("keywords") or _DG_KEYWORDS
+    min_price = int(body.get("min_price", 3000))
+    max_price = int(body.get("max_price", 150000))
+
+    background_tasks.add_task(
+        pipeline_register_from_domeggook, limit, keywords, min_price, max_price
+    )
+    return JSONResponse({
+        "status":    "processing",
+        "source":    "domeggook",
+        "limit":     limit,
+        "keywords":  keywords[:5],
+        "min_price": min_price,
+        "max_price": max_price,
+    })
+
+
+@app.get("/domeggook-preview")
+async def domeggook_preview(limit: int = 10, keyword: str = ""):
+    """도매꾹 API 상품 미리보기 — 등록 없이 수집 결과만 확인."""
+    if not DOMEGGOOK_API_KEY:
+        return JSONResponse({"status": "error", "message": "DOMEGGOOK_API_KEY 없음"}, status_code=400)
+    kws = [keyword] if keyword else _DG_KEYWORDS
+    products = await fetch_domeggook_products(kws, pool_size=limit * 2)
+    return JSONResponse({
+        "count": len(products[:limit]),
+        "products": [
+            {"code": p["code"], "name": p["name"], "price": p["price"],
+             "image": p["image"], "category": p["category"]}
+            for p in products[:limit]
+        ],
+    })
 
 
 @app.post("/register-single")

@@ -120,6 +120,17 @@ REPLICATE_API_KEY   = _clean_key(os.environ.get("REPLICATE_API_KEY", ""))
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
+DOMEGGOOK_API_KEY   = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
+
+DOMEGGOOK_API_URL  = "https://domeggook.com/ssl/api/"
+DOMEGGOOK_IMG_BASE = "https://img.domeggook.com/"
+# 기본 검색 키워드 — DOMEGGOOK_KEYWORDS 환경변수로 덮어쓰기 가능
+_DG_KEYWORDS: list[str] = [
+    kw.strip() for kw in os.environ.get(
+        "DOMEGGOOK_KEYWORDS",
+        "생활용품,주방용품,뷰티,건강,패션잡화,스포츠,유아용품,반려동물,디지털,청소"
+    ).split(",") if kw.strip()
+]
 
 NAVER_BASE = "https://api.commerce.naver.com/external"
 
@@ -410,6 +421,143 @@ class NaverCommerceAPI:
             )
             r.raise_for_status()
             return r.json().get("data", {}).get("contents", [])
+
+
+# ─── 도매꾹 API 소싱 ─────────────────────────────────────────────────────────
+
+def _dg_img_url(thumb: str) -> str:
+    """도매꾹 thumb 값 → 이미지 풀 URL 변환 (해시 또는 이미 URL인 경우 모두 처리)"""
+    if not thumb:
+        return ""
+    if str(thumb).startswith("http"):
+        return str(thumb)
+    return f"{DOMEGGOOK_IMG_BASE}{thumb}"
+
+
+async def _dg_item_detail(item_no: str) -> dict:
+    """도매꾹 상품 상세 조회 ver=4.5 (getItemView). 실패 시 {} 반환."""
+    if not DOMEGGOOK_API_KEY:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(DOMEGGOOK_API_URL, params={
+                "ver": "4.5", "mode": "getItemView",
+                "aid": DOMEGGOOK_API_KEY, "no": item_no, "om": "json",
+            })
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:
+        print(f"[DOMEGGOOK] 상세조회 실패({item_no}): {e}", flush=True)
+        return {}
+
+
+def _dg_to_product(item: dict, detail: dict) -> dict | None:
+    """도매꾹 item + detail → 내부 product dict 변환. 필수 필드 없으면 None."""
+    no   = str(item.get("no", "")).strip()
+    name = str(item.get("title", "") or "").strip()
+    if not no or not name:
+        return None
+
+    price = _to_int(str(item.get("price", 0)))
+    if price <= 0:
+        return None
+
+    # 이미지: 상세 > 목록 순서로 우선
+    basis   = detail.get("basis", {}) if detail else {}
+    img_obj = detail.get("image", {}) if detail else {}
+    thumb   = img_obj.get("thumb") or img_obj.get("main") or item.get("thumb", "")
+    image   = _dg_img_url(str(thumb))
+
+    # 카테고리 — basis 내 다양한 키 시도
+    category = ""
+    for ck in ("카테고리명", "카테고리", "category", "대분류"):
+        if basis.get(ck):
+            category = str(basis[ck])
+            break
+
+    # 재고
+    qty = detail.get("qty", {}) if detail else {}
+    stock = min(_to_int(str(qty.get("stock", 100))) or 100, 100)
+
+    return {
+        "code":     f"DG_{no}",   # 중복 방지 고유코드
+        "name":     name,
+        "price":    price,        # 도매가 = 공급가
+        "image":    image,
+        "category": category,
+        "stock":    stock,
+        "source":   "domeggook",
+        "_dg_no":   no,
+    }
+
+
+async def fetch_domeggook_products(
+    keywords: list[str] | None = None,
+    pool_size: int = 90,
+    min_price: int = 3000,
+    max_price: int = 150000,
+) -> list[dict]:
+    """도매꾹 키워드 검색 → 상세 병렬 조회 → product dict 리스트 반환.
+    pool_size: sourcing manager에게 넘길 후보 수 (limit의 3배 권장)."""
+    if not DOMEGGOOK_API_KEY:
+        print("[DOMEGGOOK] DOMEGGOOK_API_KEY 없음", flush=True)
+        return []
+
+    kws = keywords or _DG_KEYWORDS
+    seen: set[str] = set()
+    raw_items: list[dict] = []
+
+    for kw in kws:
+        if len(raw_items) >= pool_size:
+            break
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(DOMEGGOOK_API_URL, params={
+                    "ver": "4.1", "mode": "getItemList",
+                    "aid": DOMEGGOOK_API_KEY,
+                    "kw": kw, "om": "json",
+                    "minPrice": str(min_price), "maxPrice": str(max_price),
+                    "deli": "free",       # 무료배송 상품만
+                    "origin": "domestic", # 국내 상품만
+                    "rows": "30",
+                })
+                r.raise_for_status()
+                data = r.json()
+            items = data.get("item", [])
+            if not isinstance(items, list):
+                items = []
+            added = 0
+            for it in items:
+                no = str(it.get("no", ""))
+                if no and no not in seen:
+                    seen.add(no)
+                    raw_items.append(it)
+                    added += 1
+            print(f"[DOMEGGOOK] '{kw}' → +{added}개 (누적 {len(raw_items)})", flush=True)
+            await asyncio.sleep(0.35)   # API 제한 180req/min 준수
+        except Exception as e:
+            print(f"[DOMEGGOOK] '{kw}' 검색 오류: {e}", flush=True)
+
+    if not raw_items:
+        return []
+
+    # 상세 병렬 조회
+    candidates = raw_items[:pool_size]
+    print(f"[DOMEGGOOK] 상세 조회 시작: {len(candidates)}개", flush=True)
+    details = await asyncio.gather(
+        *[_dg_item_detail(str(it["no"])) for it in candidates],
+        return_exceptions=True,
+    )
+
+    products = []
+    for it, det in zip(candidates, details):
+        det_dict = det if isinstance(det, dict) else {}
+        p = _dg_to_product(it, det_dict)
+        if p:
+            products.append(p)
+
+    print(f"[DOMEGGOOK] 변환 완료: {len(products)}개", flush=True)
+    return products
 
 
 # ─── 오너클랜 Excel 파서 ──────────────────────────────────────────────────────
@@ -2141,6 +2289,150 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             print(f"[총괄] ❌ {e}", flush=True)
 
     print(f"[총괄] 완료 — 성공:{results['success']} 실패:{results['fail']} 스킵:{results['skip']} IP차단:{results['ip_blocked']}", flush=True)
+    return results
+
+
+async def pipeline_register_from_domeggook(
+    limit: int = 10,
+    keywords: list[str] | None = None,
+    min_price: int = 3000,
+    max_price: int = 150000,
+) -> dict:
+    """도매꾹 API 소싱 → 전 직원 협업 등록 파이프라인.
+    소싱부분만 Excel→도매꾹 API로 교체; 이후 로직은 pipeline_register_products와 동일."""
+    from employees import (
+        employee_sourcing_manager, employee_ip_guardian,
+        employee_season_planner, employee_trend_scout, employee_review_analyst,
+        employee_price_optimizer, employee_tag_generator,
+    )
+    print(f"[도매꾹파이프라인] 시작 — limit={limit}", flush=True)
+
+    # ① 도매꾹 API 상품 수집 (pool = limit * 3 으로 sourcing manager 선별 여유)
+    products = await fetch_domeggook_products(keywords, pool_size=limit * 3, min_price=min_price, max_price=max_price)
+    if not products:
+        return {"status": "error", "message": "도매꾹 상품 없음 — API 키/키워드 확인"}
+
+    # ② 소싱팀장 선별
+    products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
+    print(f"[소싱팀장] {len(products)}개 선별", flush=True)
+
+    season_data  = employee_season_planner()
+    season_info  = season_data["upcoming"][0]["event"] if season_data["upcoming"] else ""
+    trend_keywords = await employee_trend_scout()
+
+    registered_codes = load_registered_codes()
+    results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0,
+               "ip_blocked": 0, "errors": [], "source": "domeggook"}
+
+    for p in products[:limit]:
+        try:
+            code = str(p.get("code", ""))
+            if code and code in registered_codes:
+                results["duplicate"] += 1
+                continue
+
+            safe, danger_kw = employee_ip_guardian(p)
+            if not safe:
+                print(f"[IP감시관] 차단: {p.get('name','')} — {danger_kw}", flush=True)
+                results["ip_blocked"] += 1
+                continue
+
+            review = await employee_review_analyst(str(p.get("name", "")), ANTHROPIC_API_KEY)
+            context = {
+                "season": season_info,
+                "trends": trend_keywords[:5],
+                "pain_points": review.get("pain_points", []),
+                "selling_points": review.get("selling_points", []),
+            }
+            ai = await generate_product_copy(p, context)
+
+            ai["tags"] = await employee_tag_generator(
+                str(p.get("name", "")), str(p.get("category", "")),
+                review.get("selling_points", []), ANTHROPIC_API_KEY)
+
+            competitor_prices = await search_naver_shopping(str(p.get("name", "")))
+            price_result = await employee_price_optimizer(
+                str(p.get("name", "")), str(p.get("category", "")),
+                int(p.get("price", 0)), ANTHROPIC_API_KEY,
+                competitor_prices=competitor_prices)
+            price = price_result["suggested_price"]
+
+            _cat         = str(p.get("category", ""))
+            naver_img_url = await get_product_image(p)
+            if not naver_img_url:
+                print(f"[이미지] SKIP: {p.get('name','')}", flush=True)
+                results["skip"] += 1
+                continue
+
+            headline_txt = ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18]
+            dalle_banner_raw = await generate_dalle_banner(str(p.get("name", "")), headline_txt, _cat)
+            if dalle_banner_raw:
+                banner_url = await naver_api.upload_image(dalle_banner_raw, is_banner=True)
+            else:
+                banner_url = await create_banner_image(
+                    naver_img_url, headline_txt,
+                    ai.get("sub_headline") or ai.get("sub_text", ""))
+
+            detail_img_url = ""
+            dalle_detail_raw = await generate_dalle_detail_shot(
+                str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
+            if dalle_detail_raw:
+                try:
+                    detail_img_url = await naver_api.upload_image(dalle_detail_raw)
+                except Exception:
+                    pass
+
+            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
+
+            _, reject_kws = _get_scene_context(str(p.get("name", "")))
+            qc_result = await run_qc_pipeline(
+                naver_img_url, str(p.get("name", "")),
+                detail_html, ANTHROPIC_API_KEY, reject_kws)
+            print(f"[QC] 단계:{qc_result['stage']} 통과:{qc_result['passed']}", flush=True)
+
+            if not qc_result["passed"]:
+                if qc_result["stage"] == 2:
+                    retry_raw = await generate_dalle_image(
+                        f"{p.get('name','')} {qc_result.get('retry_prompt','')}".strip(), _cat)
+                    if retry_raw:
+                        retry_img = await naver_api.upload_image(retry_raw)
+                        qc2 = await run_qc_pipeline(
+                            retry_img, str(p.get("name", "")),
+                            detail_html, ANTHROPIC_API_KEY, reject_kws)
+                        if qc2["passed"]:
+                            naver_img_url = retry_img
+                        else:
+                            results["fail"] += 1
+                            results["errors"].append(f"{p.get('name','?')[:20]}: QC재시도실패")
+                            continue
+                    else:
+                        results["fail"] += 1
+                        results["errors"].append(f"{p.get('name','?')[:20]}: DALLE재생성실패")
+                        continue
+                else:
+                    results["fail"] += 1
+                    results["errors"].append(f"{p.get('name','?')[:20]}: QC{qc_result['stage']}단계실패")
+                    continue
+
+            payload = build_product_payload(p, ai, price, tags=ai.get("tags"))
+            payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
+            if detail_html:
+                payload["originProduct"]["detailContent"] = detail_html
+
+            await naver_api.register_product(payload)
+            if code:
+                save_registered_code(code)
+            results["success"] += 1
+            print(f"[도매꾹파이프라인] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원)", flush=True)
+            await asyncio.sleep(0.5)
+
+        except Exception as e:
+            results["fail"] += 1
+            results["errors"].append(f"{str(p.get('name','?'))[:20]}: {str(e)[:80]}")
+            print(f"[도매꾹파이프라인] ❌ {e}", flush=True)
+
+    print(f"[도매꾹파이프라인] 완료 — 성공:{results['success']} 실패:{results['fail']} "
+          f"스킵:{results['skip']} IP차단:{results['ip_blocked']}", flush=True)
     return results
 
 
