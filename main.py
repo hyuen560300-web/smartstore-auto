@@ -358,7 +358,7 @@ class NaverCommerceAPI:
         try:
             async with httpx.AsyncClient(timeout=60) as c:
                 r = await c.put(
-                    f"{NAVER_BASE}/v2/products/{product_id}",
+                    f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
                     headers=await self._headers(),
                     json={"originProduct": payload},
                 )
@@ -376,7 +376,7 @@ class NaverCommerceAPI:
         """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)"""
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.put(
-                f"{NAVER_BASE}/v2/products/{product_id}",
+                f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
                 headers=await self._headers(),
                 json={"originProduct": {"statusType": status}}
             )
@@ -386,7 +386,7 @@ class NaverCommerceAPI:
         """상품 삭제"""
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.delete(
-                f"{NAVER_BASE}/v2/products/{product_id}",
+                f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
                 headers=await self._headers()
             )
             return r.status_code in (200, 204)
@@ -417,7 +417,7 @@ class NaverCommerceAPI:
         """상품 가격 수정"""
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.put(
-                f"{NAVER_BASE}/v2/products/{product_id}",
+                f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
                 headers=await self._headers(),
                 json={"originProduct": {"salePrice": price}}
             )
