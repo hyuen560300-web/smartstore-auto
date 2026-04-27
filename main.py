@@ -2659,17 +2659,39 @@ async def pipeline_fix_products(
                 context = {"season": season_info, "trends": [], "pain_points": [], "selling_points": []}
                 ai = await generate_product_copy(p_dict, context)
 
-                # 배너+메인이미지가 있으면 기존 이미지 URL 재사용, 없으면 new_img_url
-                existing_img = (origin.get("images") or {}).get("representativeImage", {}).get("url", "")
-                banner_src   = update_payload.get("images", {}).get("representativeImage", {}).get("url", "") or existing_img
-                detail_html  = build_detail_html(banner_src, banner_src, ai, "")
+                # 기존 이미지 URL: origin → 없으면 빈 문자열로 대체
+                raw_img_node  = (origin.get("images") or {}).get("representativeImage") or {}
+                existing_img  = raw_img_node.get("url", "") if isinstance(raw_img_node, dict) else ""
+                banner_src    = (update_payload.get("images", {}).get("representativeImage", {}).get("url", "")
+                                 or existing_img)
+
+                # origin 구조 디버그 로그
+                print(f"  [DESC] origin keys={list(origin.keys())[:6]}", flush=True)
+                print(f"  [DESC] banner_src={'있음' if banner_src else '없음'}", flush=True)
+
+                detail_html   = build_detail_html(banner_src, banner_src, ai, "")
+                print(f"  [DESC] html len={len(detail_html)}", flush=True)
 
                 if detail_html:
                     update_payload["detailContent"] = detail_html
                     results["description_fixed"] += 1
                     prod_log["description"] = "fixed"
+                else:
+                    # build_detail_html이 빈 문자열 → 섹션 모두 비어있음 (banner_src 없음)
+                    # fallback: 최소 텍스트 설명이라도 업데이트
+                    minimal_html = (
+                        f"<div style='padding:16px;font-family:sans-serif;'>"
+                        f"<h2>{ai.get('headline','')}</h2>"
+                        f"<p>{ai.get('emotional_copy','')}</p></div>"
+                    )
+                    if minimal_html.strip() != "<div style='padding:16px;font-family:sans-serif;'><h2></h2><p></p></div>":
+                        update_payload["detailContent"] = minimal_html
+                        results["description_fixed"] += 1
+                        prod_log["description"] = "minimal"
+                    else:
+                        prod_log["description"] = "no_content"
             except Exception as e:
-                err_msg = f"{name[:20]} 설명오류: {str(e)[:80]}"
+                err_msg = f"{name[:20]} 설명오류: {str(e)[:120]}"
                 print(f"  [DESC] {err_msg}", flush=True)
                 results["errors"].append(err_msg)
 
