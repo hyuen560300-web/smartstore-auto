@@ -1020,16 +1020,26 @@ async def quality_report():
     from datetime import datetime, timezone
 
     try:
+        # raw Naver API: {"contents": [{originProductNo, originProduct:{name,salePrice,...}}], "totalElements": N}
         data = await naver_api.list_products(page=1, size=50)
-        # Naver API 응답: {"products": [...], "total": N, "page": N, "count": N}
-        products = data.get("products") or data.get("contents") or []
+        raw_list = data.get("contents", [])
+        # /list-products 엔드포인트 포맷으로 정규화
+        products = []
+        for p in raw_list:
+            op = p.get("originProduct", {})
+            products.append({
+                "id":     p.get("originProductNo"),
+                "name":   op.get("name", ""),
+                "price":  int(op.get("salePrice", 0)),
+                "status": op.get("statusType", ""),
+            })
     except Exception as e:
         return JSONResponse({"error": f"상품 조회 실패: {str(e)}"}, status_code=500)
 
     total = len(products)
     if total == 0:
         return JSONResponse({"message": "등록된 상품 없음", "score": 0,
-                             "total": data.get("total", 0)})
+                             "naver_total": data.get("totalElements", 0)})
 
     name_ok = name_short = name_long = 0
     price_dist = {"1만미만": 0, "1-3만": 0, "3-5만": 0, "5만이상": 0}
@@ -1038,10 +1048,9 @@ async def quality_report():
     price_list = []
 
     for prod in products:
-        # Naver list API: flat 구조 {"id", "name", "price", "status", "stock"}
-        name  = str(prod.get("name") or prod.get("originProduct", {}).get("name", ""))
-        price = int(prod.get("price") or prod.get("originProduct", {}).get("salePrice", 0))
-        status = str(prod.get("status", "UNKNOWN"))
+        name   = str(prod.get("name", ""))
+        price  = int(prod.get("price", 0))
+        status = str(prod.get("status", ""))
 
         status_dist[status] = status_dist.get(status, 0) + 1
         price_list.append(price)
