@@ -2698,10 +2698,16 @@ async def pipeline_fix_products(
                 print(f"  [DESC] {err_msg}", flush=True)
                 results["errors"].append(err_msg)
 
-        # ── Naver API 업데이트 ───────────────────────────────────────────────
+        # ── Naver API 업데이트 (전체 payload merge 방식) ────────────────────
         if update_payload:
             try:
-                ok = await naver_api.update_product(product_id, update_payload)
+                # Naver PUT은 partial update 불가 → origin 전체 + 변경분 merge
+                _READONLY = {"originProductNo", "channelProductNo", "regDate",
+                             "modDate", "statusFrom", "totalSalesQuantity"}
+                full_payload = {k: v for k, v in origin.items() if k not in _READONLY}
+                full_payload.update(update_payload)   # 이미지/설명 덮어씌우기
+
+                ok = await naver_api.update_product(product_id, full_payload)
                 prod_log["updated"] = ok
                 if ok:
                     print(f"  [UPDATE] ✅ {product_id}", flush=True)
