@@ -1016,80 +1016,43 @@ DRIVE_FILE_IDS_PERMANENT = ["1F5BYQ4DqnMSZW-oeuz4EtZGGIfyZ0y-X","1gLAbw9lGhR3BVZ
 
 @app.get("/quality-report")
 async def quality_report():
-    """등록 상품 50개 품질 자동 검사 — 이미지 소스·가격·상품명·카테고리 분석"""
-    import asyncio as _aio
-    import anthropic as _ant
-    import httpx as _httpx
-    import base64 as _b64
+    """등록 상품 품질 자동 검사 — 상품명·가격·상태 분석"""
     from datetime import datetime, timezone
-    from main import ANTHROPIC_API_KEY
 
     try:
         data = await naver_api.list_products(page=1, size=50)
-        products = data.get("contents", [])
+        # Naver API 응답: {"products": [...], "total": N, "page": N, "count": N}
+        products = data.get("products") or data.get("contents") or []
     except Exception as e:
         return JSONResponse({"error": f"상품 조회 실패: {str(e)}"}, status_code=500)
 
     total = len(products)
     if total == 0:
-        return JSONResponse({"message": "등록된 상품 없음", "score": 0})
+        return JSONResponse({"message": "등록된 상품 없음", "score": 0,
+                             "total": data.get("total", 0)})
 
-    # ── 이미지 Vision 분류 (병렬) ─────────────────────────────────────────────
-    client = _ant.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-
-    async def classify_image(img_url: str) -> str:
-        """'real' | 'ai' | 'missing'"""
-        if not img_url:
-            return "missing"
-        try:
-            async with _httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
-                r = await c.get(img_url)
-                r.raise_for_status()
-            b64 = _b64.b64encode(r.content).decode()
-            resp = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=10,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
-                    {"type": "text", "text": "실제 사진이면 'real', AI 생성이면 'ai'만 답해."}
-                ]}]
-            )
-            label = resp.content[0].text.strip().lower()
-            return "real" if "real" in label else "ai"
-        except Exception:
-            return "real"
-
-    # ── 분석 데이터 수집 ──────────────────────────────────────────────────────
-    categories: dict = {}
     name_ok = name_short = name_long = 0
     price_dist = {"1만미만": 0, "1-3만": 0, "3-5만": 0, "5만이상": 0}
+    status_dist: dict = {}
     problems = []
-    img_urls = []
-
-    NAVER_CAT_MAP = {
-        "50000830": "패션의류",  "50000803": "여성의류",
-        "50002717": "생활/주방", "50000140": "화장품/미용",
-        "50000236": "식품",      "50000430": "스포츠",
-        "50000564": "완구/취미", "50000727": "도서",
-    }
+    price_list = []
 
     for prod in products:
-        origin = prod.get("originProduct", {})
-        name   = origin.get("name", "")
-        price  = int(origin.get("salePrice", 0))
-        img_url = origin.get("images", {}).get("representativeImage", {}).get("url", "")
-        cat_id  = str(origin.get("leafCategoryId", "기타"))
+        # Naver list API: flat 구조 {"id", "name", "price", "status", "stock"}
+        name  = str(prod.get("name") or prod.get("originProduct", {}).get("name", ""))
+        price = int(prod.get("price") or prod.get("originProduct", {}).get("salePrice", 0))
+        status = str(prod.get("status", "UNKNOWN"))
 
-        cat_label = NAVER_CAT_MAP.get(cat_id, f"ID:{cat_id}")
-        categories[cat_label] = categories.get(cat_label, 0) + 1
+        status_dist[status] = status_dist.get(status, 0) + 1
+        price_list.append(price)
 
         name_len = len(name)
         if name_len < 5:
             name_short += 1
-            problems.append({"상품명": name, "문제": f"이름 너무 짧음({name_len}자)"})
+            problems.append({"상품명": name[:30], "문제": f"이름 너무 짧음({name_len}자)"})
         elif name_len > 25:
             name_long += 1
-            problems.append({"상품명": name, "문제": f"이름 너무 김({name_len}자)"})
+            problems.append({"상품명": name[:30], "문제": f"이름 너무 김({name_len}자)"})
         else:
             name_ok += 1
 
@@ -1098,45 +1061,29 @@ async def quality_report():
         elif price < 50000: price_dist["3-5만"]   += 1
         else:               price_dist["5만이상"]  += 1
 
-        if not img_url:
-            problems.append({"상품명": name, "문제": "이미지 없음"})
-        img_urls.append(img_url)
-
-    # 병렬 Vision 분류
-    labels = await _aio.gather(*[classify_image(u) for u in img_urls])
-    img_real    = labels.count("real")
-    img_ai      = labels.count("ai")
-    img_missing = labels.count("missing")
-
-    # ── 점수 계산 ────────────────────────────────────────────────────────────
+    avg_price = int(sum(price_list) / max(len(price_list), 1))
     t = max(total, 1)
     score = 100
-    score -= round((name_short   / t) * 25)
-    score -= round((name_long    / t) * 10)
-    score -= round((img_missing  / t) * 30)
-    score -= round((price_dist["1만미만"] / t) * 10)
-    # 이미지 AI 비율 높으면 소폭 감점 (실사진이 품질 높음)
-    score -= round((img_ai / max(img_real + img_ai, 1)) * 10)
+    score -= round((name_short / t) * 25)
+    score -= round((name_long  / t) * 10)
+    score -= round((price_dist["1만미만"] / t) * 15)
     score = max(0, min(100, score))
 
     return JSONResponse({
         "스캔_시각":   datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "총_상품수":   total,
+        "전체_등록수": data.get("total", total),
         "종합_점수":   score,
-        "점수_기준":   "상품명 짧음 -25점 / 이미지 없음 -30점 / 상품명 긺 -10점 / 저가 -10점 / AI이미지 비율 -10점",
-        "카테고리_분포": dict(sorted(categories.items(), key=lambda x: -x[1])),
+        "점수_기준":   "상품명 짧음(<5자) -25점 / 상품명 긺(>25자) -10점 / 저가(<1만) -15점",
+        "판매_상태":   status_dist,
         "상품명_품질": {
-            "정상(5-25자)": name_ok,
+            "정상(5-25자)":    name_ok,
             "너무_짧음(<5자)": name_short,
-            "너무_김(>25자)": name_long,
+            "너무_김(>25자)":  name_long,
         },
-        "가격_분포": price_dist,
-        "이미지_소스": {
-            "실제사진(오너클랜_Pexels)": img_real,
-            "AI생성(Flux_Gemini_DALLE)": img_ai,
-            "없음": img_missing,
-        },
-        "문제_상품": problems[:20],
+        "가격_분포":   price_dist,
+        "평균_판매가": f"{avg_price:,}원",
+        "문제_상품":   problems[:20],
     })
 
 
