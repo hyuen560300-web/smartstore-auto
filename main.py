@@ -362,7 +362,10 @@ class NaverCommerceAPI:
                     headers=await self._headers(),
                     json={"originProduct": payload},
                 )
-            return r.status_code == 200
+            ok = r.status_code == 200
+            if not ok:
+                print(f"[UPDATE] HTTP {r.status_code} ({product_id}): {r.text[:300]}", flush=True)
+            return ok
         except Exception as e:
             print(f"[UPDATE] 상품 수정 실패({product_id}): {e}", flush=True)
             return False
