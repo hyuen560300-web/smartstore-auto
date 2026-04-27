@@ -951,11 +951,15 @@ async def list_products(page: int = 1, size: int = 50):
                 return datetime.min.replace(tzinfo=timezone.utc)
 
         # cutoff 이후 등록된 신규 상품만 선택 후 최신순 정렬
+        # 아직 도매꾹 상품이 없을 경우 전체 상품 최신순으로 폴백
         filtered = sorted(
             [p for p in products if _reg_dt(p) >= cutoff],
             key=_reg_dt,
             reverse=True,
         )
+        if not filtered:
+            result_all = await naver_api.list_products(page, size, days=365)
+            filtered = sorted(result_all.get("contents", []), key=_reg_dt, reverse=True)
 
         return JSONResponse({
             "total": len(filtered),
