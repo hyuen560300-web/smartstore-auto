@@ -527,8 +527,6 @@ async def fetch_domeggook_products(
                     "market": "dome",
                     "kw": kw, "om": "json",
                     "mnp": str(min_price), "mxp": str(max_price),
-                    "who": "S",    # 판매자 배송비 부담 (구매자 무료)
-                    "org": "kr",   # 국산 상품만
                     "sz": "30",    # 페이지당 30개
                     "pg": "1",
                     "so": "rd",    # 추천도순
