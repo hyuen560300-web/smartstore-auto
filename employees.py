@@ -566,3 +566,153 @@ async def employee_image_inspector(
         return result
     except Exception:
         return {"score": 75, "passed": False, "issues": ["파싱 실패"], "recommendation": "재시도 권장", "retry_prompt": ""}
+
+
+# ─── 직원 19: 하이브리드 배너 생성자 ────────────────────────────────────────────
+async def _hybrid_bg_prompt(product_name: str, category: str, gemini_key: str) -> str:
+    """Gemini 텍스트 API로 상품에 어울리는 감성 배경 프롬프트 생성. 실패 시 기본값."""
+    default = "Soft elegant studio background with warm gradient, premium minimal lifestyle, natural lighting bokeh"
+    if not gemini_key:
+        return default
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+                params={"key": gemini_key},
+                json={"contents": [{"parts": [{"text": (
+                    f"상품명: {product_name}\n카테고리: {category}\n\n"
+                    "이 상품 메인 이미지 AI 배경 생성 영어 프롬프트를 40단어 이내로 써줘.\n"
+                    "규칙: 배경 장면만(상품 언급 금지), 고급스럽고 감성적, 영어 프롬프트 텍스트만 출력"
+                )}]}]},
+            )
+        if r.status_code == 200:
+            txt = r.json()["candidates"][0]["content"]["parts"][0].get("text", "").strip()
+            txt = txt.split("\n")[0].strip('"').strip("'").strip()
+            if len(txt) > 10:
+                print(f"[HYBRID] 배경 프롬프트: {txt[:70]}", flush=True)
+                return txt
+    except Exception as e:
+        print(f"[HYBRID] Gemini 프롬프트 실패: {e}", flush=True)
+    return default
+
+
+async def _hybrid_generate_bg(prompt: str, flux_key: str, openai_key: str) -> bytes | None:
+    """AI 배경 이미지 생성 — Flux Pro 1.1 → DALL-E 3 폴백, PNG/JPEG bytes 반환."""
+    import asyncio
+
+    full_prompt = prompt + ", no people, no text, no products, pure background only"
+
+    # Flux Pro 1.1
+    if flux_key:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    "https://api.bfl.ai/v1/flux-pro-1.1",
+                    headers={"X-Key": flux_key, "Content-Type": "application/json"},
+                    json={"prompt": full_prompt, "width": 1024, "height": 1024},
+                )
+                r.raise_for_status()
+                data = r.json()
+                task_id = data.get("id")
+                polling_url = data.get("polling_url") or f"https://api.bfl.ai/v1/get_result?id={task_id}"
+            for _ in range(30):
+                await asyncio.sleep(2)
+                async with httpx.AsyncClient(timeout=15) as c:
+                    pr = await c.get(polling_url, headers={"X-Key": flux_key})
+                    pdata = pr.json()
+                if pdata.get("status") == "Ready":
+                    img_url = (pdata.get("result") or {}).get("sample")
+                    if img_url:
+                        async with httpx.AsyncClient(timeout=30) as c:
+                            ir = await c.get(img_url)
+                            ir.raise_for_status()
+                        print(f"[HYBRID] Flux 배경 완료", flush=True)
+                        return ir.content
+        except Exception as e:
+            print(f"[HYBRID] Flux 배경 실패: {e}", flush=True)
+
+    # DALL-E 3 폴백
+    if openai_key:
+        try:
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(
+                    "https://api.openai.com/v1/images/generations",
+                    headers={"Authorization": f"Bearer {openai_key}"},
+                    json={"model": "dall-e-3", "prompt": full_prompt,
+                          "n": 1, "size": "1024x1024", "quality": "hd"},
+                )
+                r.raise_for_status()
+                img_url = r.json()["data"][0]["url"]
+            async with httpx.AsyncClient(timeout=30) as c:
+                ir = await c.get(img_url)
+                ir.raise_for_status()
+            print(f"[HYBRID] DALL-E 배경 완료", flush=True)
+            return ir.content
+        except Exception as e:
+            print(f"[HYBRID] DALL-E 배경 실패: {e}", flush=True)
+    return None
+
+
+async def employee_hybrid_banner(
+    image_bytes: bytes,
+    product_name: str,
+    category: str,
+    gemini_key: str,
+    openai_key: str,
+    flux_key: str = "",
+) -> bytes | None:
+    """
+    직원 19: 하이브리드 배너 생성자
+    1. rembg로 상품 배경 제거 (RGBA)
+    2. Gemini에게 감성 배경 프롬프트 요청
+    3. Flux Pro 1.1 → DALL-E 3으로 AI 배경 생성
+    4. 상품(투명 배경) + AI 배경 합성 → JPEG bytes 반환
+    """
+    import asyncio
+    import io as _io
+    from PIL import Image
+
+    # Step 1: rembg 배경 제거 (동기 → to_thread로 호출)
+    try:
+        from rembg import remove as _rembg_remove
+        bg_removed = await asyncio.to_thread(_rembg_remove, image_bytes)
+        product_img = Image.open(_io.BytesIO(bg_removed)).convert("RGBA")
+        print(f"[HYBRID] rembg 배경 제거 완료: {product_img.size}", flush=True)
+    except Exception as e:
+        print(f"[HYBRID] rembg 실패: {e}", flush=True)
+        return None
+
+    # Step 2: Gemini 배경 프롬프트
+    bg_prompt = await _hybrid_bg_prompt(product_name, category, gemini_key)
+
+    # Step 3: AI 배경 이미지 생성
+    bg_bytes = await _hybrid_generate_bg(bg_prompt, flux_key, openai_key)
+    if not bg_bytes:
+        print(f"[HYBRID] AI 배경 생성 실패 — 합성 불가", flush=True)
+        return None
+
+    # Step 4: 상품 + AI 배경 합성
+    try:
+        TARGET = (1000, 1000)
+        bg_img = Image.open(_io.BytesIO(bg_bytes)).convert("RGBA").resize(TARGET, Image.LANCZOS)
+
+        # 상품을 배경 75% 크기로 축소, 하단 중앙 배치
+        pw, ph = product_img.size
+        max_dim = int(TARGET[0] * 0.75)
+        scale = min(max_dim / pw, max_dim / ph, 1.0)
+        nw, nh = int(pw * scale), int(ph * scale)
+        prod = product_img.resize((nw, nh), Image.LANCZOS)
+
+        x = (TARGET[0] - nw) // 2
+        y = max(0, TARGET[1] - nh - int(TARGET[1] * 0.05))  # 하단 5% 여백
+
+        composite = bg_img.copy()
+        composite.paste(prod, (x, y), prod)
+
+        out = _io.BytesIO()
+        composite.convert("RGB").save(out, format="JPEG", quality=95, optimize=True)
+        print(f"[HYBRID] 합성 완료 — 상품 {nw}x{nh} @ ({x},{y})", flush=True)
+        return out.getvalue()
+    except Exception as e:
+        print(f"[HYBRID] 합성 실패: {e}", flush=True)
+        return None

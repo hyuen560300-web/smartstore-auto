@@ -1848,13 +1848,38 @@ async def get_product_image(p: dict) -> str | None:
     _, reject_kws = _get_scene_context(product_name)
     from employees import employee_pexels_qc, employee_image_inspector
 
-    # ── 1. 오너클랜 원본 → 업스케일 → QC 95점+ ──────────────────────────────
+    # ── 1. 오너클랜 원본 → 업스케일 → 직원19 하이브리드 배너 → QC 95점+ ──────────
     if image_url.startswith("http"):
         ok, reason, w, h = await _check_image_quality(image_url)
         if ok:
             print(f"[IMAGE] 업스케일 시도: {product_name[:20]} ({w}×{h})", flush=True)
             upscaled = await upscale_image(image_url)
             if upscaled:
+                # ── 1a. 직원19: rembg 배경제거 + AI배경 합성 ─────────────────────
+                from employees import employee_hybrid_banner
+                print(f"[IMAGE] 직원19 하이브리드 배너 시도", flush=True)
+                try:
+                    hybrid_bytes = await employee_hybrid_banner(
+                        upscaled, product_name, category,
+                        gemini_key=GOOGLE_AI_API_KEY,
+                        openai_key=OPENAI_API_KEY,
+                        flux_key=FLUX_API_KEY,
+                    )
+                    if hybrid_bytes:
+                        hybrid_result = await naver_api.upload_raw_image(hybrid_bytes)
+                        qc = await employee_image_inspector(
+                            hybrid_result, product_name, ANTHROPIC_API_KEY,
+                            reject_keywords=reject_kws)
+                        score = qc.get("score", 0)
+                        print(f"[IMAGE] 하이브리드 QC: {score}점", flush=True)
+                        if score >= 95:
+                            print(f"[IMAGE] 하이브리드 배너 ✅", flush=True)
+                            return hybrid_result
+                        print(f"[IMAGE] 하이브리드 {score}점 미달 → 일반 업스케일", flush=True)
+                except Exception as e:
+                    print(f"[IMAGE] 직원19 실패: {e}", flush=True)
+
+                # ── 1b. 일반 업스케일 QC ──────────────────────────────────────────
                 try:
                     up_result = await naver_api.upload_raw_image(upscaled)
                     qc = await employee_image_inspector(
