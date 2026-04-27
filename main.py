@@ -342,9 +342,30 @@ class NaverCommerceAPI:
                 except Exception:
                     return item
 
-            enriched = await asyncio.gather(*[_fetch_detail(item) for item in contents])
-            data["contents"] = list(enriched)
+            # 5개씩 청크 병렬 처리 — 50개 동시 호출 시 대부분 타임아웃 발생 방지
+            enriched: list[dict] = []
+            for i in range(0, len(contents), 5):
+                chunk = contents[i:i + 5]
+                chunk_results = await asyncio.gather(*[_fetch_detail(c) for c in chunk])
+                enriched.extend(chunk_results)
+                if i + 5 < len(contents):
+                    await asyncio.sleep(0.4)
+            data["contents"] = enriched
             return data
+
+    async def update_product(self, product_id: str, payload: dict) -> bool:
+        """상품 정보 수정 (이미지 URL, 설명 등 부분 업데이트)."""
+        try:
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.put(
+                    f"{NAVER_BASE}/v2/products/{product_id}",
+                    headers=await self._headers(),
+                    json={"originProduct": payload},
+                )
+            return r.status_code == 200
+        except Exception as e:
+            print(f"[UPDATE] 상품 수정 실패({product_id}): {e}", flush=True)
+            return False
 
     async def set_product_status(self, product_id: str, status: str) -> bool:
         """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)"""
@@ -2521,6 +2542,150 @@ async def pipeline_reply_inquiries() -> dict:
             print(f"[INQUIRY] ❌ {e}", flush=True)
 
     return {"replied": replied, "total": len(inquiries)}
+
+
+async def pipeline_fix_products(
+    limit: int = 50,
+    fix_images: bool = True,
+    fix_descriptions: bool = True,
+    batch_size: int = 5,
+) -> dict:
+    """등록된 상품 이미지·설명 일괄 수정 파이프라인.
+    - 이미지: 도매꾹 상품(_img_760 재업로드) 또는 Pexels 검색 대체
+    - 설명: Claude 전문 판매자 스타일로 재생성
+    batch_size: 한 번에 처리할 상품 수 (Naver API 제한 준수)
+    """
+    from employees import employee_pexels_qc, employee_image_inspector
+
+    results = {
+        "total": 0, "image_fixed": 0, "description_fixed": 0,
+        "skipped": 0, "errors": [], "products": [],
+    }
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+    # 1. 전체 상품 목록 수집 (페이지 순회)
+    all_products: list[dict] = []
+    page = 1
+    while True:
+        try:
+            resp = await _retry(
+                lambda p=page: naver_api.list_products(page=p, size=20),
+                retries=3, delay=5.0, label=f"fix list(p{page})"
+            )
+        except Exception as e:
+            print(f"[FIX] 목록 조회 실패(p{page}): {e}", flush=True)
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        print(f"[FIX] p{page} 로드 — 누적 {len(all_products)}개", flush=True)
+        if len(contents) < 20:
+            break
+        page += 1
+        await asyncio.sleep(1.0)
+
+    results["total"] = len(all_products)
+    print(f"[FIX] 전체 {len(all_products)}개 로드 완료", flush=True)
+
+    processed = 0
+    for prod in all_products:
+        if processed >= limit:
+            break
+
+        origin      = prod.get("originProduct", {})
+        product_id  = str(prod.get("originProductNo", ""))
+        name        = origin.get("name", "").strip()
+        status      = origin.get("statusType", "")
+        seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+        category    = (origin.get("detailAttribute") or {}).get("naverShoppingSearchInfo", {}).get("categoryName", "")
+
+        if not product_id or not name:
+            results["skipped"] += 1
+            continue
+        if status not in ("SALE", "SUSPENSION"):
+            results["skipped"] += 1
+            continue
+
+        processed += 1
+        prod_log = {"id": product_id, "name": name[:30]}
+        update_payload: dict = {}
+        print(f"[FIX] [{processed}/{limit}] {name[:30]}", flush=True)
+
+        # ── 이미지 수정 ─────────────────────────────────────────────────────
+        if fix_images:
+            new_img_url: str | None = None
+
+            # 도매꾹 상품: _img_760 재업로드
+            if seller_code.startswith("DG_"):
+                dg_no = seller_code[3:]
+                try:
+                    detail = await _dg_item_detail(dg_no)
+                    thumb_obj = detail.get("thumb", {})
+                    orig_url = thumb_obj.get("original") or thumb_obj.get("large") or ""
+                    if orig_url:
+                        new_img_url = await naver_api.upload_image(orig_url)
+                        print(f"  [IMG] 도매꾹 _img_760 재업로드 ✅", flush=True)
+                except Exception as e:
+                    print(f"  [IMG] 도매꾹 재업로드 실패: {e}", flush=True)
+
+            # Pexels 폴백 (도매꾹 실패 or 비도매꾹)
+            if not new_img_url:
+                pexels_url = await search_pexels_image(name)
+                if pexels_url:
+                    try:
+                        qc = await employee_pexels_qc(pexels_url, name, ANTHROPIC_API_KEY)
+                        if qc.get("score", 0) >= 70:
+                            new_img_url = await naver_api.upload_image(pexels_url)
+                            print(f"  [IMG] Pexels 대체 ✅", flush=True)
+                    except Exception as e:
+                        print(f"  [IMG] Pexels 실패: {e}", flush=True)
+
+            if new_img_url:
+                update_payload["images"] = {
+                    "representativeImage": {"url": new_img_url}
+                }
+                results["image_fixed"] += 1
+                prod_log["image"] = "fixed"
+
+        # ── 설명 재생성 ──────────────────────────────────────────────────────
+        if fix_descriptions:
+            try:
+                p_dict = {"name": name, "category": category, "price": origin.get("salePrice", 0), "code": seller_code}
+                season_data = employee_season_planner()
+                season_info = season_data["upcoming"][0]["event"] if season_data["upcoming"] else ""
+                context = {"season": season_info, "trends": [], "pain_points": [], "selling_points": []}
+                ai = await generate_product_copy(p_dict, context)
+
+                # 배너+메인이미지가 있으면 기존 이미지 URL 재사용, 없으면 new_img_url
+                existing_img = (origin.get("images") or {}).get("representativeImage", {}).get("url", "")
+                banner_src   = update_payload.get("images", {}).get("representativeImage", {}).get("url", "") or existing_img
+                detail_html  = build_detail_html(banner_src, banner_src, ai, "")
+
+                if detail_html:
+                    update_payload["detailContent"] = detail_html
+                    results["description_fixed"] += 1
+                    prod_log["description"] = "fixed"
+            except Exception as e:
+                print(f"  [DESC] 설명 생성 실패: {e}", flush=True)
+
+        # ── Naver API 업데이트 ───────────────────────────────────────────────
+        if update_payload:
+            try:
+                ok = await naver_api.update_product(product_id, update_payload)
+                prod_log["updated"] = ok
+                if ok:
+                    print(f"  [UPDATE] ✅ {product_id}", flush=True)
+                else:
+                    print(f"  [UPDATE] ❌ {product_id}", flush=True)
+            except Exception as e:
+                results["errors"].append(f"{name[:20]}: {str(e)[:60]}")
+
+        results["products"].append(prod_log)
+        await asyncio.sleep(1.5)   # Naver API 속도 제한 준수
+
+    print(f"[FIX] 완료 — 이미지:{results['image_fixed']} 설명:{results['description_fixed']} 스킵:{results['skipped']}", flush=True)
+    return results
 
 
 async def pipeline_auto_cleanup(

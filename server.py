@@ -49,6 +49,7 @@ from main import (
     fetch_domeggook_products,
     DOMEGGOOK_API_KEY,
     _DG_KEYWORDS,
+    pipeline_fix_products,
 )
 from employees import (
     employee_season_planner,
@@ -369,6 +370,39 @@ async def register_products(request: Request, background_tasks: BackgroundTasks)
     limit = int(body.get("limit", 50))
     background_tasks.add_task(pipeline_register_products, excel_path, limit)
     return JSONResponse({"status": "processing", "excel": excel_path, "limit": limit})
+
+
+@app.post("/fix-products")
+async def fix_products(request: Request, background_tasks: BackgroundTasks):
+    """등록된 상품 이미지·설명 일괄 수정 (백그라운드).
+    Body(선택): {"limit": 50, "fix_images": true, "fix_descriptions": true}"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    limit            = int(body.get("limit", 50))
+    fix_images       = bool(body.get("fix_images", True))
+    fix_descriptions = bool(body.get("fix_descriptions", True))
+    background_tasks.add_task(pipeline_fix_products, limit, fix_images, fix_descriptions)
+    return JSONResponse({
+        "status": "processing",
+        "limit": limit,
+        "fix_images": fix_images,
+        "fix_descriptions": fix_descriptions,
+        "note": "배치 처리 중 — 완료까지 수분 소요 (Naver API 속도제한 준수)",
+    })
+
+
+@app.post("/fix-products/sync")
+async def fix_products_sync(request: Request):
+    """상품 수정 동기 실행 (소량 테스트용). Body: {"limit": 5}"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    limit = int(body.get("limit", 5))
+    result = await pipeline_fix_products(limit=limit)
+    return JSONResponse(result)
 
 
 @app.post("/register-domeggook")
