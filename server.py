@@ -877,6 +877,18 @@ async def list_products(page: int = 1, size: int = 50):
                     "price": p.get("originProduct", {}).get("salePrice", 0),
                     "status": p.get("originProduct", {}).get("statusType", ""),
                     "stock": p.get("originProduct", {}).get("stockQuantity", 0),
+                    "image": (
+                        p.get("originProduct", {})
+                        .get("images", {})
+                        .get("representativeImage", {})
+                        .get("url", "")
+                    ),
+                    "category": (
+                        p.get("originProduct", {})
+                        .get("detailAttribute", {})
+                        .get("naverShoppingSearchInfo", {})
+                        .get("categoryName", "")
+                    ),
                 }
                 for p in products
             ]
