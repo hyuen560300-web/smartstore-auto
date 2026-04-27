@@ -5,6 +5,7 @@
 
 import os
 import json
+import sys
 import httpx
 from datetime import datetime, timezone
 from fastapi import FastAPI, BackgroundTasks, Request, UploadFile, File
@@ -13,6 +14,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Windows cp949 터미널에서 em dash 등 UTF-8 문자 인코딩 오류 방지
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from main import (
     pipeline_register_products,
@@ -318,7 +325,7 @@ async def store_status():
     codes = load_registered_codes()
     file_ids = _load_drive_index()
     try:
-        with open(EXCEL_PROGRESS) as f:
+        with open(EXCEL_PROGRESS, encoding="utf-8") as f:
             progress = json.load(f)
     except Exception:
         progress = {"current_index": 0}
@@ -529,14 +536,14 @@ EXCEL_PROGRESS    = "./uploads/excel_progress.json"
 
 def _load_drive_index() -> list:
     try:
-        with open(DRIVE_INDEX_FILE) as f:
+        with open(DRIVE_INDEX_FILE, encoding="utf-8") as f:
             return json.load(f).get("file_ids", [])
     except Exception:
         return []
 
 
 def _save_drive_index(file_ids: list):
-    with open(DRIVE_INDEX_FILE, "w") as f:
+    with open(DRIVE_INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump({"file_ids": file_ids, "scanned_at": str(datetime.now(timezone.utc))}, f)
 
 
@@ -651,7 +658,7 @@ async def drive_index_status():
     """현재 Drive 인덱스 상태 확인"""
     file_ids = _load_drive_index()
     try:
-        with open(EXCEL_PROGRESS) as f:
+        with open(EXCEL_PROGRESS, encoding="utf-8") as f:
             progress = json.load(f)
     except Exception:
         progress = {"current_index": 0}
@@ -680,7 +687,7 @@ async def next_excel_from_drive():
 
     # 2. 진행 상황 로드
     try:
-        with open(EXCEL_PROGRESS) as f:
+        with open(EXCEL_PROGRESS, encoding="utf-8") as f:
             progress = json.load(f)
     except Exception:
         progress = {"current_index": 0}
@@ -688,21 +695,32 @@ async def next_excel_from_drive():
     idx = progress.get("current_index", 0) % len(file_ids)
     file_id = file_ids[idx]
 
-    # 3. 다운로드
+    # 3. 다운로드 (3회 재시도)
     download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
     print(f"[DRIVE] 다운로드 중: {file_id} (인덱스 {idx+1}/{len(file_ids)})", flush=True)
 
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
-        r = await c.get(download_url)
-        r.raise_for_status()
-
+    import asyncio as _asyncio
+    content: bytes | None = None
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                r = await c.get(download_url)
+                r.raise_for_status()
+                content = r.content
+            break
+        except Exception as exc:
+            if attempt < 3:
+                print(f"[DRIVE] 다운로드 실패({attempt}/3): {exc} — 5s 재시도", flush=True)
+                await _asyncio.sleep(5)
+            else:
+                raise
     save_path = Path(EXCEL_FOLDER) / "ownerclan_latest.xlsx"
-    save_path.write_bytes(r.content)
+    save_path.write_bytes(content)
 
     # 4. 진행 상황 저장
     next_idx = (idx + 1) % len(file_ids)
     progress["current_index"] = next_idx
-    with open(EXCEL_PROGRESS, "w") as f:
+    with open(EXCEL_PROGRESS, "w", encoding="utf-8") as f:
         json.dump(progress, f)
 
     return JSONResponse({
@@ -1145,7 +1163,7 @@ async def full_report():
     return JSONResponse({
         "🏪 스토어 현황": {
             "등록 상품 수": len(codes),
-            "처리한 Excel 파일": json.load(open(EXCEL_PROGRESS)).get("current_index", 0) if os.path.exists(EXCEL_PROGRESS) else 0,
+            "처리한 Excel 파일": (json.load(open(EXCEL_PROGRESS, encoding="utf-8")) if os.path.exists(EXCEL_PROGRESS) else {}).get("current_index", 0),
             "전체 Excel 파일": len(_load_drive_index()),
         },
         "💰 매출 (7일)": accounting,
@@ -1299,20 +1317,32 @@ async def _next_excel_internal() -> str | None:
         else:
             file_ids = [FALLBACK_FILE_ID]
     try:
-        with open(EXCEL_PROGRESS) as f:
+        with open(EXCEL_PROGRESS, encoding="utf-8") as f:
             progress = json.load(f)
     except Exception:
         progress = {"current_index": 0}
     idx = progress.get("current_index", 0) % len(file_ids)
     file_id = file_ids[idx]
     url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
-        r = await c.get(url)
-        r.raise_for_status()
+    import asyncio as _asyncio
+    content: bytes | None = None
+    for attempt in range(1, 4):
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                r = await c.get(url)
+                r.raise_for_status()
+                content = r.content
+            break
+        except Exception as exc:
+            if attempt < 3:
+                print(f"[SCHED/DRIVE] 다운로드 실패({attempt}/3): {exc} — 5s 재시도", flush=True)
+                await _asyncio.sleep(5)
+            else:
+                raise
     save_path = Path(EXCEL_FOLDER) / "ownerclan_latest.xlsx"
-    save_path.write_bytes(r.content)
+    save_path.write_bytes(content)
     progress["current_index"] = (idx + 1) % len(file_ids)
-    with open(EXCEL_PROGRESS, "w") as f:
+    with open(EXCEL_PROGRESS, "w", encoding="utf-8") as f:
         json.dump(progress, f)
     print(f"[SCHED] Excel 다운로드 완료: {file_id} ({len(r.content)//1024}KB)", flush=True)
     return str(save_path)

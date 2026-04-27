@@ -10,15 +10,37 @@ import io as _io
 import json
 import os
 import re as _re
+import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+# Windows cp949 터미널에서 em dash 등 UTF-8 문자 인코딩 오류 방지
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import anthropic
 import bcrypt
 import httpx
 import openpyxl
 from dotenv import load_dotenv
+
+
+# ─── 네트워크 재시도 유틸 ────────────────────────────────────────────────────
+async def _retry(coro_fn, retries: int = 3, delay: float = 5.0, label: str = "") -> any:
+    """비동기 코루틴을 최대 retries회 재시도 (실패 시 delay초 대기)."""
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return await coro_fn()
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries:
+                print(f"[RETRY] {label} 실패({attempt}/{retries}): {exc} — {delay}s 후 재시도", flush=True)
+                await asyncio.sleep(delay)
+    raise last_err
 
 
 # ─── 이미지 고화질 처리 유틸 ──────────────────────────────────────────────────
@@ -94,6 +116,7 @@ PEXELS_API_KEY      = _clean_key(os.environ.get("PEXELS_API_KEY", ""))
 OPENAI_API_KEY      = _clean_key(os.environ.get("OPENAI_API_KEY", ""))
 GOOGLE_AI_API_KEY   = _clean_key(os.environ.get("GOOGLE_AI_API_KEY", ""))
 FLUX_API_KEY        = _clean_key(os.environ.get("FLUX_API_KEY", ""))
+REPLICATE_API_KEY   = _clean_key(os.environ.get("REPLICATE_API_KEY", ""))
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
@@ -106,7 +129,7 @@ CLEANUP_LOG_FILE      = "./uploads/auto_cleanup.jsonl"
 
 def load_registered_codes() -> set:
     try:
-        with open(REGISTERED_CODES_FILE, "r") as f:
+        with open(REGISTERED_CODES_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
     except Exception:
         return set()
@@ -114,7 +137,7 @@ def load_registered_codes() -> set:
 def save_registered_code(code: str):
     codes = load_registered_codes()
     codes.add(str(code))
-    with open(REGISTERED_CODES_FILE, "w") as f:
+    with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
         json.dump(list(codes), f)
 
 
@@ -268,30 +291,33 @@ class NaverCommerceAPI:
         now = datetime.now(timezone.utc)
         headers = await self._headers()
         async with httpx.AsyncClient(timeout=30) as c:
-            # 1단계: 상품 ID 목록 조회
-            r = await c.post(
-                f"{NAVER_BASE}/v1/products/search",
-                headers=headers,
-                json={
-                    "productStatusTypes": ["SALE", "SUSPENSION"],
-                    "page": page,
-                    "size": size,
-                    "orderType": "NO",
-                    "periodType": "PROD_REG_DAY",
-                    "fromDate": (now - timedelta(days=365)).strftime("%Y-%m-%d"),
-                    "toDate": now.strftime("%Y-%m-%d"),
-                }
-            )
-            r.raise_for_status()
-            data = r.json()
+            # 1단계: 상품 ID 목록 조회 (3회 재시도)
+            async def _search():
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=headers,
+                    json={
+                        "productStatusTypes": ["SALE", "SUSPENSION"],
+                        "page": page,
+                        "size": size,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": (now - timedelta(days=365)).strftime("%Y-%m-%d"),
+                        "toDate": now.strftime("%Y-%m-%d"),
+                    }
+                )
+                r.raise_for_status()
+                return r.json()
+
+            data = await _retry(_search, retries=3, delay=5.0, label=f"list_products(p{page})")
             contents = data.get("contents", [])
 
-            # 2단계: 각 상품 상세 병렬 조회
+            # 2단계: 각 상품 상세 병렬 조회 (개별 실패 시 3회 재시도)
             async def _fetch_detail(item: dict) -> dict:
                 product_no = item.get("originProductNo")
                 if not product_no:
                     return item
-                try:
+                async def _get():
                     dr = await c.get(
                         f"{NAVER_BASE}/v2/products/origin-products/{product_no}",
                         headers=headers,
@@ -299,9 +325,11 @@ class NaverCommerceAPI:
                     )
                     if dr.status_code == 200:
                         item["originProduct"] = dr.json().get("originProduct", {})
+                    return item
+                try:
+                    return await _retry(_get, retries=3, delay=5.0, label=f"fetch_detail({product_no})")
                 except Exception:
-                    pass
-                return item
+                    return item
 
             enriched = await asyncio.gather(*[_fetch_detail(item) for item in contents])
             data["contents"] = list(enriched)
@@ -333,14 +361,17 @@ class NaverCommerceAPI:
         from_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
         to_date = now.strftime("%Y-%m-%d")
         try:
+            hdrs = await self._headers()
             async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.get(
-                    f"{NAVER_BASE}/v1/channel-products/{channel_product_no}/insights",
-                    headers=await self._headers(),
-                    params={"searchDateFrom": from_date, "searchDateTo": to_date},
-                )
-                if r.status_code == 200:
+                async def _get():
+                    r = await c.get(
+                        f"{NAVER_BASE}/v1/channel-products/{channel_product_no}/insights",
+                        headers=hdrs,
+                        params={"searchDateFrom": from_date, "searchDateTo": to_date},
+                    )
+                    r.raise_for_status()
                     return r.json()
+                return await _retry(_get, retries=3, delay=5.0, label=f"insight({channel_product_no})")
         except Exception as e:
             print(f"[INSIGHT] {channel_product_no} 조회 실패: {e}", flush=True)
         return None
@@ -1528,6 +1559,84 @@ async def generate_gemini_image(product_name: str, category: str = "") -> bytes 
     return None
 
 
+async def upscale_image(image_url: str, scale: int = 4) -> bytes | None:
+    """오너클랜 원본 이미지 업스케일
+    1차: Replicate Real-ESRGAN (API 키 있을 때, 실제 AI 업스케일)
+    2차: Pillow LANCZOS (폴백, 고품질 리샘플링)
+    """
+    # 원본 다운로드
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            r = await c.get(_extract_hq_url(image_url))
+            r.raise_for_status()
+        raw_bytes = r.content
+    except Exception as e:
+        print(f"[UPSCALE] 다운로드 실패: {e}", flush=True)
+        return None
+
+    # ── 1차: Replicate Real-ESRGAN ────────────────────────────────────────────
+    if REPLICATE_API_KEY:
+        try:
+            import base64 as _b64
+            img_data_url = "data:image/jpeg;base64," + _b64.b64encode(raw_bytes).decode()
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    "https://api.replicate.com/v1/predictions",
+                    headers={"Authorization": f"Token {REPLICATE_API_KEY}",
+                             "Content-Type": "application/json"},
+                    json={
+                        "version": "42fed1c4974146d4d2414e2be2c5277c7fcf05fcc3a73abf41610695738c1d7b",
+                        "input": {"image": img_data_url, "scale": scale, "face_enhance": False},
+                    },
+                )
+                r.raise_for_status()
+                prediction_id = r.json().get("id")
+            # 폴링 최대 90초
+            for _ in range(45):
+                await asyncio.sleep(2)
+                async with httpx.AsyncClient(timeout=15) as c:
+                    r = await c.get(
+                        f"https://api.replicate.com/v1/predictions/{prediction_id}",
+                        headers={"Authorization": f"Token {REPLICATE_API_KEY}"},
+                    )
+                    data = r.json()
+                status = data.get("status")
+                if status == "succeeded":
+                    output_url = data.get("output")
+                    if output_url:
+                        async with httpx.AsyncClient(timeout=30) as c:
+                            res = await c.get(output_url)
+                        print(f"[UPSCALE] Real-ESRGAN ✅ {scale}×", flush=True)
+                        return res.content
+                    break
+                if status in ("failed", "canceled"):
+                    print(f"[UPSCALE] Replicate 실패: {data.get('error','')}", flush=True)
+                    break
+        except Exception as e:
+            print(f"[UPSCALE] Replicate 오류: {e}", flush=True)
+
+    # ── 2차: Pillow LANCZOS 폴백 ─────────────────────────────────────────────
+    try:
+        from PIL import Image
+        import io as _io_mod
+        img = Image.open(_io_mod.BytesIO(raw_bytes))
+        w, h = img.size
+        # 4배 업스케일, 최대 4000px 캡
+        ratio = min(scale, 4000 / max(w, h, 1))
+        new_w, new_h = max(int(w * ratio), w), max(int(h * ratio), h)
+        upscaled = img.resize((new_w, new_h), Image.LANCZOS)
+        if upscaled.mode != "RGB":
+            upscaled = upscaled.convert("RGB")
+        buf = _io_mod.BytesIO()
+        upscaled.save(buf, format="JPEG", quality=95, optimize=True)
+        print(f"[UPSCALE] LANCZOS ✅ {w}×{h} → {new_w}×{new_h}", flush=True)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[UPSCALE] Pillow 오류: {e}", flush=True)
+
+    return None
+
+
 async def generate_flux_image(product_name: str, category: str = "") -> str | None:
     """Flux Pro 1.1 이미지 생성 — BFL API 비동기 폴링, 이미지 URL 반환"""
     if not FLUX_API_KEY:
@@ -1725,11 +1834,13 @@ async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
 async def get_product_image(p: dict) -> str | None:
     """
     이미지 우선순위:
-    1. Pexels 실사진    — QC 75점 이상
-    2. Gemini 생성      — QC 75점 이상
-    3. 오너클랜 원본    — QC 없이 그대로 사용
-    4. Flux 2 Pro 생성  — QC 95점 이상 (원본 없을 때만)
-    5. DALL-E           — QC 95점 이상 (최후 수단: 미달이라도 사용)
+    1. 오너클랜 원본 → 업스케일(Real-ESRGAN/LANCZOS) → QC 95점+
+    2. Pexels 실사진 QC 75점+
+    3. Gemini 생성 QC 75점+
+    4. Flux 2 Pro QC 95점+ (원본 없을 때만)
+    5. DALL-E (최후 수단, 미달이라도 사용)
+    업스케일 QC 미달 시: 원본 폴백 없이 2순위부터 진행
+    모든 소스 실패 시: 원본 이미지 마지막 보험
     """
     image_url    = str(p.get("image", "")).strip()
     product_name = str(p.get("name", ""))
@@ -1737,7 +1848,29 @@ async def get_product_image(p: dict) -> str | None:
     _, reject_kws = _get_scene_context(product_name)
     from employees import employee_pexels_qc, employee_image_inspector
 
-    # ── 1. Pexels QC 75점 이상 ───────────────────────────────────────────────
+    # ── 1. 오너클랜 원본 → 업스케일 → QC 95점+ ──────────────────────────────
+    if image_url.startswith("http"):
+        ok, reason, w, h = await _check_image_quality(image_url)
+        if ok:
+            print(f"[IMAGE] 업스케일 시도: {product_name[:20]} ({w}×{h})", flush=True)
+            upscaled = await upscale_image(image_url)
+            if upscaled:
+                try:
+                    up_result = await naver_api.upload_raw_image(upscaled)
+                    qc = await employee_image_inspector(
+                        up_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
+                    score = qc.get("score", 0)
+                    print(f"[IMAGE] 업스케일 QC: {score}점", flush=True)
+                    if score >= 95:
+                        print(f"[IMAGE] 업스케일 ✅", flush=True)
+                        return up_result
+                    print(f"[IMAGE] 업스케일 {score}점 미달 → Pexels", flush=True)
+                except Exception as e:
+                    print(f"[IMAGE] 업스케일 업로드 실패: {e}", flush=True)
+        else:
+            print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
+
+    # ── 2. Pexels QC 75점+ ───────────────────────────────────────────────────
     print(f"[IMAGE] Pexels 검색: {product_name[:20]}", flush=True)
     pexels_url = await search_pexels_image(product_name)
     if pexels_url:
@@ -1753,7 +1886,7 @@ async def get_product_image(p: dict) -> str | None:
         except Exception as e:
             print(f"[IMAGE] Pexels 실패: {e}", flush=True)
 
-    # ── 2. Gemini QC 75점 이상 ───────────────────────────────────────────────
+    # ── 3. Gemini QC 75점+ ───────────────────────────────────────────────────
     print(f"[IMAGE] Gemini 생성: {product_name[:20]}", flush=True)
     gemini_raw = await generate_gemini_image(product_name, category)
     if gemini_raw:
@@ -1766,24 +1899,11 @@ async def get_product_image(p: dict) -> str | None:
             if score >= 75:
                 print(f"[IMAGE] Gemini ✅", flush=True)
                 return gemini_result
-            print(f"[IMAGE] Gemini {score}점 미달 → 오너클랜 원본", flush=True)
+            print(f"[IMAGE] Gemini {score}점 미달 → Flux", flush=True)
         except Exception as e:
             print(f"[IMAGE] Gemini 실패: {e}", flush=True)
 
-    # ── 3. 오너클랜 원본 (QC 없이) ──────────────────────────────────────────
-    if image_url.startswith("http"):
-        ok, reason, w, h = await _check_image_quality(image_url)
-        if ok:
-            try:
-                result = await naver_api.upload_image(image_url)
-                print(f"[IMAGE] 오너클랜 원본 ✅ {w}×{h}", flush=True)
-                return result
-            except Exception as e:
-                print(f"[IMAGE] 오너클랜 업로드 실패: {e}", flush=True)
-        else:
-            print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
-
-    # ── 4. Flux — 원본 없을 때만, QC 95점 이상 ──────────────────────────────
+    # ── 4. Flux QC 95점+ (원본 없을 때만) ────────────────────────────────────
     if not image_url.startswith("http"):
         print(f"[IMAGE] Flux 생성(원본 없음): {product_name[:20]}", flush=True)
         flux_url = await generate_flux_image(product_name, category)
@@ -1801,7 +1921,7 @@ async def get_product_image(p: dict) -> str | None:
             except Exception as e:
                 print(f"[IMAGE] Flux 실패: {e}", flush=True)
 
-    # ── 5. DALL-E QC 95점 이상, 미달이라도 최후 수단으로 사용 ─────────────
+    # ── 5. DALL-E (최후 수단) ─────────────────────────────────────────────────
     print(f"[IMAGE] DALL-E 생성: {product_name[:20]}", flush=True)
     dalle_url = await generate_dalle_image(product_name)
     if dalle_url:
@@ -1818,6 +1938,15 @@ async def get_product_image(p: dict) -> str | None:
             return dalle_result
         except Exception as e:
             print(f"[IMAGE] DALL-E 실패: {e}", flush=True)
+
+    # ── 보험: 원본 이미지라도 사용 ───────────────────────────────────────────
+    if image_url.startswith("http"):
+        try:
+            result = await naver_api.upload_image(image_url)
+            print(f"[IMAGE] 원본 보험 사용 ✅", flush=True)
+            return result
+        except Exception as e:
+            print(f"[IMAGE] 원본 보험 실패: {e}", flush=True)
 
     print(f"[IMAGE] ❌ 모든 소스 실패: {product_name[:20]}", flush=True)
     return None
@@ -2070,18 +2199,27 @@ async def pipeline_auto_cleanup(
         "deactivated_list": [],
     }
 
-    # 전체 상품 수집 (페이지 순회)
+    # 전체 상품 수집 (페이지 순회) — 네트워크 오류는 재시도, 실제 빈 페이지만 종료
     all_products = []
     page = 1
+    consecutive_empty = 0
     while True:
         try:
-            resp = await naver_api.list_products(page=page, size=100)
+            resp = await _retry(
+                lambda p=page: naver_api.list_products(page=p, size=100),
+                retries=3, delay=5.0, label=f"cleanup list_products(p{page})"
+            )
         except Exception as e:
             results["errors"].append(f"상품 목록 조회 실패(p{page}): {e}")
+            print(f"[CLEANUP] p{page} 3회 재시도 실패 — 수집 종료", flush=True)
             break
         contents = resp.get("contents", [])
         if not contents:
-            break
+            consecutive_empty += 1
+            if consecutive_empty >= 2:
+                break
+            continue
+        consecutive_empty = 0
         all_products.extend(contents)
         if len(contents) < 100:
             break
