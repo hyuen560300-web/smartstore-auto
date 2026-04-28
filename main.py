@@ -103,6 +103,28 @@ def _process_image_hq(raw_bytes: bytes, target: int = 1000, banner: bool = False
         print(f"[IMAGE] 처리 실패, 원본 사용: {e}", flush=True)
         return raw_bytes
 
+
+def _process_image_detail(raw_bytes: bytes, max_width: int = 860) -> bytes:
+    """상세 설명 이미지: 원본 비율 유지, 최대 860px 폭 리사이즈. 정사각형 패딩 없음.
+    텍스트·표가 포함된 공급사 상세 이미지를 왜곡 없이 유지."""
+    try:
+        from PIL import Image
+        img = Image.open(_io.BytesIO(raw_bytes)).convert("RGB")
+        w, h = img.size
+        if w > max_width:
+            scale = max_width / w
+            new_w = max_width
+            new_h = max(1, int(h * scale))
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=95, subsampling=0,
+                 optimize=True, progressive=True)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[IMAGE] 상세이미지 처리 실패, 원본 사용: {e}", flush=True)
+        return raw_bytes
+
+
 load_dotenv()
 
 # ─── 환경변수 ────────────────────────────────────────────────────────────────
@@ -227,6 +249,19 @@ class NaverCommerceAPI:
     async def upload_raw_image(self, raw_bytes: bytes, is_banner: bool = False) -> str:
         """raw bytes를 직접 네이버에 업로드 (Gemini 등 URL 없는 소스용)"""
         image_bytes = _process_image_hq(raw_bytes, target=1000, banner=is_banner)
+        token = await self.get_token()
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/product-images/upload",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"imageFiles": ("image.jpg", image_bytes, "image/jpeg")}
+            )
+            r.raise_for_status()
+            return r.json()["images"][0]["url"]
+
+    async def upload_detail_image(self, raw_bytes: bytes) -> str:
+        """상세 설명 이미지 업로드: 원본 비율 유지, 860px 폭, 정사각형 패딩 없음."""
+        image_bytes = _process_image_detail(raw_bytes, max_width=860)
         token = await self.get_token()
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(
@@ -537,16 +572,52 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     qty   = detail.get("qty", {}) if detail else {}
     stock = min(_to_int(str(qty.get("inventory", 100))) or 100, 100)
 
+    # 상세 설명 HTML (공급사 상세페이지 이미지 포함)
+    content = str(detail.get("content", "") or "") if detail else ""
+
     return {
-        "code":     f"DG_{no}",
-        "name":     name,
-        "price":    price,       # 도매꾹 도매가 = 공급가
-        "image":    image,
-        "category": category,
-        "stock":    stock,
-        "source":   "domeggook",
-        "_dg_no":   no,
+        "code":        f"DG_{no}",
+        "name":        name,
+        "price":       price,       # 도매꾹 도매가 = 공급가
+        "image":       image,
+        "category":    category,
+        "stock":       stock,
+        "source":      "domeggook",
+        "_dg_no":      no,
+        "_dg_content": content,     # 공급사 상세 설명 HTML (비어있으면 "")
     }
+
+
+import re as _re_img
+
+
+async def _dg_content_to_naver_html(content_html: str) -> str:
+    """도매꾹 상세 설명 HTML → 이미지 URL을 Naver 업로드 URL로 교체한 HTML.
+    이미지가 없거나 전부 실패하면 빈 문자열 반환 (AI 폴백 사용)."""
+    if not content_html:
+        return ""
+    img_urls = _re_img.findall(r'<img[^>]+src=["\']([^"\']+)["\']', content_html, _re_img.IGNORECASE)
+    if not img_urls:
+        return ""
+    result = content_html
+    uploaded = 0
+    for url in img_urls:
+        try:
+            clean_url = _dg_stt_to_original(_extract_hq_url(url))
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+                r = await c.get(clean_url)
+                if r.status_code != 200 and clean_url != url:
+                    r = await c.get(url)
+                r.raise_for_status()
+            naver_url = await naver_api.upload_detail_image(r.content)
+            result = result.replace(url, naver_url)
+            uploaded += 1
+            print(f"[상세이미지] ✅ {url[:70]}", flush=True)
+        except Exception as e:
+            print(f"[상세이미지] 실패({url[:50]}): {e}", flush=True)
+    if uploaded == 0:
+        return ""
+    return result
 
 
 async def fetch_domeggook_products(
@@ -2444,16 +2515,26 @@ async def pipeline_register_from_domeggook(
                     naver_img_url, headline_txt,
                     ai.get("sub_headline") or ai.get("sub_text", ""))
 
+            # 도매꾹 상세 설명 이미지 → Naver URL로 교체 (공급사 실제 스펙 이미지)
+            dg_content_html = await _dg_content_to_naver_html(str(p.get("_dg_content", "")))
+
+            # 도매꾹 content 없을 때만 DALL-E detail shot 생성
             detail_img_url = ""
-            dalle_detail_raw = await generate_dalle_detail_shot(
-                str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
-            if dalle_detail_raw:
-                try:
-                    detail_img_url = await naver_api.upload_image(dalle_detail_raw)
-                except Exception:
-                    pass
+            if not dg_content_html:
+                dalle_detail_raw = await generate_dalle_detail_shot(
+                    str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
+                if dalle_detail_raw:
+                    try:
+                        detail_img_url = await naver_api.upload_image(dalle_detail_raw)
+                    except Exception:
+                        pass
 
             detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
+
+            # 도매꾹 상세 설명 이미지가 있으면 AI 섹션 뒤에 추가
+            if dg_content_html:
+                detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
+                print(f"[상세페이지] 도매꾹 상세 설명 이미지 추가 ✅", flush=True)
 
             _, reject_kws = _get_scene_context(str(p.get("name", "")))
             qc_result = await run_qc_pipeline(
