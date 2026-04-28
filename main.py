@@ -469,14 +469,19 @@ def _dg_img_url(thumb: str) -> str:
 
 
 def _dg_stt_to_original(url: str) -> str:
-    """도매꾹 이미지 URL에서 크기 제한 접미사를 모두 제거 → 원본 고해상도 URL.
-    _stt_NNN.png (센터크롭 360p), _img_NNN (760p 상한) 접미사 모두 제거.
-    예: xxx_stt_330.png?hash=abc → xxx?hash=abc
-        xxx_img_760?hash=abc    → xxx?hash=abc"""
+    """도매꾹 이미지 URL → 최대 화질 URL 변환. CDN별 처리:
+    - img.domeggook.com : _stt_NNN.png → _img_760 (CDN이 suffix 필수)
+    - cdn1.domeggook.com / 기타 : _stt_NNN.png, _img_NNN 모두 제거 → 원본
+    예(img): xxx_stt_330.png → xxx_img_760
+    예(cdn1): xxx_stt_330.png → xxx  /  xxx_img_760 → xxx"""
     if not url:
         return url
     import re as _re2
     url = str(url)
+    if "img.domeggook.com" in url:
+        # img.domeggook.com CDN: _img_NNN suffix 없으면 404 → _img_760 유지
+        return _re2.sub(r'_stt_\d+\.png', '_img_760', url)
+    # cdn1.domeggook.com 및 기타: suffix 제거 → 원본 고해상도
     url = _re2.sub(r'_stt_\d+\.png', '', url)
     url = _re2.sub(r'_img_\d+', '', url)
     return url
