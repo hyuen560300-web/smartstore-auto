@@ -56,11 +56,13 @@ def _extract_hq_url(url: str) -> str:
         return url
     # 쿼리스트링 크기 제한 제거
     clean = _re.sub(r'[?&](width|w|size|h|height)=\d+', '', url)
-    # 경로 접미사 제거 (_300, _thumb 등)
+    # 경로 접미사 제거 (_300, _thumb, 도매꾹 _img_NNN 등)
     clean = _re.sub(
-        r'(_\d{2,4}x\d{2,4}|_thumb|_small|_medium|_low|_300|_400|_500)',
+        r'(_\d{2,4}x\d{2,4}|_thumb|_small|_medium|_low|_300|_400|_500|_img_\d+)',
         '', clean, flags=_re.IGNORECASE
     )
+    # 도매꾹 센터크롭 접미사 제거
+    clean = _re.sub(r'_stt_\d+\.png', '', clean)
     return clean.strip('?&')
 
 
@@ -467,15 +469,17 @@ def _dg_img_url(thumb: str) -> str:
 
 
 def _dg_stt_to_original(url: str) -> str:
-    """도매꾹 _stt_NNN.png (센터크롭 스탬프) → _img_760 (원본 비율) URL 변환.
-    _stt_ 썸네일은 정사각형 센터크롭이라 상품 상하가 잘려 보임.
-    _img_760 은 원본 비율을 유지한 최대 760px 이미지.
-    예: xxx_stt_330.png?hash=abc → xxx_img_760?hash=abc"""
-    if not url or "_stt_" not in url:
+    """도매꾹 이미지 URL에서 크기 제한 접미사를 모두 제거 → 원본 고해상도 URL.
+    _stt_NNN.png (센터크롭 360p), _img_NNN (760p 상한) 접미사 모두 제거.
+    예: xxx_stt_330.png?hash=abc → xxx?hash=abc
+        xxx_img_760?hash=abc    → xxx?hash=abc"""
+    if not url:
         return url
-    # _stt_NNN.png → _img_760 (확장자 .png 제거, 크기를 760으로 교체)
     import re as _re2
-    return _re2.sub(r'_stt_\d+\.png', '_img_760', url)
+    url = str(url)
+    url = _re2.sub(r'_stt_\d+\.png', '', url)
+    url = _re2.sub(r'_img_\d+', '', url)
+    return url
 
 
 async def _dg_item_detail(item_no: str) -> dict:
@@ -511,14 +515,13 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     if price <= 0:
         return None
 
-    # 이미지 우선순위: 상세 original > 상세 large > 목록 thumb(_img_760 변환)
-    # 목록의 thumb은 _stt_330.png(센터크롭) → _img_760(원본 비율)으로 변환 필수
-    thumb_obj  = detail.get("thumb", {}) if detail else {}
-    list_thumb = _dg_stt_to_original(str(item.get("thumb", "")))  # 크롭 → 원본 비율
+    # 이미지 우선순위: 상세 original > 상세 large > 목록 thumb
+    # 모든 URL에 _dg_stt_to_original 적용 → _stt_/_img_ 접미사 제거 → 진짜 원본
+    thumb_obj = detail.get("thumb", {}) if detail else {}
     image = (
-        thumb_obj.get("original") or   # getItemView: 원본 비율 760px
-        thumb_obj.get("large") or      # getItemView: 원본 비율 330px
-        list_thumb                     # getItemList: _stt→_img 변환된 760px
+        _dg_stt_to_original(str(thumb_obj.get("original", ""))) or
+        _dg_stt_to_original(str(thumb_obj.get("large", ""))) or
+        _dg_stt_to_original(str(item.get("thumb", "")))
     )
 
     # 카테고리: 상세 basis.section (예: "생활/주방 > 수납/정리")
