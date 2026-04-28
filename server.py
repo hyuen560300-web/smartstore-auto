@@ -1344,11 +1344,14 @@ async def cleanup_empty_products():
             break
         for prod in contents:
             origin     = prod.get("originProduct", {})
-            name       = origin.get("name", "").strip()
-            price      = int(origin.get("salePrice", 0))
             product_id = str(prod.get("originProductNo", ""))
             if not product_id:
                 continue
+            # statusType 없으면 상세 조회 실패 → 유효 상품일 수 있으므로 건너뜀
+            if not origin.get("statusType"):
+                continue
+            name  = origin.get("name", "").strip()
+            price = int(origin.get("salePrice", 0))
             if not name and price == 0:
                 ok = await naver_api.delete_product(product_id)
                 if ok:
