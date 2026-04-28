@@ -454,6 +454,32 @@ async def domeggook_preview(limit: int = 10, keyword: str = ""):
     })
 
 
+@app.get("/domeggook-debug")
+async def domeggook_debug():
+    """도매꾹 API 직접 호출 → 원시 응답 반환 (진단용)"""
+    import httpx as _httpx
+    key = DOMEGGOOK_API_KEY
+    if not key:
+        return JSONResponse({"error": "DOMEGGOOK_API_KEY 없음"}, status_code=400)
+    url = "https://domeggook.com/ssl/api/"
+    try:
+        async with _httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(url, params={
+                "ver": "4.1", "mode": "getItemList",
+                "aid": key, "market": "dome",
+                "kw": "생활용품", "om": "json",
+                "mnp": "3000", "mxp": "150000",
+                "sz": "5", "pg": "1", "so": "rd",
+            })
+        return JSONResponse({
+            "status_code": r.status_code,
+            "key_prefix": key[:6] + "***",
+            "raw": r.json() if r.headers.get("content-type","").startswith("application/json") else r.text[:500],
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/register-single")
 async def register_single_product(request: Request):
     """
