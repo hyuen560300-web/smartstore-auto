@@ -456,12 +456,15 @@ async def domeggook_preview(limit: int = 10, keyword: str = ""):
 
 @app.get("/domeggook-debug")
 async def domeggook_debug():
-    """도매꾹 API 직접 호출 → 원시 응답 반환 (진단용)"""
+    """도매꾹 API 직접 호출 + fetch_domeggook_products 함수 테스트 (진단용)"""
     import httpx as _httpx
     key = DOMEGGOOK_API_KEY
     if not key:
         return JSONResponse({"error": "DOMEGGOOK_API_KEY 없음"}, status_code=400)
     url = "https://domeggook.com/ssl/api/"
+
+    # ① 직접 API 호출
+    direct_result = {}
     try:
         async with _httpx.AsyncClient(timeout=15) as c:
             r = await c.get(url, params={
@@ -469,15 +472,28 @@ async def domeggook_debug():
                 "aid": key, "market": "dome",
                 "kw": "생활용품", "om": "json",
                 "mnp": "3000", "mxp": "150000",
-                "sz": "5", "pg": "1", "so": "rd",
+                "sz": "3", "pg": "1", "so": "rd",
             })
-        return JSONResponse({
-            "status_code": r.status_code,
-            "key_prefix": key[:6] + "***",
-            "raw": r.json() if r.headers.get("content-type","").startswith("application/json") else r.text[:500],
-        })
+        data = r.json()
+        items = data.get("domeggook", {}).get("list", {}).get("item", [])
+        direct_result = {"status": r.status_code, "items_count": len(items),
+                         "first_title": items[0].get("title","") if items else ""}
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        direct_result = {"error": str(e)}
+
+    # ② fetch_domeggook_products 함수 호출
+    func_result = {}
+    try:
+        prods = await fetch_domeggook_products(["생활용품"], pool_size=3, min_price=3000, max_price=150000)
+        func_result = {"count": len(prods), "first_name": prods[0].get("name","") if prods else ""}
+    except Exception as e:
+        func_result = {"error": str(e)}
+
+    return JSONResponse({
+        "key_prefix": key[:6] + "***",
+        "direct_api": direct_result,
+        "fetch_func": func_result,
+    })
 
 
 @app.post("/register-single")
