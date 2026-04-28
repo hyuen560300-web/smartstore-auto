@@ -405,6 +405,21 @@ async def fix_products_sync(request: Request):
     return JSONResponse(result)
 
 
+@app.post("/register-domeggook-sync")
+async def register_domeggook_sync(request: Request):
+    """도매꾹 등록 동기 실행 — 결과/에러 즉시 반환 (진단용). Body: {"limit": 1}"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    limit = int(body.get("limit", 1))
+    keywords = body.get("keywords") or _DG_KEYWORDS
+    min_price = int(body.get("min_price", 3000))
+    max_price = int(body.get("max_price", 150000))
+    result = await pipeline_register_from_domeggook(limit, keywords, min_price, max_price)
+    return JSONResponse(result if isinstance(result, dict) else {"result": str(result)})
+
+
 @app.post("/register-domeggook")
 async def register_from_domeggook(request: Request, background_tasks: BackgroundTasks):
     """도매꾹 API 소싱 → 스마트스토어 상품 등록 (백그라운드 실행).
