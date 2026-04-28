@@ -1349,7 +1349,7 @@ async def cleanup_empty_products():
             product_id = str(prod.get("originProductNo", ""))
             if not product_id:
                 continue
-            if not name or price == 0:
+            if not name and price == 0:
                 ok = await naver_api.delete_product(product_id)
                 if ok:
                     deleted.append(product_id)
