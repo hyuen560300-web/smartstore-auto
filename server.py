@@ -1293,12 +1293,114 @@ async def full_report():
     })
 
 
+@app.get("/sync-registered-codes")
+async def sync_registered_codes():
+    """네이버 등록 상품의 sellerManagementCode 추출 → registered_codes.json 동기화
+    Railway 재배포 후 로컬 파일 초기화 시 수동 복구용"""
+    from main import REGISTERED_CODES_FILE
+    import asyncio as _asyncio
+    codes: set[str] = set()
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=50)
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for prod in contents:
+            origin = prod.get("originProduct", {})
+            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+            if seller_code:
+                codes.add(seller_code)
+        if len(contents) < 50:
+            break
+        page += 1
+        await _asyncio.sleep(0.5)
+    with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(codes), f)
+    return JSONResponse({
+        "status": "ok",
+        "synced": len(codes),
+        "sample": list(codes)[:10],
+    })
+
+
+@app.post("/cleanup-empty-products")
+async def cleanup_empty_products():
+    """네이버 등록 상품 중 이름·가격이 없는 빈 상품 일괄 삭제 (등록 도중 실패한 껍데기 제거)"""
+    import asyncio as _asyncio
+    deleted: list[str] = []
+    errors:  list[str] = []
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=50)
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for prod in contents:
+            origin     = prod.get("originProduct", {})
+            name       = origin.get("name", "").strip()
+            price      = int(origin.get("salePrice", 0))
+            product_id = str(prod.get("originProductNo", ""))
+            if not product_id:
+                continue
+            if not name or price == 0:
+                ok = await naver_api.delete_product(product_id)
+                if ok:
+                    deleted.append(product_id)
+                else:
+                    errors.append(product_id)
+                await _asyncio.sleep(0.3)
+        if len(contents) < 50:
+            break
+        page += 1
+        await _asyncio.sleep(1.0)
+    return JSONResponse({
+        "status":      "ok",
+        "deleted":     len(deleted),
+        "errors":      len(errors),
+        "deleted_ids": deleted,
+        "error_ids":   errors,
+    })
+
+
 @app.on_event("startup")
 async def startup_event():
-    """서버 시작 시 Drive 인덱스 자동 복구 + 스케줄러 시작"""
+    """서버 시작 시 Drive 인덱스 자동 복구 + registered_codes 동기화 + 스케줄러 시작"""
     if not _load_drive_index():
         _save_drive_index(DRIVE_FILE_IDS_PERMANENT)
         print(f"[STARTUP] Drive 인덱스 자동 복구 완료: {len(DRIVE_FILE_IDS_PERMANENT)}개", flush=True)
+
+    # registered_codes.json 자동 동기화 (Railway 재배포 후 파일 초기화 복구)
+    try:
+        from main import REGISTERED_CODES_FILE
+        import asyncio as _asyncio
+        codes: set[str] = set()
+        page = 1
+        while True:
+            resp = await naver_api.list_products(page=page, size=50)
+            contents = resp.get("contents", [])
+            if not contents:
+                break
+            for prod in contents:
+                origin = prod.get("originProduct", {})
+                seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+                if seller_code:
+                    codes.add(seller_code)
+            if len(contents) < 50:
+                break
+            page += 1
+            await _asyncio.sleep(0.5)
+        with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(codes), f)
+        print(f"[STARTUP] registered_codes.json 동기화 완료: {len(codes)}개", flush=True)
+    except Exception as e:
+        print(f"[STARTUP] registered_codes.json 동기화 실패 (무시): {e}", flush=True)
 
     # ── APScheduler: n8n 워크플로우 3개 대체 ─────────────────────────────────
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
