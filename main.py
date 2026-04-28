@@ -61,8 +61,9 @@ def _extract_hq_url(url: str) -> str:
         r'(_\d{2,4}x\d{2,4}|_thumb|_small|_medium|_low|_300|_400|_500|_img_\d+)',
         '', clean, flags=_re.IGNORECASE
     )
-    # 도매꾹 센터크롭 접미사 제거
-    clean = _re.sub(r'_stt_\d+\.png', '', clean)
+    # _stt_NNN.png: cdn1.domeggook.com은 suffix 없으면 404 → 유지, 그 외만 제거
+    if 'cdn1.domeggook.com' not in clean:
+        clean = _re.sub(r'_stt_\d+\.png', '', clean)
     return clean.strip('?&')
 
 
@@ -505,18 +506,19 @@ def _dg_img_url(thumb: str) -> str:
 
 def _dg_stt_to_original(url: str) -> str:
     """도매꾹 이미지 URL → 최대 화질 URL 변환. CDN별 처리:
-    - img.domeggook.com : _stt_NNN.png → _img_760 (CDN이 suffix 필수)
-    - cdn1.domeggook.com / 기타 : _stt_NNN.png, _img_NNN 모두 제거 → 원본
-    예(img): xxx_stt_330.png → xxx_img_760
-    예(cdn1): xxx_stt_330.png → xxx  /  xxx_img_760 → xxx"""
+    - img.domeggook.com  : _stt_NNN.png → _img_760 (suffix 없으면 404)
+    - cdn1.domeggook.com : _stt_NNN.png 유지 (suffix 제거하면 해시만 남아 404)
+    - 기타              : _stt_NNN.png, _img_NNN 제거 → 원본"""
     if not url:
         return url
     import re as _re2
     url = str(url)
     if "img.domeggook.com" in url:
-        # img.domeggook.com CDN: _img_NNN suffix 없으면 404 → _img_760 유지
         return _re2.sub(r'_stt_\d+\.png', '_img_760', url)
-    # cdn1.domeggook.com 및 기타: suffix 제거 → 원본 고해상도
+    if "cdn1.domeggook.com" in url:
+        # suffix 제거 시 확장자 없는 해시 URL → 404. 330px 썸네일 그대로 사용
+        return url
+    # 그 외 CDN: suffix 제거
     url = _re2.sub(r'_stt_\d+\.png', '', url)
     url = _re2.sub(r'_img_\d+', '', url)
     return url
