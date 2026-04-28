@@ -107,6 +107,12 @@ load_dotenv()
 NAVER_CLIENT_ID     = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 NAVER_SELLER_ID     = os.environ.get("NAVER_SELLER_ID", "")
+if not NAVER_CLIENT_ID:
+    raise ValueError("환경변수 미설정: NAVER_CLIENT_ID")
+if not NAVER_CLIENT_SECRET:
+    raise ValueError("환경변수 미설정: NAVER_CLIENT_SECRET")
+if not NAVER_SELLER_ID:
+    raise ValueError("환경변수 미설정: NAVER_SELLER_ID")
 import re as _re_keys
 def _clean_key(k: str) -> str:
     return _re_keys.sub(r'[^\x21-\x7E]', '', k or "")
