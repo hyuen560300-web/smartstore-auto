@@ -2292,8 +2292,12 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
     if season_info:
         print(f"[시즌기획자] 현재 시즌: {season_info}", flush=True)
 
-    # ③ 트렌드 스카우터: 트렌딩 키워드 수집
-    trend_keywords = await employee_trend_scout()
+    # ③ 트렌드 스카우터: 트렌딩 키워드 수집 (실패 시 빈 리스트로 계속)
+    try:
+        trend_keywords = await employee_trend_scout()
+    except Exception as _te:
+        print(f"[트렌드스카우터] 실패(무시): {_te}", flush=True)
+        trend_keywords = []
     print(f"[트렌드스카우터] 키워드 {len(trend_keywords)}개 수집", flush=True)
 
     registered_codes = load_registered_codes()
@@ -2460,7 +2464,11 @@ async def pipeline_register_from_domeggook(
 
     season_data  = employee_season_planner()
     season_info  = season_data["upcoming"][0]["event"] if season_data["upcoming"] else ""
-    trend_keywords = await employee_trend_scout()
+    try:
+        trend_keywords = await employee_trend_scout()
+    except Exception as _te:
+        print(f"[트렌드스카우터] 실패(무시): {_te}", flush=True)
+        trend_keywords = []
 
     registered_codes = load_registered_codes()
     results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0,
