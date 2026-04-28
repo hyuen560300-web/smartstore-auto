@@ -2623,30 +2623,56 @@ async def pipeline_fix_products(
         if fix_images:
             new_img_url: str | None = None
 
-            # 도매꾹 상품: _img_760 재업로드
-            if seller_code.startswith("DG_"):
-                dg_no = seller_code[3:]
-                try:
-                    detail = await _dg_item_detail(dg_no)
-                    thumb_obj = detail.get("thumb", {})
-                    orig_url = thumb_obj.get("original") or thumb_obj.get("large") or ""
-                    if orig_url:
-                        new_img_url = await naver_api.upload_image(orig_url)
-                        print(f"  [IMG] 도매꾹 _img_760 재업로드 ✅", flush=True)
-                except Exception as e:
-                    print(f"  [IMG] 도매꾹 재업로드 실패: {e}", flush=True)
+            # 현재 대표 이미지 URL 확인
+            raw_img_node = (origin.get("images") or {}).get("representativeImage") or {}
+            existing_img = raw_img_node.get("url", "") if isinstance(raw_img_node, dict) else ""
+            has_760 = "_img_760" in existing_img
+            no_image = not existing_img
 
-            # Pexels 폴백 (도매꾹 실패 or 비도매꾹)
-            if not new_img_url:
-                pexels_url = await search_pexels_image(name)
-                if pexels_url:
+            # 교체 필요한 경우만 처리: _img_760 감지 or 이미지 없음
+            if has_760 or no_image:
+                print(f"  [IMG] {'_img_760 저화질 감지' if has_760 else '이미지 없음'} → 교체 시도", flush=True)
+
+                # 1순위: 도매꾹 상품 → API로 원본 이미지
+                if seller_code.startswith("DG_"):
+                    dg_no = seller_code[3:]
                     try:
-                        qc = await employee_pexels_qc(pexels_url, name, ANTHROPIC_API_KEY)
-                        if qc.get("score", 0) >= 70:
-                            new_img_url = await naver_api.upload_image(pexels_url)
-                            print(f"  [IMG] Pexels 대체 ✅", flush=True)
+                        detail = await _dg_item_detail(dg_no)
+                        thumb_obj = detail.get("thumb", {})
+                        orig_url = thumb_obj.get("original") or thumb_obj.get("large") or ""
+                        if orig_url:
+                            new_img_url = await naver_api.upload_image(orig_url)
+                            print(f"  [IMG] 도매꾹 원본 업로드 ✅", flush=True)
                     except Exception as e:
-                        print(f"  [IMG] Pexels 실패: {e}", flush=True)
+                        print(f"  [IMG] 도매꾹 재업로드 실패: {e}", flush=True)
+
+                # 2순위: _img_760 URL 직접 치환 (CDN URL에서 _img_760 제거 → 원본)
+                if not new_img_url and has_760:
+                    hires_url = existing_img.replace("_img_760", "")
+                    try:
+                        new_img_url = await naver_api.upload_image(hires_url)
+                        print(f"  [IMG] _img_760 제거 → 고화질 ✅", flush=True)
+                    except Exception as e:
+                        print(f"  [IMG] URL 치환 실패: {e}", flush=True)
+
+                # 3순위: Pexels (_img_760 감지 시 QC 60, 이미지 없음 시 QC 70)
+                if not new_img_url:
+                    pexels_url = await search_pexels_image(name)
+                    if pexels_url:
+                        try:
+                            qc = await employee_pexels_qc(pexels_url, name, ANTHROPIC_API_KEY)
+                            threshold = 60 if has_760 else 70
+                            score = qc.get("score", 0)
+                            if score >= threshold:
+                                new_img_url = await naver_api.upload_image(pexels_url)
+                                print(f"  [IMG] Pexels 대체 (score={score}) ✅", flush=True)
+                            else:
+                                print(f"  [IMG] Pexels QC 미달 (score={score}<{threshold})", flush=True)
+                        except Exception as e:
+                            print(f"  [IMG] Pexels 실패: {e}", flush=True)
+            else:
+                prod_log["image"] = "ok"
+                print(f"  [IMG] 정상 이미지 — 스킵", flush=True)
 
             if new_img_url:
                 update_payload["images"] = {
@@ -2654,6 +2680,8 @@ async def pipeline_fix_products(
                 }
                 results["image_fixed"] += 1
                 prod_log["image"] = "fixed"
+            elif has_760 or no_image:
+                prod_log["image"] = "unfixed"
 
         # ── 설명 재생성 ──────────────────────────────────────────────────────
         if fix_descriptions:
