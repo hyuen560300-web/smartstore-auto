@@ -516,12 +516,12 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
         return None
 
     # 이미지 우선순위: 상세 original > 상세 large > 목록 thumb
-    # 모든 URL에 _dg_stt_to_original 적용 → _stt_/_img_ 접미사 제거 → 진짜 원본
+    # value or "" 로 None 방지 후 _dg_stt_to_original → 크기 접미사 완전 제거
     thumb_obj = detail.get("thumb", {}) if detail else {}
     image = (
-        _dg_stt_to_original(str(thumb_obj.get("original", ""))) or
-        _dg_stt_to_original(str(thumb_obj.get("large", ""))) or
-        _dg_stt_to_original(str(item.get("thumb", "")))
+        _dg_stt_to_original(thumb_obj.get("original") or "") or
+        _dg_stt_to_original(thumb_obj.get("large") or "") or
+        _dg_stt_to_original(item.get("thumb") or "")
     )
 
     # 카테고리: 상세 basis.section (예: "생활/주방 > 수납/정리")
