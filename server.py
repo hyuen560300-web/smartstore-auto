@@ -1033,12 +1033,12 @@ async def list_products(page: int = 1, size: int = 50):
         products = result.get("contents", [])
 
         def _sort_key(p: dict) -> tuple:
-            # (regDate 파싱값, originProductNo) 내림차순 — regDate 없으면 ID로 대체
+            # (regDate 파싱값, originProductNo) 내림차순 — regDate 없으면 현재시각(신규 상품)
             raw = p.get("originProduct", {}).get("regDate", "")
             try:
-                dt = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else datetime.min.replace(tzinfo=timezone.utc)
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else datetime.now(timezone.utc)
             except Exception:
-                dt = datetime.min.replace(tzinfo=timezone.utc)
+                dt = datetime.now(timezone.utc)
             return (dt, int(p.get("originProductNo") or 0))
 
         def _reg_dt(p: dict) -> datetime:
