@@ -1386,12 +1386,31 @@ async def sync_registered_codes():
 
 @app.post("/cleanup-empty-products")
 async def cleanup_empty_products():
-    """네이버 등록 상품 중 이름·가격이 없는 빈 상품 일괄 삭제 (등록 도중 실패한 껍데기 제거)"""
+    """네이버 등록 상품 중 이름·가격이 없는 빈 상품 일괄 삭제 (등록 도중 실패한 껍데기 제거)
+    순차 상세조회 + 재시도: origin={} 시 2초 후 재조회. 재시도 후에도 비어 있으면 좀비로 삭제."""
     import asyncio as _asyncio
+    import httpx as _httpx
     deleted: list[str] = []
     errors:  list[str] = []
+
+    async def _get_origin(product_id: str) -> dict:
+        """상품 상세 직접 조회. 실패 시 {}."""
+        try:
+            token = await naver_api.get_token()
+            async with _httpx.AsyncClient(timeout=15) as _c:
+                r = await _c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if r.status_code == 200:
+                    return r.json().get("originProduct", {})
+        except Exception:
+            pass
+        return {}
+
     page = 1
     while True:
+        # 검색 API로 ID 목록만 먼저 수집
         try:
             resp = await naver_api.list_products(page=page, size=50)
         except Exception as e:
@@ -1399,28 +1418,37 @@ async def cleanup_empty_products():
         contents = resp.get("contents", [])
         if not contents:
             break
+
         for prod in contents:
-            origin     = prod.get("originProduct", {})
             product_id = str(prod.get("originProductNo", ""))
             if not product_id:
                 continue
-            # originProduct가 비어있으면 상세조회 실패(속도제한/유효상품) → 건너뜀
+            await _asyncio.sleep(0.5)  # 속도제한 방지
+
+            origin = prod.get("originProduct", {})
+            # 병렬 조회 실패(origin={}) → 직접 재조회
             if not origin:
-                continue
-            name  = origin.get("name", "").strip()
-            price = int(origin.get("salePrice", 0))
-            # name 없고 price==0인 경우만 등록 실패 껍데기로 삭제
+                origin = await _get_origin(product_id)
+                if not origin:
+                    # 2초 후 최종 재시도
+                    await _asyncio.sleep(2.0)
+                    origin = await _get_origin(product_id)
+
+            name  = origin.get("name", "").strip() if origin else ""
+            price = int(origin.get("salePrice", 0)) if origin else 0
+
             if not name and price == 0:
                 ok = await naver_api.delete_product(product_id)
                 if ok:
                     deleted.append(product_id)
                 else:
                     errors.append(product_id)
-                await _asyncio.sleep(0.3)
+
         if len(contents) < 50:
             break
         page += 1
         await _asyncio.sleep(1.0)
+
     return JSONResponse({
         "status":      "ok",
         "deleted":     len(deleted),
