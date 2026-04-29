@@ -1404,9 +1404,12 @@ async def cleanup_empty_products():
             product_id = str(prod.get("originProductNo", ""))
             if not product_id:
                 continue
-            name  = origin.get("name", "").strip() if origin else ""
-            price = int(origin.get("salePrice", 0)) if origin else 0
-            # originProduct가 빈 dict이거나 name+price 둘 다 없으면 등록 실패 껍데기
+            # originProduct가 비어있으면 상세조회 실패(속도제한/유효상품) → 건너뜀
+            if not origin:
+                continue
+            name  = origin.get("name", "").strip()
+            price = int(origin.get("salePrice", 0))
+            # name 없고 price==0인 경우만 등록 실패 껍데기로 삭제
             if not name and price == 0:
                 ok = await naver_api.delete_product(product_id)
                 if ok:
