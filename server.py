@@ -1222,36 +1222,42 @@ async def quality_report():
     from datetime import datetime, timezone
 
     try:
-        # raw Naver API: {"contents": [{originProductNo, originProduct:{name,salePrice,...}}], "totalElements": N}
-        data = await naver_api.list_products(page=1, size=50)
-        raw_list = data.get("contents", [])
-        # /list-products 엔드포인트 포맷으로 정규화
-        # 빈 origin 상품은 직접 재조회: 404면 인덱스 지연(이미삭제) → 제외
+        # 전체 페이지 스캔 — 50개 초과 시에도 정확한 집계
         import httpx as _hx
         products = []
-        for p in raw_list:
-            op = p.get("originProduct", {})
-            if not op:
-                pid = str(p.get("originProductNo", ""))
-                try:
-                    token = await naver_api.get_token()
-                    async with _hx.AsyncClient(timeout=10) as _c:
-                        _r = await _c.get(
-                            f"{NAVER_BASE}/v2/products/origin-products/{pid}",
-                            headers={"Authorization": f"Bearer {token}"},
-                        )
-                        if _r.status_code == 200:
-                            op = _r.json().get("originProduct", {})
-                        elif _r.status_code == 404:
-                            continue  # 이미 삭제됨, 인덱스 지연 — 제외
-                except Exception:
-                    pass
-            products.append({
-                "id":     p.get("originProductNo"),
-                "name":   op.get("name", ""),
-                "price":  int(op.get("salePrice", 0)),
-                "status": op.get("statusType", ""),
-            })
+        page = 1
+        while True:
+            data = await naver_api.list_products(page=page, size=50)
+            raw_list = data.get("contents", [])
+            if not raw_list:
+                break
+            # 빈 origin 상품은 직접 재조회: 404면 인덱스 지연(이미삭제) → 제외
+            for p in raw_list:
+                op = p.get("originProduct", {})
+                if not op:
+                    pid = str(p.get("originProductNo", ""))
+                    try:
+                        token = await naver_api.get_token()
+                        async with _hx.AsyncClient(timeout=10) as _c:
+                            _r = await _c.get(
+                                f"{NAVER_BASE}/v2/products/origin-products/{pid}",
+                                headers={"Authorization": f"Bearer {token}"},
+                            )
+                            if _r.status_code == 200:
+                                op = _r.json().get("originProduct", {})
+                            elif _r.status_code == 404:
+                                continue  # 이미 삭제됨, 인덱스 지연 — 제외
+                    except Exception:
+                        pass
+                products.append({
+                    "id":     p.get("originProductNo"),
+                    "name":   op.get("name", ""),
+                    "price":  int(op.get("salePrice", 0)),
+                    "status": op.get("statusType", ""),
+                })
+            if len(raw_list) < 50:
+                break
+            page += 1
     except Exception as e:
         return JSONResponse({"error": f"상품 조회 실패: {str(e)}"}, status_code=500)
 
