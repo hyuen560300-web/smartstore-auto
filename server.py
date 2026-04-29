@@ -1226,9 +1226,26 @@ async def quality_report():
         data = await naver_api.list_products(page=1, size=50)
         raw_list = data.get("contents", [])
         # /list-products 엔드포인트 포맷으로 정규화
+        # 빈 origin 상품은 직접 재조회: 404면 인덱스 지연(이미삭제) → 제외
+        import httpx as _hx
         products = []
         for p in raw_list:
             op = p.get("originProduct", {})
+            if not op:
+                pid = str(p.get("originProductNo", ""))
+                try:
+                    token = await naver_api.get_token()
+                    async with _hx.AsyncClient(timeout=10) as _c:
+                        _r = await _c.get(
+                            f"{NAVER_BASE}/v2/products/origin-products/{pid}",
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
+                        if _r.status_code == 200:
+                            op = _r.json().get("originProduct", {})
+                        elif _r.status_code == 404:
+                            continue  # 이미 삭제됨, 인덱스 지연 — 제외
+                except Exception:
+                    pass
             products.append({
                 "id":     p.get("originProductNo"),
                 "name":   op.get("name", ""),
@@ -1393,8 +1410,8 @@ async def cleanup_empty_products():
     deleted: list[str] = []
     errors:  list[str] = []
 
-    async def _get_origin(product_id: str) -> dict:
-        """상품 상세 직접 조회. 실패 시 {}."""
+    async def _get_origin(product_id: str):
+        """상품 상세 직접 조회. 404=이미삭제→None, 기타 실패→{}."""
         try:
             token = await naver_api.get_token()
             async with _httpx.AsyncClient(timeout=15) as _c:
@@ -1404,6 +1421,8 @@ async def cleanup_empty_products():
                 )
                 if r.status_code == 200:
                     return r.json().get("originProduct", {})
+                if r.status_code == 404:
+                    return None  # 이미 삭제된 상품 — 인덱스 지연
         except Exception:
             pass
         return {}
@@ -1429,10 +1448,16 @@ async def cleanup_empty_products():
             # 병렬 조회 실패(origin={}) → 직접 재조회
             if not origin:
                 origin = await _get_origin(product_id)
+                if origin is None:
+                    deleted.append(product_id)  # 404: 이미 삭제됨, 인덱스 지연
+                    continue
                 if not origin:
                     # 2초 후 최종 재시도
                     await _asyncio.sleep(2.0)
                     origin = await _get_origin(product_id)
+                    if origin is None:
+                        deleted.append(product_id)  # 404: 이미 삭제됨
+                        continue
 
             name  = origin.get("name", "").strip() if origin else ""
             price = int(origin.get("salePrice", 0)) if origin else 0
