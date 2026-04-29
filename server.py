@@ -1464,6 +1464,10 @@ async def cleanup_empty_products():
                     if origin is None:
                         deleted.append(product_id)  # 404: 이미 삭제됨
                         continue
+                    if not origin:
+                        # 재시도 후에도 빈 응답 → rate limit 가능성, 삭제 금지
+                        print(f"[CLEANUP] 재조회 후에도 빈 응답 → 스킵 (ID: {product_id})", flush=True)
+                        continue
 
             name  = origin.get("name", "").strip() if origin else ""
             price = int(origin.get("salePrice", 0)) if origin else 0
