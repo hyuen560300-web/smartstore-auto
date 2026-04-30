@@ -8,6 +8,8 @@ import re
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 
+from typing import Optional, List, Dict
+
 import anthropic
 import httpx
 
@@ -195,7 +197,7 @@ async def employee_naver_fashion_trend_scout(
         "Content-Type": "application/json",
     }
 
-    keyword_scores: dict[str, float] = {}
+    keyword_scores: Dict[str, float] = {}
     batch_size = 5
     keywords = FASHION_KEYWORD_MASTER
 
@@ -727,7 +729,7 @@ async def _hybrid_bg_prompt(product_name: str, category: str, gemini_key: str) -
     return default
 
 
-async def _hybrid_generate_bg(prompt: str, flux_key: str, openai_key: str) -> bytes | None:
+async def _hybrid_generate_bg(prompt: str, flux_key: str, openai_key: str) -> Optional[bytes]:
     """AI 배경 이미지 생성 — Flux Pro 1.1 → DALL-E 3 폴백, PNG/JPEG bytes 반환."""
     import asyncio
 
@@ -791,7 +793,7 @@ async def employee_hybrid_banner(
     gemini_key: str,
     openai_key: str,
     flux_key: str = "",
-) -> bytes | None:
+) -> Optional[bytes]:
     """
     직원 19: 하이브리드 배너 생성자
     1. rembg로 상품 배경 제거 (RGBA)

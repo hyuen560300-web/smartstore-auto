@@ -21,6 +21,8 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+from typing import Optional, List
+
 import anthropic
 import bcrypt
 import httpx
@@ -31,7 +33,7 @@ from dotenv import load_dotenv
 # ─── 네트워크 재시도 유틸 ────────────────────────────────────────────────────
 async def _retry(coro_fn, retries: int = 3, delay: float = 5.0, label: str = "") -> any:
     """비동기 코루틴을 최대 retries회 재시도 (실패 시 delay초 대기)."""
-    last_err: Exception | None = None
+    last_err: Optional[Exception] = None
     for attempt in range(1, retries + 1):
         try:
             return await coro_fn()
@@ -625,7 +627,7 @@ async def _dg_content_to_naver_html(content_html: str) -> str:
 
 
 async def fetch_domeggook_products(
-    keywords: list[str] | None = None,
+    keywords: Optional[List[str]] = None,
     pool_size: int = 90,
     min_price: int = 3000,
     max_price: int = 150000,
@@ -955,7 +957,7 @@ CATEGORY_ID_MAP = {
 DEFAULT_CATEGORY_ID = 50000830
 
 
-def get_category_id(product: dict, hot_trends: list[str] | None = None) -> int:
+def get_category_id(product: dict, hot_trends: Optional[List[str]] = None) -> int:
     # 1. 오너클랜 Excel의 카테고리코드 직접 사용
     cat_id = product.get("category_id")
     if cat_id:
@@ -984,7 +986,7 @@ def build_product_payload(
     ai: dict,
     selling_price: int,
     tags: list = None,
-    hot_trends: list[str] | None = None,
+    hot_trends: Optional[List[str]] = None,
 ) -> dict:
     is_free = str(raw.get("delivery_type", "")).strip() in ("무료배송", "무료")
     try:
@@ -1847,7 +1849,7 @@ async def generate_dalle_detail_shot(product_name: str, spec_hint: str = "", cat
     return await _dalle_request(prompt, size="1024x1024", quality="hd")
 
 
-async def generate_gemini_image(product_name: str, category: str = "") -> bytes | None:
+async def generate_gemini_image(product_name: str, category: str = "") -> Optional[bytes]:
     """Gemini 2.0 Flash 이미지 생성 — raw bytes 반환"""
     if not GOOGLE_AI_API_KEY:
         return None
@@ -1885,7 +1887,7 @@ async def generate_gemini_image(product_name: str, category: str = "") -> bytes 
     return None
 
 
-async def upscale_image(image_url: str, scale: int = 4) -> bytes | None:
+async def upscale_image(image_url: str, scale: int = 4) -> Optional[bytes]:
     """오너클랜 원본 이미지 업스케일
     1차: Replicate Real-ESRGAN (API 키 있을 때, 실제 AI 업스케일)
     2차: Pillow LANCZOS (폴백, 고품질 리샘플링)
@@ -2490,7 +2492,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
 
 async def pipeline_register_from_domeggook(
     limit: int = 10,
-    keywords: list[str] | None = None,
+    keywords: Optional[List[str]] = None,
     min_price: int = 3000,
     max_price: int = 150000,
 ) -> dict:
