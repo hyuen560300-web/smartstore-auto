@@ -54,6 +54,7 @@ from main import (
 from employees import (
     employee_season_planner,
     employee_trend_scout,
+    employee_naver_fashion_trend_scout,
     employee_accounting_manager,
     employee_error_auditor,
     employee_shortform_creator,
@@ -64,6 +65,7 @@ from employees import (
     employee_platform_expander,
     employee_event_manager,
 )
+import employees as _employees_module
 
 app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0")
 
@@ -1592,6 +1594,20 @@ async def startup_event():
         print("[SCHED] 트렌드 스카우터", flush=True)
         await employee_trend_scout()
 
+    async def job_fashion_trend_update():
+        """주간 — 네이버 쇼핑인사이트 패션의류 핫 키워드(ratio≥15.0) 캐시 갱신."""
+        print("[SCHED] 네이버 패션 트렌드 주간 업데이트", flush=True)
+        kws = await employee_naver_fashion_trend_scout(
+            os.getenv("NAVER_DATALAB_CLIENT_ID", ""),
+            os.getenv("NAVER_DATALAB_CLIENT_SECRET", ""),
+            ratio_threshold=15.0,
+        )
+        if kws:
+            _employees_module._naver_fashion_trend_cache = kws
+            print(f"[SCHED] 패션 트렌드 캐시 갱신 — {len(kws)}개: {kws[:5]}", flush=True)
+        else:
+            print("[SCHED] 패션 트렌드 — 핫 키워드 없음(ratio<15.0 또는 키 미설정)", flush=True)
+
     async def job_daily_report():
         print("[SCHED] 일일 리포트", flush=True)
         orders = await naver_api.get_all_orders(1)
@@ -1661,10 +1677,12 @@ async def startup_event():
     scheduler.add_job(job_shortform,       "interval", hours=24, id="shortform")
     scheduler.add_job(job_ad_analysis,     "interval", hours=24, id="ad_analysis")
     # 매주
-    scheduler.add_job(job_event_manager,   "interval", weeks=1, id="event_manager")
-    scheduler.add_job(job_blog_manager,    "interval", weeks=1, id="blog_manager")
-    scheduler.add_job(job_review_analysis, "interval", weeks=1, id="review_analysis")
-    scheduler.add_job(job_expand_platform, "interval", weeks=1, id="expand_platform")
+    scheduler.add_job(job_event_manager,        "interval", weeks=1, id="event_manager")
+    scheduler.add_job(job_blog_manager,         "interval", weeks=1, id="blog_manager")
+    scheduler.add_job(job_review_analysis,      "interval", weeks=1, id="review_analysis")
+    scheduler.add_job(job_expand_platform,      "interval", weeks=1, id="expand_platform")
+    # 주간 네이버 패션 트렌드 업데이트 (월간→주간 단축)
+    scheduler.add_job(job_fashion_trend_update, "interval", weeks=1, id="fashion_trend_update")
     # 08:00 / 12:00 / 20:00 상품 등록
     scheduler.add_job(job_register_products, "cron", hour="8,12,20", minute=0, id="register_products_8")
     # 매주 월요일 00:00 저성과 상품 정리
@@ -1713,6 +1731,83 @@ async def _next_excel_internal() -> str | None:
         json.dump(progress, f)
     print(f"[SCHED] Excel 다운로드 완료: {file_id} ({len(r.content)//1024}KB)", flush=True)
     return str(save_path)
+
+
+# ─── 오케스트레이터 명령 수신 ──────────────────────────────────────────────────
+_COMMAND_MAP_SS = {
+    "register_domeggook": "도매꾹 상품 등록",
+    "register_products":  "엑셀 상품 등록",
+    "process_orders":     "주문 처리",
+    "sync_inventory":     "재고 동기화",
+    "reply_inquiries":    "문의 자동 회신",
+    "season_plan":        "시즌 트렌드 기획",
+    "trend_scout":        "트렌드 수집",
+    "ad_analysis":        "광고 분석",
+}
+
+@app.post("/command")
+async def command_endpoint(request: Request, background_tasks: BackgroundTasks):
+    """오케스트레이터에서 명령 수신 → 백그라운드 실행.
+    Body: {"command": "register_domeggook", "params": {"limit": 5}, "source": "orchestrator"}"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    cmd = body.get("command", "")
+    params = body.get("params", {}) or {}
+
+    if cmd not in _COMMAND_MAP_SS:
+        return JSONResponse(
+            {"status": "error", "message": f"알 수 없는 명령: {cmd}",
+             "available": list(_COMMAND_MAP_SS.keys())},
+            status_code=400,
+        )
+
+    if cmd == "register_domeggook":
+        if not DOMEGGOOK_API_KEY:
+            return JSONResponse({"status": "error", "message": "DOMEGGOOK_API_KEY 미설정"}, status_code=400)
+        limit = int(params.get("limit", 5))
+        keywords = params.get("keywords") or _DG_KEYWORDS
+        min_price = int(params.get("min_price", 3000))
+        max_price = int(params.get("max_price", 150000))
+        background_tasks.add_task(pipeline_register_from_domeggook, limit, keywords, min_price, max_price)
+        detail = f"limit={limit}"
+
+    elif cmd == "register_products":
+        files = sorted(Path(EXCEL_FOLDER).glob("*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
+        if not files:
+            return JSONResponse({"status": "error", "message": "업로드된 Excel 파일 없음"}, status_code=400)
+        excel_path = str(files[0])
+        limit = int(params.get("limit", 50))
+        background_tasks.add_task(pipeline_register_products, excel_path, limit)
+        detail = f"limit={limit}"
+
+    elif cmd == "process_orders":
+        background_tasks.add_task(pipeline_process_orders)
+        detail = ""
+
+    elif cmd == "sync_inventory":
+        background_tasks.add_task(pipeline_sync_inventory)
+        detail = ""
+
+    elif cmd == "reply_inquiries":
+        background_tasks.add_task(pipeline_reply_inquiries)
+        detail = ""
+
+    elif cmd == "season_plan":
+        background_tasks.add_task(employee_season_planner)
+        detail = ""
+
+    elif cmd == "trend_scout":
+        background_tasks.add_task(employee_trend_scout)
+        detail = ""
+
+    elif cmd == "ad_analysis":
+        background_tasks.add_task(employee_ad_analyst)
+        detail = ""
+
+    print(f"[CMD] {_COMMAND_MAP_SS[cmd]} 실행 시작 ({detail})", flush=True)
+    return JSONResponse({"status": "accepted", "command": cmd, "label": _COMMAND_MAP_SS[cmd], "params": params})
 
 
 if __name__ == "__main__":
