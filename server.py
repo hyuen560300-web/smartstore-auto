@@ -1576,7 +1576,7 @@ async def startup_event():
 
     async def job_error_audit():
         print("[SCHED] 에러 감사원", flush=True)
-        await employee_error_auditor(ANTHROPIC_API_KEY)
+        await employee_error_auditor([], ANTHROPIC_API_KEY)
 
     async def job_reply_inquiries():
         print("[SCHED] 고객 문의 답변", flush=True)
@@ -1584,7 +1584,13 @@ async def startup_event():
 
     async def job_stock_alert():
         print("[SCHED] 품절 방지 알림이", flush=True)
-        await employee_stock_guardian(naver_api, ANTHROPIC_API_KEY)
+        files = sorted(Path(EXCEL_FOLDER).glob("*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
+        if not files:
+            print("[SCHED] 품절 알림이: Excel 파일 없음", flush=True)
+            return
+        products = parse_excel(str(files[0]))
+        low_stock = employee_stock_guardian(products)
+        print(f"[SCHED] 재고 부족 상품 {len(low_stock)}개", flush=True)
 
     async def job_sync_inventory():
         print("[SCHED] 재고 동기화", flush=True)
