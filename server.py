@@ -1553,7 +1553,6 @@ async def _sync_registered_codes():
 async def startup_event():
     """서버 시작 시 Drive 인덱스 자동 복구 + registered_codes 동기화 + 스케줄러 시작"""
     import asyncio as _asyncio
-    print(f"[STARTUP] PORT env={os.environ.get('PORT', 'NOT SET')}", flush=True)
     if not _load_drive_index():
         _save_drive_index(DRIVE_FILE_IDS_PERMANENT)
         print(f"[STARTUP] Drive 인덱스 자동 복구 완료: {len(DRIVE_FILE_IDS_PERMANENT)}개", flush=True)
