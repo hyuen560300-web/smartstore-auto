@@ -848,6 +848,9 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
         extra_context += f"\n고객 Pain Point (반드시 해결책 언급): {', '.join(pain_points)}"
     if selling_points:
         extra_context += f"\n핵심 셀링포인트: {', '.join(selling_points)}"
+    naver_keywords = ctx.get("naver_keywords", [])
+    if naver_keywords:
+        extra_context += f"\n네이버 쇼핑 검색량 높은 키워드(상품명에 우선 반영): {', '.join(naver_keywords[:5])}"
 
     resp = await client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -856,9 +859,10 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
             "type": "text",
             "text": (
                 "당신은 10년차 네이버 스마트스토어 마케팅 전문가입니다. "
-                "상품명 규칙: ① [브랜드명]+[핵심키워드]+[속성/규격] 25자 내외 "
-                "② 특수문자([],(),/,*), 관리번호, 동일단어 중복 절대 금지 "
-                "③ 최고·제일·1등·공짜·무료·특가 등 네이버 금지어 사용 금지. "
+                "상품명 규칙: ① naver_keywords가 제공된 경우 해당 키워드를 상품명 앞부분에 배치 "
+                "② [브랜드명]+[핵심키워드]+[속성/규격] 25자 내외 "
+                "③ 특수문자([],(),/,*), 관리번호, 동일단어 중복 절대 금지 "
+                "④ 최고·제일·1등·공짜·무료·특가 등 네이버 금지어 사용 금지. "
                 "반드시 JSON만 출력하세요."
             ),
             "cache_control": {"type": "ephemeral"}
@@ -1354,6 +1358,20 @@ async def search_naver_shopping(query: str, display: int = 10) -> list:
     except Exception as e:
         print(f"[쇼핑검색] 실패: {e}", flush=True)
         return []
+
+
+def _extract_naver_keywords(search_results: list) -> list[str]:
+    """네이버 쇼핑 상위 결과 타이틀에서 고빈도 키워드 추출."""
+    from collections import Counter
+    _STOP = {"상품", "제품", "판매", "추천", "무료", "배송", "할인", "특가", "정품",
+             "브랜드", "직접", "공식", "국내", "해외", "당일", "빠른", "이상", "이하",
+             "구매", "인기", "최신", "신상", "세트", "묶음", "증정", "포함"}
+    words = []
+    for item in search_results:
+        title = re.sub(r"<[^>]+>", "", item.get("title", ""))
+        words.extend(re.findall(r"[가-힣]{2,}", title))
+    counter = Counter(w for w in words if w not in _STOP)
+    return [w for w, _ in counter.most_common(8)]
 
 
 # ─── DALL-E 3 공통 스타일 접미사 ─────────────────────────────────────────────
@@ -2373,6 +2391,12 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             # ⑤ 리뷰 분석가: Pain Point 분석
             review = await employee_review_analyst(str(p.get("name", "")), ANTHROPIC_API_KEY)
 
+            # 네이버 쇼핑 키워드 수집 (상품명 최적화 + 가격 최적화 겸용)
+            competitor_prices = await search_naver_shopping(str(p.get("name", "")))
+            naver_keywords = _extract_naver_keywords(competitor_prices)
+            if naver_keywords:
+                print(f"[키워드최적화] {p.get('name','')[:15]} → {naver_keywords[:3]}", flush=True)
+
             # ⑥ 상품 설명 작가: 전 직원 데이터 통합해서 설명 생성
             context = {
                 "season": season_info,
@@ -2380,6 +2404,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                 "fashion_trends": fashion_trends[:5],
                 "pain_points": review.get("pain_points", []),
                 "selling_points": review.get("selling_points", []),
+                "naver_keywords": naver_keywords,
             }
             ai = await generate_product_copy(p, context)
 
@@ -2390,8 +2415,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             ai["tags"] = seo_tags
             print(f"[태그생성] {seo_tags[:3]}...", flush=True)
 
-            # Tool 2: 경쟁사 가격 수집 → 최적 가격 산정
-            competitor_prices = await search_naver_shopping(str(p.get("name", "")))
+            # 경쟁사 가격 최적화 (위에서 수집한 competitor_prices 재사용)
             price_result = await employee_price_optimizer(
                 str(p.get("name", "")), str(p.get("category", "")),
                 int(p.get("price", 0)), ANTHROPIC_API_KEY,

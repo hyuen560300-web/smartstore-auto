@@ -1700,8 +1700,11 @@ async def startup_event():
     # 매주 월요일 00:00 저성과 상품 정리
     scheduler.add_job(job_auto_cleanup, "cron", day_of_week="mon", hour=0, minute=0, id="auto_cleanup")
 
-    scheduler.start()
-    print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
+    try:
+        scheduler.start()
+        print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
+    except Exception as _sched_err:
+        print(f"[STARTUP] APScheduler 시작 실패 (서버는 계속 실행됨): {_sched_err}", flush=True)
 
 
 async def _next_excel_internal() -> str | None:
