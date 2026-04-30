@@ -1521,14 +1521,8 @@ async def cleanup_empty_products():
     })
 
 
-@app.on_event("startup")
-async def startup_event():
-    """서버 시작 시 Drive 인덱스 자동 복구 + registered_codes 동기화 + 스케줄러 시작"""
-    if not _load_drive_index():
-        _save_drive_index(DRIVE_FILE_IDS_PERMANENT)
-        print(f"[STARTUP] Drive 인덱스 자동 복구 완료: {len(DRIVE_FILE_IDS_PERMANENT)}개", flush=True)
-
-    # registered_codes.json 자동 동기화 (Railway 재배포 후 파일 초기화 복구)
+async def _sync_registered_codes():
+    """registered_codes.json 동기화 — startup 블로킹 없이 백그라운드 실행"""
     try:
         from main import REGISTERED_CODES_FILE
         import asyncio as _asyncio
@@ -1553,6 +1547,19 @@ async def startup_event():
         print(f"[STARTUP] registered_codes.json 동기화 완료: {len(codes)}개", flush=True)
     except Exception as e:
         print(f"[STARTUP] registered_codes.json 동기화 실패 (무시): {e}", flush=True)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """서버 시작 시 Drive 인덱스 자동 복구 + registered_codes 동기화 + 스케줄러 시작"""
+    import asyncio as _asyncio
+    print(f"[STARTUP] PORT env={os.environ.get('PORT', 'NOT SET')}", flush=True)
+    if not _load_drive_index():
+        _save_drive_index(DRIVE_FILE_IDS_PERMANENT)
+        print(f"[STARTUP] Drive 인덱스 자동 복구 완료: {len(DRIVE_FILE_IDS_PERMANENT)}개", flush=True)
+
+    # registered_codes.json 동기화를 백그라운드로 실행 (healthcheck 응답 차단 방지)
+    _asyncio.create_task(_sync_registered_codes())
 
     # ── APScheduler: n8n 워크플로우 3개 대체 ─────────────────────────────────
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
