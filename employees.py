@@ -2,10 +2,11 @@
 스마트스토어 AI 직원단
 총괄팀장: Claude
 """
+import asyncio
 import json
 import re
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, timedelta
 
 import anthropic
 import httpx
@@ -124,6 +125,136 @@ async def employee_trend_scout() -> list:
     except Exception as e:
         print(f"[TREND] 수집 실패: {e}", flush=True)
     return []
+
+
+# ─── 직원 4b: 네이버 쇼핑인사이트 패션 트렌드 스카우터 ──────────────────────
+# 네이버 DataLab 쇼핑인사이트 — 패션의류 카테고리 ID
+_FASHION_CATEGORY_ID = "50000000"
+
+# 매 배치 최대 5개 키워드 (API 제한)
+FASHION_KEYWORD_MASTER: list[str] = [
+    # 상의
+    "티셔츠", "블라우스", "니트", "후드티", "맨투맨", "셔츠", "탑", "조끼",
+    # 하의
+    "청바지", "슬랙스", "반바지", "스커트", "레깅스", "트레이닝바지",
+    # 아우터
+    "자켓", "코트", "패딩", "바람막이", "가디건", "점퍼", "트렌치코트",
+    # 원피스/세트
+    "원피스", "투피스", "정장", "수트",
+    # 핏/스타일
+    "오버핏", "슬림핏", "루즈핏", "크롭", "롱",
+    # 소재
+    "린넨", "데님", "쉬폰", "면티", "폴리에스터",
+    # 트렌드
+    "Y2K", "레트로", "미니멀", "캐주얼", "포멀",
+    # 시즌
+    "봄신상", "여름신상", "가을신상", "겨울신상",
+    # 성별/연령
+    "여성의류", "남성의류", "20대패션", "30대패션",
+]
+
+# 패션 카테고리 감지 키워드 (상품 category 문자열과 매칭)
+FASHION_CATEGORY_KEYWORDS = [
+    "패션", "의류", "옷", "패딩", "자켓", "코트", "티셔츠", "청바지",
+    "원피스", "블라우스", "니트", "후드", "스커트", "슬랙스",
+]
+
+
+# 주간 패션 트렌드 캐시 (job_fashion_trend_update → pipeline에서 재활용)
+_naver_fashion_trend_cache: list[str] = []
+
+
+def get_cached_fashion_trends() -> list[str]:
+    """가장 최근 주간 업데이트된 네이버 패션 트렌드 핫 키워드 반환."""
+    return list(_naver_fashion_trend_cache)
+
+
+async def employee_naver_fashion_trend_scout(
+    datalab_client_id: str,
+    datalab_client_secret: str,
+    top_n: int = 20,
+    ratio_threshold: float = 15.0,
+) -> list[str]:
+    """네이버 쇼핑인사이트 API로 패션의류 트렌딩 키워드 수집.
+
+    API: POST https://openapi.naver.com/v1/datalab/shopping/category/keywords
+    필요 권한: 네이버 개발자센터 > 쇼핑인사이트 (NAVER_DATALAB_CLIENT_ID/SECRET)
+    ratio_threshold: 이 값 이상인 키워드만 반환 (기본 15.0 — 핫 트렌드 기준)
+    결과 없을 때: 빈 리스트 반환 (파이프라인 중단 없음)
+    """
+    if not datalab_client_id or not datalab_client_secret:
+        print("[패션트렌드] DataLab 키 미설정 — 스킵", flush=True)
+        return []
+
+    end_date = date.today()
+    # 월간(30일) → 주간(7일): 가장 최신 트렌드만 반영
+    start_date = end_date - timedelta(days=7)
+    headers = {
+        "X-Naver-Client-Id": datalab_client_id,
+        "X-Naver-Client-Secret": datalab_client_secret,
+        "Content-Type": "application/json",
+    }
+
+    keyword_scores: dict[str, float] = {}
+    batch_size = 5
+    keywords = FASHION_KEYWORD_MASTER
+
+    async with httpx.AsyncClient(timeout=20) as c:
+        for i in range(0, len(keywords), batch_size):
+            batch = keywords[i : i + batch_size]
+            body = {
+                "startDate": str(start_date),
+                "endDate": str(end_date),
+                "timeUnit": "week",
+                "category": _FASHION_CATEGORY_ID,
+                "keyword": [{"name": kw, "param": [kw]} for kw in batch],
+                "device": "",
+                "ages": [],
+                "gender": "",
+            }
+            try:
+                r = await c.post(
+                    "https://openapi.naver.com/v1/datalab/shopping/category/keywords",
+                    headers=headers,
+                    json=body,
+                )
+                if r.status_code == 200:
+                    for result in r.json().get("results", []):
+                        kw_name = result.get("title", "")
+                        ratios = [
+                            d["ratio"]
+                            for d in result.get("data", [])
+                            if d.get("ratio") is not None
+                        ]
+                        if ratios:
+                            # 최근 2주 평균으로 현재 트렌드 점수 산출
+                            recent = ratios[-2:] if len(ratios) >= 2 else ratios
+                            keyword_scores[kw_name] = sum(recent) / len(recent)
+                elif r.status_code == 401:
+                    print("[패션트렌드] 인증 실패 — DataLab 키 확인 필요", flush=True)
+                    return []
+                else:
+                    print(f"[패션트렌드] API 오류 {r.status_code}", flush=True)
+            except Exception as e:
+                print(f"[패션트렌드] 배치 {i // batch_size + 1} 실패: {e}", flush=True)
+
+            await asyncio.sleep(0.3)  # 네이버 API rate limit 회피
+
+    # ratio_threshold 이상 키워드만 핫 트렌드로 선별
+    hot_scores = {kw: s for kw, s in keyword_scores.items() if s >= ratio_threshold}
+    sorted_kws = sorted(hot_scores.items(), key=lambda x: x[1], reverse=True)
+    result = [kw for kw, _ in sorted_kws[:top_n]]
+    print(
+        f"[패션트렌드] 수집 완료 — 전체:{len(keyword_scores)} 핫(ratio≥{ratio_threshold}):{len(result)}: {result[:5]}",
+        flush=True,
+    )
+    return result
+
+
+def is_fashion_product(category: str) -> bool:
+    """카테고리명 기준 패션의류 상품 여부 판별"""
+    cat = str(category).lower()
+    return any(kw in cat for kw in FASHION_CATEGORY_KEYWORDS)
 
 
 # ─── 직원 5: 리뷰 분석가 ────────────────────────────────────────────────────

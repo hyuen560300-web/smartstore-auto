@@ -151,7 +151,9 @@ REPLICATE_API_KEY   = _clean_key(os.environ.get("REPLICATE_API_KEY", ""))
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
-DOMEGGOOK_API_KEY   = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
+DOMEGGOOK_API_KEY          = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
+NAVER_DATALAB_CLIENT_ID    = os.environ.get("NAVER_DATALAB_CLIENT_ID", "")
+NAVER_DATALAB_CLIENT_SECRET = os.environ.get("NAVER_DATALAB_CLIENT_SECRET", "")
 
 DOMEGGOOK_API_URL  = "https://domeggook.com/ssl/api/"
 DOMEGGOOK_IMG_BASE = "https://img.domeggook.com/"
@@ -829,6 +831,7 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
     ctx = context or {}
     season_info = ctx.get("season", "")
     trend_keywords = ctx.get("trends", [])
+    fashion_trends = ctx.get("fashion_trends", [])
     pain_points = ctx.get("pain_points", [])
     selling_points = ctx.get("selling_points", [])
 
@@ -837,6 +840,8 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
         extra_context += f"\n현재 시즌 이벤트: {season_info}"
     if trend_keywords:
         extra_context += f"\n실시간 트렌딩 키워드: {', '.join(trend_keywords[:5])}"
+    if fashion_trends:
+        extra_context += f"\n네이버 패션 핫 키워드(ratio≥15.0): {', '.join(fashion_trends[:5])}"
     if pain_points:
         extra_context += f"\n고객 Pain Point (반드시 해결책 언급): {', '.join(pain_points)}"
     if selling_points:
@@ -918,6 +923,7 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
 # 카테고리 기본값 (오너클랜 카테고리 → 네이버 카테고리 ID 매핑)
 # 필요 시 https://api.commerce.naver.com/external/v1/categories/roots 조회 후 추가
 CATEGORY_ID_MAP = {
+    # 기본
     "남성의류": 50000830,
     "여성의류": 50000803,
     "티셔츠": 50000830,
@@ -931,27 +937,55 @@ CATEGORY_ID_MAP = {
     "스포츠": 50000430,
     "완구": 50000564,
     "도서": 50000727,
+    # ── 네이버 쇼핑인사이트 패션의류 트렌드 키워드 → 카테고리 ID ──────────────
+    # 상의
+    "블라우스": 50000803, "니트": 50000830, "후드티": 50000830,
+    "맨투맨": 50000830,  "셔츠": 50000830, "탑": 50000803, "조끼": 50000830,
+    # 하의
+    "청바지": 50000831, "슬랙스": 50000831, "반바지": 50000831,
+    "스커트": 50000803, "레깅스": 50000831, "트레이닝바지": 50000831,
+    # 아우터
+    "자켓": 50021640, "코트": 50021640, "패딩": 50021640,
+    "바람막이": 50021640, "가디건": 50021640, "점퍼": 50021640, "트렌치코트": 50021640,
+    # 원피스/세트
+    "원피스": 50000803, "투피스": 50000803, "정장": 50000830, "수트": 50000830,
+    # 성별/연령 트렌드
+    "20대패션": 50000803, "30대패션": 50000803,
 }
 DEFAULT_CATEGORY_ID = 50000830
 
 
-def get_category_id(product: dict) -> int:
-    # 오너클랜 Excel의 카테고리코드 직접 사용
+def get_category_id(product: dict, hot_trends: list[str] | None = None) -> int:
+    # 1. 오너클랜 Excel의 카테고리코드 직접 사용
     cat_id = product.get("category_id")
     if cat_id:
         try:
             return int(str(cat_id).strip())
         except (ValueError, TypeError):
             pass
+    # 2. 카테고리 필드 기반 매핑
     for key in ("cat_large", "cat_medium", "category"):
         val = str(product.get(key, ""))
         for k, v in CATEGORY_ID_MAP.items():
             if k in val:
                 return v
+    # 3. 네이버 패션 트렌드 핫 키워드(ratio≥15.0)로 상품명 매칭
+    if hot_trends:
+        prod_name = str(product.get("name", ""))
+        for kw in hot_trends:
+            mapped = CATEGORY_ID_MAP.get(kw)
+            if mapped and kw in prod_name:
+                return mapped
     return DEFAULT_CATEGORY_ID
 
 
-def build_product_payload(raw: dict, ai: dict, selling_price: int, tags: list = None) -> dict:
+def build_product_payload(
+    raw: dict,
+    ai: dict,
+    selling_price: int,
+    tags: list = None,
+    hot_trends: list[str] | None = None,
+) -> dict:
     is_free = str(raw.get("delivery_type", "")).strip() in ("무료배송", "무료")
     try:
         delivery_fee = int(float(str(raw.get("delivery_fee", 3000)).replace(",", "")))
@@ -962,7 +996,7 @@ def build_product_payload(raw: dict, ai: dict, selling_price: int, tags: list = 
         "originProduct": {
             "statusType": "SALE",
             "saleType": "NEW",
-            "leafCategoryId": get_category_id(raw),
+            "leafCategoryId": get_category_id(raw, hot_trends),
             "name": (clean_product_name(ai.get("product_name") or ai.get("name") or str(raw.get("name", "")))
                      or str(raw.get("name", "상품"))[:25]),
             "detailContent": ai.get("description", ai.get("emotional_copy", "")),
@@ -2294,13 +2328,26 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
     if season_info:
         print(f"[시즌기획자] 현재 시즌: {season_info}", flush=True)
 
-    # ③ 트렌드 스카우터: 트렌딩 키워드 수집 (실패 시 빈 리스트로 계속)
+    # ③ 트렌드 스카우터: 구글 트렌딩 키워드 수집 (실패 시 빈 리스트로 계속)
     try:
         trend_keywords = await employee_trend_scout()
     except Exception as _te:
         print(f"[트렌드스카우터] 실패(무시): {_te}", flush=True)
         trend_keywords = []
     print(f"[트렌드스카우터] 키워드 {len(trend_keywords)}개 수집", flush=True)
+
+    # ③a 네이버 패션 트렌드 (ratio≥15.0) — 카테고리 매핑 및 AI 카피 강화
+    try:
+        from employees import employee_naver_fashion_trend_scout
+        fashion_trends = await employee_naver_fashion_trend_scout(
+            NAVER_DATALAB_CLIENT_ID,
+            NAVER_DATALAB_CLIENT_SECRET,
+            ratio_threshold=15.0,
+        )
+    except Exception as _fe:
+        print(f"[패션트렌드] 실패(무시): {_fe}", flush=True)
+        fashion_trends = []
+    print(f"[패션트렌드] 핫 키워드 {len(fashion_trends)}개 (ratio≥15.0)", flush=True)
 
     registered_codes = load_registered_codes()
     print(f"[총괄] 기등록 상품: {len(registered_codes)}개 제외", flush=True)
@@ -2328,6 +2375,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             context = {
                 "season": season_info,
                 "trends": trend_keywords[:5],
+                "fashion_trends": fashion_trends[:5],
                 "pain_points": review.get("pain_points", []),
                 "selling_points": review.get("selling_points", []),
             }
@@ -2420,7 +2468,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                     results["fail"] += 1; results["errors"].append(reject_msg)
                     continue
 
-            payload = build_product_payload(p, ai, price, tags=ai.get("tags"))
+            payload = build_product_payload(p, ai, price, tags=ai.get("tags"), hot_trends=fashion_trends)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
@@ -2472,6 +2520,16 @@ async def pipeline_register_from_domeggook(
         print(f"[트렌드스카우터] 실패(무시): {_te}", flush=True)
         trend_keywords = []
 
+    try:
+        from employees import employee_naver_fashion_trend_scout
+        fashion_trends = await employee_naver_fashion_trend_scout(
+            NAVER_DATALAB_CLIENT_ID, NAVER_DATALAB_CLIENT_SECRET, ratio_threshold=15.0
+        )
+    except Exception as _fe:
+        print(f"[패션트렌드] 실패(무시): {_fe}", flush=True)
+        fashion_trends = []
+    print(f"[패션트렌드] 핫 키워드 {len(fashion_trends)}개 (ratio≥15.0)", flush=True)
+
     registered_codes = load_registered_codes()
     results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0,
                "ip_blocked": 0, "errors": [], "source": "domeggook"}
@@ -2493,6 +2551,7 @@ async def pipeline_register_from_domeggook(
             context = {
                 "season": season_info,
                 "trends": trend_keywords[:5],
+                "fashion_trends": fashion_trends[:5],
                 "pain_points": review.get("pain_points", []),
                 "selling_points": review.get("selling_points", []),
             }
@@ -2576,7 +2635,7 @@ async def pipeline_register_from_domeggook(
                     results["errors"].append(f"{p.get('name','?')[:20]}: QC{qc_result['stage']}단계실패")
                     continue
 
-            payload = build_product_payload(p, ai, price, tags=ai.get("tags"))
+            payload = build_product_payload(p, ai, price, tags=ai.get("tags"), hot_trends=fashion_trends)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
