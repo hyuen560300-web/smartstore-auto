@@ -74,6 +74,18 @@ def health():
     return {"status": "ok", "service": "smartstore_auto", "version": "3.0"}
 
 
+@app.get("/status")
+async def status():
+    """오케스트레이터용 — 등록 상품 수 요약."""
+    from main import load_registered_codes
+    codes = load_registered_codes()
+    return JSONResponse({
+        "status": "ok",
+        "service": "smartstore_auto",
+        "registered_count": len(codes),
+    })
+
+
 @app.get("/check-env")
 def check_env():
     """API 키 설정 여부 확인"""
