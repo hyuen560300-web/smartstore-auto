@@ -76,13 +76,27 @@ def health():
 
 @app.get("/status")
 async def status():
-    """오케스트레이터용 — 등록 상품 수 요약."""
-    from main import load_registered_codes
+    """오케스트레이터용 — 등록 상품 수 + 오늘 주문/매출 요약."""
     codes = load_registered_codes()
+    today_orders = 0
+    today_revenue = 0
+    new_orders = 0
+    try:
+        orders = await naver_api.get_new_orders()
+        today_orders = len(orders)
+        for o in orders:
+            today_revenue += int(o.get("totalPaymentAmount") or 0)
+            if o.get("productOrderStatus") in ("PAYED", "PAYMENT_WAITING"):
+                new_orders += 1
+    except Exception:
+        pass
     return JSONResponse({
         "status": "ok",
         "service": "smartstore_auto",
         "registered_count": len(codes),
+        "today_orders": today_orders,
+        "today_revenue": today_revenue,
+        "new_orders": new_orders,
     })
 
 
