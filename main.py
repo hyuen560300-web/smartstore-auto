@@ -134,6 +134,9 @@ load_dotenv()
 NAVER_CLIENT_ID     = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 NAVER_SELLER_ID     = os.environ.get("NAVER_SELLER_ID", "")
+# 네이버 Open API (쇼핑검색) — Commerce API 키와 별도
+NAVER_SEARCH_CLIENT_ID     = os.environ.get("NAVER_SEARCH_CLIENT_ID") or NAVER_CLIENT_ID
+NAVER_SEARCH_CLIENT_SECRET = os.environ.get("NAVER_SEARCH_CLIENT_SECRET") or NAVER_CLIENT_SECRET
 if not NAVER_CLIENT_ID:
     raise ValueError("환경변수 미설정: NAVER_CLIENT_ID")
 if not NAVER_CLIENT_SECRET:
@@ -1330,15 +1333,15 @@ async def search_pexels_image(product_name: str) -> str | None:
 # ─── 네이버 쇼핑 검색 — 경쟁사 가격/키워드 수집 ──────────────────────────────
 async def search_naver_shopping(query: str, display: int = 10) -> list:
     """네이버 쇼핑 검색 API로 경쟁사 상위 상품 가격·키워드 수집"""
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+    if not NAVER_SEARCH_CLIENT_ID or not NAVER_SEARCH_CLIENT_SECRET:
         return []
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
                 "https://openapi.naver.com/v1/search/shop.json",
                 headers={
-                    "X-Naver-Client-Id": NAVER_CLIENT_ID,
-                    "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+                    "X-Naver-Client-Id": NAVER_SEARCH_CLIENT_ID,
+                    "X-Naver-Client-Secret": NAVER_SEARCH_CLIENT_SECRET,
                 },
                 params={"query": query, "display": display, "sort": "sim"},
             )
