@@ -444,7 +444,8 @@ async def register_domeggook_sync(request: Request):
     keywords = body.get("keywords") or _DG_KEYWORDS
     min_price = int(body.get("min_price", 3000))
     max_price = int(body.get("max_price", 150000))
-    result = await pipeline_register_from_domeggook(limit, keywords, min_price, max_price)
+    start_page = int(body.get("start_page", 0))
+    result = await pipeline_register_from_domeggook(limit, keywords, min_price, max_price, start_page)
     return JSONResponse(result if isinstance(result, dict) else {"result": str(result)})
 
 
@@ -462,21 +463,22 @@ async def register_from_domeggook(request: Request, background_tasks: Background
         body = await request.json()
     except Exception:
         body = {}
-    limit     = int(body.get("limit", 10))
-    keywords  = body.get("keywords") or _DG_KEYWORDS
-    min_price = int(body.get("min_price", 3000))
-    max_price = int(body.get("max_price", 150000))
+    limit      = int(body.get("limit", 10))
+    keywords   = body.get("keywords") or _DG_KEYWORDS
+    min_price  = int(body.get("min_price", 3000))
+    max_price  = int(body.get("max_price", 150000))
+    start_page = int(body.get("start_page", 0))
 
     background_tasks.add_task(
-        pipeline_register_from_domeggook, limit, keywords, min_price, max_price
+        pipeline_register_from_domeggook, limit, keywords, min_price, max_price, start_page
     )
     return JSONResponse({
-        "status":    "processing",
-        "source":    "domeggook",
-        "limit":     limit,
-        "keywords":  keywords[:5],
-        "min_price": min_price,
-        "max_price": max_price,
+        "status":     "processing",
+        "source":     "domeggook",
+        "limit":      limit,
+        "keywords":   keywords[:5],
+        "min_price":  min_price,
+        "start_page": start_page if start_page > 0 else "auto",
     })
 
 
@@ -1781,12 +1783,13 @@ async def command_endpoint(request: Request, background_tasks: BackgroundTasks):
     if cmd == "register_domeggook":
         if not DOMEGGOOK_API_KEY:
             return JSONResponse({"status": "error", "message": "DOMEGGOOK_API_KEY 미설정"}, status_code=400)
-        limit = int(params.get("limit", 5))
-        keywords = params.get("keywords") or _DG_KEYWORDS
-        min_price = int(params.get("min_price", 3000))
-        max_price = int(params.get("max_price", 150000))
-        background_tasks.add_task(pipeline_register_from_domeggook, limit, keywords, min_price, max_price)
-        detail = f"limit={limit}"
+        limit      = int(params.get("limit", 5))
+        keywords   = params.get("keywords") or _DG_KEYWORDS
+        min_price  = int(params.get("min_price", 3000))
+        max_price  = int(params.get("max_price", 150000))
+        start_page = int(params.get("start_page", 0))
+        background_tasks.add_task(pipeline_register_from_domeggook, limit, keywords, min_price, max_price, start_page)
+        detail = f"limit={limit}, start_page={start_page if start_page > 0 else 'auto'}"
 
     elif cmd == "register_products":
         files = sorted(Path(EXCEL_FOLDER).glob("*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)

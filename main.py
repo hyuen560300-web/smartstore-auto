@@ -634,9 +634,11 @@ async def fetch_domeggook_products(
     pool_size: int = 90,
     min_price: int = 3000,
     max_price: int = 150000,
+    start_page: int = 0,
 ) -> list[dict]:
     """도매꾹 키워드 검색 → 상세 병렬 조회 → product dict 리스트 반환.
     pool_size: sourcing manager에게 넘길 후보 수 (limit의 3배 권장).
+    start_page: 0이면 등록 코드 수 기반으로 페이지 자동 산출 (중복 회피).
 
     정확한 파라미터명 (오류 발생 주의):
       sz=페이지당수, mnp/mxp=가격범위, who=S(판매자부담=무료배송), org=kr(국산), market=dome
@@ -645,6 +647,12 @@ async def fetch_domeggook_products(
     if not DOMEGGOOK_API_KEY:
         print("[DOMEGGOOK] DOMEGGOOK_API_KEY 없음", flush=True)
         return []
+
+    if start_page <= 0:
+        registered_count = len(load_registered_codes())
+        # 페이지당 30개 기준, 등록 수에 맞춰 다음 페이지 산출 (최대 10페이지)
+        start_page = min(10, max(1, (registered_count // 30) + 1))
+    print(f"[DOMEGGOOK] 검색 시작 페이지: {start_page}", flush=True)
 
     kws = keywords or _DG_KEYWORDS
     seen: set[str] = set()
@@ -662,7 +670,7 @@ async def fetch_domeggook_products(
                     "kw": kw, "om": "json",
                     "mnp": str(min_price), "mxp": str(max_price),
                     "sz": "30",    # 페이지당 30개
-                    "pg": "1",
+                    "pg": str(start_page),
                     "so": "rd",    # 추천도순
                 })
                 r.raise_for_status()
@@ -2522,6 +2530,7 @@ async def pipeline_register_from_domeggook(
     keywords: Optional[List[str]] = None,
     min_price: int = 3000,
     max_price: int = 150000,
+    start_page: int = 0,
 ) -> dict:
     """도매꾹 API 소싱 → 전 직원 협업 등록 파이프라인.
     소싱부분만 Excel→도매꾹 API로 교체; 이후 로직은 pipeline_register_products와 동일."""
@@ -2533,7 +2542,10 @@ async def pipeline_register_from_domeggook(
     print(f"[도매꾹파이프라인] 시작 — limit={limit}", flush=True)
 
     # ① 도매꾹 API 상품 수집 (pool = limit * 3 으로 sourcing manager 선별 여유)
-    products = await fetch_domeggook_products(keywords, pool_size=limit * 3, min_price=min_price, max_price=max_price)
+    products = await fetch_domeggook_products(
+        keywords, pool_size=limit * 3,
+        min_price=min_price, max_price=max_price, start_page=start_page
+    )
     if not products:
         return {"status": "error", "message": "도매꾹 상품 없음 — API 키/키워드 확인"}
 
