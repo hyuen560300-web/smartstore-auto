@@ -1524,10 +1524,14 @@ async def cleanup_empty_products():
 
 
 async def _sync_registered_codes():
-    """registered_codes.json 동기화 — startup 블로킹 없이 백그라운드 실행"""
+    """registered_codes.json 동기화 — startup 블로킹 없이 백그라운드 실행.
+    sellerManagementCode(DG_XXXXX) 우선, 없으면 NAVER_ID_{no} 폴백 저장으로
+    재배포 후에도 중복 등록 방지."""
     try:
         from main import REGISTERED_CODES_FILE
         import asyncio as _asyncio
+        # 서버 시작 직후 API 과부하 방지 — 10초 대기 후 동기화 시작
+        await _asyncio.sleep(10)
         codes: set[str] = set()
         page = 1
         while True:
@@ -1536,10 +1540,14 @@ async def _sync_registered_codes():
             if not contents:
                 break
             for prod in contents:
+                product_no = str(prod.get("originProductNo", ""))
                 origin = prod.get("originProduct", {})
                 seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
                 if seller_code:
                     codes.add(seller_code)
+                elif product_no:
+                    # sellerManagementCode 없으면 Naver ID로 폴백 (중복 방지용)
+                    codes.add(f"NAVER_ID_{product_no}")
             if len(contents) < 50:
                 break
             page += 1
