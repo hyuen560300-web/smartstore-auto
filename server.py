@@ -382,6 +382,68 @@ async def myip():
         return r.json()
 
 
+# ─── POD 상품 등록 ───────────────────────────────────────────────────────────
+@app.post("/register-pod")
+async def register_pod_product(request: Request):
+    """Printful POD 상품 스마트스토어 자동 등록 (shopify-trendify에서 호출)."""
+    data = await request.json()
+    name: str = data.get("name", "Trending T-Shirt")
+    image_url: str = data.get("image_url", "")
+    price_krw: int = int(data.get("price_krw", 34900))
+    theme: str = data.get("theme", "")
+
+    if not image_url:
+        return JSONResponse({"status": "error", "error": "image_url required"}, status_code=400)
+
+    try:
+        # 이미지 네이버 CDN 업로드
+        naver_image = await naver_api.upload_image(image_url)
+
+        # 상품명 생성 (최대 25자)
+        kname = name[:25]
+        description_html = (
+            f"<p><strong>{kname}</strong></p>"
+            f"<p>AI가 선별한 트렌딩 디자인 티셔츠입니다.</p>"
+            f"<p>주제: {theme[:80]}</p>"
+            f"<p>Bella+Canvas 3001 소재 | S/M/L/XL 사이즈 | Print On Demand 제작</p>"
+            f"<p>주문 제작 상품으로 교환/반품이 제한될 수 있습니다.</p>"
+        )
+
+        raw = {
+            "image": naver_image,
+            "name": kname,
+            "delivery_type": "유료",
+            "delivery_fee": 3000,
+            "origin": "미국",
+            "stock": 999,
+            "manufacturer": "Printful Inc.",
+            "brand": "Trendify",
+        }
+        ai = {
+            "product_name": kname,
+            "description": description_html,
+            "emotional_copy": description_html,
+        }
+
+        payload = build_product_payload(raw, ai, price_krw,
+                                        tags=["POD", "티셔츠", "AI디자인", "트렌딩"])
+        # T-Shirt 카테고리 강제 지정
+        payload["originProduct"]["leafCategoryId"] = 50000830
+
+        result = await naver_api.register_product(payload)
+        product_id = result.get("id") or result.get("originProductNo") or result.get("smartstoreChannelProductNo", "")
+        save_registered_code(str(product_id))
+
+        return JSONResponse({"status": "ok", "product_id": str(product_id), "name": kname})
+
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            {"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]},
+            status_code=500,
+        )
+
+
 # ─── 상품 등록 ────────────────────────────────────────────────────────────────
 @app.post("/register-products")
 async def register_products(request: Request, background_tasks: BackgroundTasks):
