@@ -3,6 +3,7 @@
 총괄팀장: Claude
 """
 
+import asyncio
 import os
 import json
 import sys
@@ -12,6 +13,11 @@ from fastapi import FastAPI, BackgroundTasks, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from pathlib import Path
 from dotenv import load_dotenv
+
+from pinterest_auto import (
+    create_pinterest_pin, pin_recent_smartstore_products,
+    get_pinterest_boards, build_smartstore_url,
+)
 
 load_dotenv()
 
@@ -432,7 +438,12 @@ async def register_pod_product(request: Request):
 
         result = await naver_api.register_product(payload)
         product_id = result.get("id") or result.get("originProductNo") or result.get("smartstoreChannelProductNo", "")
+        channel_no = str(result.get("smartstoreChannelProductNo") or result.get("channelProductNo") or product_id or "")
         save_registered_code(str(product_id))
+
+        # Pinterest 핀 생성 (백그라운드)
+        product_url = build_smartstore_url(channel_no)
+        asyncio.create_task(create_pinterest_pin(kname, image_url, product_url))
 
         return JSONResponse({"status": "ok", "product_id": str(product_id), "name": kname})
 
@@ -442,6 +453,25 @@ async def register_pod_product(request: Request):
             {"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]},
             status_code=500,
         )
+
+
+# ─── Pinterest ───────────────────────────────────────────────────────────────
+@app.get("/pinterest/boards")
+async def pinterest_boards_list():
+    """Pinterest 보드 목록 조회 (PINTEREST_BOARD_ID 설정 확인용)."""
+    boards = await get_pinterest_boards()
+    return JSONResponse({
+        "boards": [{"id": b["id"], "name": b["name"]} for b in boards],
+        "count": len(boards),
+        "hint": "PINTEREST_BOARD_ID 환경변수에 사용할 id 값을 설정하세요.",
+    })
+
+
+@app.post("/pinterest/pin-recent")
+async def pinterest_pin_recent(days: int = 1, max_pins: int = 10):
+    """최근 등록된 스마트스토어 상품을 Pinterest에 핀 생성 (수동 트리거)."""
+    result = await pin_recent_smartstore_products(days=days, max_pins=max_pins)
+    return JSONResponse(result)
 
 
 # ─── 상품 등록 ────────────────────────────────────────────────────────────────
@@ -1744,6 +1774,15 @@ async def startup_event():
         except Exception as e:
             print(f"[SCHED] 상품 등록 오류: {e}", flush=True)
 
+    async def job_pinterest_pin():
+        """매일 09:00 / 13:00 / 21:00 — 당일 등록 상품 Pinterest 자동 핀 생성."""
+        print("[SCHED] Pinterest 자동 핀 시작", flush=True)
+        try:
+            result = await pin_recent_smartstore_products(days=1, max_pins=10)
+            print(f"[SCHED] Pinterest 핀 완료 — {result.get('pinned', 0)}개", flush=True)
+        except Exception as e:
+            print(f"[SCHED] Pinterest 핀 오류: {e}", flush=True)
+
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
     # 1시간
@@ -1769,6 +1808,8 @@ async def startup_event():
     scheduler.add_job(job_fashion_trend_update, "interval", weeks=1, id="fashion_trend_update")
     # 08:00 / 12:00 / 20:00 상품 등록
     scheduler.add_job(job_register_products, "cron", hour="8,12,20", minute=0, id="register_products_8")
+    # 09:00 / 13:00 / 21:00 Pinterest 자동 핀 (상품 등록 1시간 후)
+    scheduler.add_job(job_pinterest_pin, "cron", hour="9,13,21", minute=0, id="pinterest_pin")
     # 매주 월요일 00:00 저성과 상품 정리
     scheduler.add_job(job_auto_cleanup, "cron", day_of_week="mon", hour=0, minute=0, id="auto_cleanup")
 
