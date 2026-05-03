@@ -1873,6 +1873,22 @@ _COMMAND_MAP_SS = {
     "ad_analysis":        "광고 분석",
 }
 
+@app.post("/exchange-rate/update")
+async def update_exchange_rate(request: Request):
+    """환율팀장(오케스트레이터)에서 호출 — KRW_USD_RATE 갱신."""
+    import main as _main
+    body = await request.json()
+    rate = float(body.get("rate", 0))
+    if rate <= 0:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"status": "error", "message": "rate must be > 0"}, status_code=400)
+
+    old_rate = float(os.environ.get("KRW_USD_RATE", "1350"))
+    os.environ["KRW_USD_RATE"] = str(rate)
+    print(f"[EXCHANGE] 환율 갱신: {old_rate:.1f} → {rate:.1f} KRW/USD", flush=True)
+    return {"status": "ok", "old_rate": old_rate, "new_rate": rate}
+
+
 @app.post("/command")
 async def command_endpoint(request: Request, background_tasks: BackgroundTasks):
     """오케스트레이터에서 명령 수신 → 백그라운드 실행.
