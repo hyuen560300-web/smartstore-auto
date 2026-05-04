@@ -174,6 +174,7 @@ NAVER_BASE = "https://api.commerce.naver.com/external"
 
 Path(EXCEL_FOLDER).mkdir(exist_ok=True)
 REGISTERED_CODES_FILE = "./uploads/registered_codes.json"
+REGISTERED_NAMES_FILE = "./uploads/registered_names.json"
 CLEANUP_LOG_FILE      = "./uploads/auto_cleanup.jsonl"
 
 def load_registered_codes() -> set:
@@ -188,6 +189,27 @@ def save_registered_code(code: str):
     codes.add(str(code))
     with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
         json.dump(list(codes), f)
+
+def _normalize_name(name: str) -> str:
+    """상품명 정규화: 공백·특수문자 제거 후 소문자화 (중복 체크용)."""
+    import re
+    return re.sub(r"[\s\W]+", "", name).lower()
+
+def load_registered_names() -> set:
+    try:
+        with open(REGISTERED_NAMES_FILE, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def save_registered_name(name: str):
+    norm = _normalize_name(name)
+    if not norm:
+        return
+    names = load_registered_names()
+    names.add(norm)
+    with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(names), f)
 
 
 # ─── 네이버 커머스 API ────────────────────────────────────────────────────────
@@ -2381,14 +2403,16 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
     print(f"[패션트렌드] 핫 키워드 {len(fashion_trends)}개 (ratio≥15.0)", flush=True)
 
     registered_codes = load_registered_codes()
-    print(f"[총괄] 기등록 상품: {len(registered_codes)}개 제외", flush=True)
+    registered_names = load_registered_names()
+    print(f"[총괄] 기등록 상품: {len(registered_codes)}개(코드) / {len(registered_names)}개(이름) 제외", flush=True)
 
     results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0, "ip_blocked": 0, "errors": []}
     for p in products[:limit]:
         try:
-            # 중복 체크
+            # 중복 체크: 코드 OR 정규화된 상품명
             code = str(p.get("code", ""))
-            if code and code in registered_codes:
+            name_norm = _normalize_name(str(p.get("name", "")))
+            if (code and code in registered_codes) or (name_norm and name_norm in registered_names):
                 results["duplicate"] += 1
                 continue
 
@@ -2512,6 +2536,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
 
             await naver_api.register_product(payload)
             save_registered_code(code)
+            save_registered_name(ai.get("product_name") or p.get("name", ""))
             results["success"] += 1
             print(f"[총괄] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원)", flush=True)
             await asyncio.sleep(0.5)
@@ -2572,13 +2597,16 @@ async def pipeline_register_from_domeggook(
     print(f"[패션트렌드] 핫 키워드 {len(fashion_trends)}개 (ratio≥15.0)", flush=True)
 
     registered_codes = load_registered_codes()
+    registered_names = load_registered_names()
+    print(f"[도매꾹파이프라인] 기등록: {len(registered_codes)}개(코드) / {len(registered_names)}개(이름) 제외", flush=True)
     results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0,
                "ip_blocked": 0, "errors": [], "source": "domeggook"}
 
     for p in products[:limit]:
         try:
             code = str(p.get("code", ""))
-            if code and code in registered_codes:
+            name_norm = _normalize_name(str(p.get("name", "")))
+            if (code and code in registered_codes) or (name_norm and name_norm in registered_names):
                 results["duplicate"] += 1
                 continue
 
@@ -2684,6 +2712,7 @@ async def pipeline_register_from_domeggook(
             await naver_api.register_product(payload)
             if code:
                 save_registered_code(code)
+            save_registered_name(ai.get("product_name") or p.get("name", ""))
             results["success"] += 1
             print(f"[도매꾹파이프라인] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원)", flush=True)
             await asyncio.sleep(0.5)

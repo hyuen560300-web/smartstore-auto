@@ -1615,16 +1615,20 @@ async def cleanup_empty_products():
     })
 
 
+_sync_done = False  # 동기화 완료 플래그 — 스케줄러가 완료 전 실행되는 것을 막음
+
 async def _sync_registered_codes():
-    """registered_codes.json 동기화 — startup 블로킹 없이 백그라운드 실행.
-    sellerManagementCode(DG_XXXXX) 우선, 없으면 NAVER_ID_{no} 폴백 저장으로
-    재배포 후에도 중복 등록 방지."""
+    """registered_codes.json + registered_names.json 동기화.
+    - 0개 반환 시 기존 파일 유지 (API 오류 방지)
+    - 완료 후 _sync_done=True 설정"""
+    global _sync_done
     try:
-        from main import REGISTERED_CODES_FILE
+        from main import REGISTERED_CODES_FILE, REGISTERED_NAMES_FILE, _normalize_name
         import asyncio as _asyncio
         # 서버 시작 직후 API 과부하 방지 — 10초 대기 후 동기화 시작
         await _asyncio.sleep(10)
         codes: set[str] = set()
+        names: set[str] = set()
         page = 1
         while True:
             resp = await naver_api.list_products(page=page, size=50)
@@ -1635,20 +1639,29 @@ async def _sync_registered_codes():
                 product_no = str(prod.get("originProductNo", ""))
                 origin = prod.get("originProduct", {})
                 seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+                prod_name = (origin.get("name") or "").strip()
                 if seller_code:
                     codes.add(seller_code)
                 elif product_no:
-                    # sellerManagementCode 없으면 Naver ID로 폴백 (중복 방지용)
                     codes.add(f"NAVER_ID_{product_no}")
+                if prod_name:
+                    names.add(_normalize_name(prod_name))
             if len(contents) < 50:
                 break
             page += 1
             await _asyncio.sleep(0.5)
-        with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(codes), f)
-        print(f"[STARTUP] registered_codes.json 동기화 완료: {len(codes)}개", flush=True)
+        # 0개 반환 시 기존 파일 유지 (API 오류·인증 실패 방어)
+        if codes:
+            with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(codes), f)
+        if names:
+            with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(names), f)
+        print(f"[STARTUP] 동기화 완료: codes={len(codes)}개 / names={len(names)}개", flush=True)
     except Exception as e:
-        print(f"[STARTUP] registered_codes.json 동기화 실패 (무시): {e}", flush=True)
+        print(f"[STARTUP] 동기화 실패 (기존 파일 유지): {e}", flush=True)
+    finally:
+        _sync_done = True
 
 
 @app.on_event("startup")
@@ -1766,6 +1779,9 @@ async def startup_event():
 
     async def job_register_products():
         """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 17개 등록"""
+        if not _sync_done:
+            print("[SCHED] 상품 등록 건너뜀 — registered_codes 동기화 미완료 (중복 방지)", flush=True)
+            return
         print("[SCHED] 상품 자동 등록 시작", flush=True)
         try:
             excel_path = await _next_excel_internal()
