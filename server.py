@@ -49,6 +49,9 @@ from main import (
     build_product_payload,
     save_registered_code,
     load_registered_codes,
+    save_registered_name,
+    load_registered_names,
+    _normalize_name,
     create_banner_image,
     _get_scene_context,
     pipeline_register_from_domeggook,
@@ -546,6 +549,11 @@ async def register_from_domeggook(request: Request, background_tasks: Background
     """도매꾹 API 소싱 → 스마트스토어 상품 등록 (백그라운드 실행).
     Body(선택): {"limit": 10, "keywords": ["생활용품","뷰티"], "min_price": 3000, "max_price": 150000}
     DOMEGGOOK_API_KEY 환경변수 필수."""
+    if not _sync_done:
+        return JSONResponse(
+            {"status": "error", "message": "registered_codes 동기화 미완료 — 중복 방지를 위해 잠시 후 다시 시도하세요."},
+            status_code=503,
+        )
     if not DOMEGGOOK_API_KEY:
         return JSONResponse(
             {"status": "error", "message": "DOMEGGOOK_API_KEY 환경변수가 설정되지 않았습니다."},
@@ -662,8 +670,12 @@ async def register_single_product(request: Request):
     }
 
     registered_codes = load_registered_codes()
+    registered_names = load_registered_names()
+    name_norm = _normalize_name(str(p.get("name", "")))
     if p["code"] and p["code"] in registered_codes:
-        return JSONResponse({"status": "duplicate", "message": "이미 등록된 상품"})
+        return JSONResponse({"status": "duplicate", "message": "이미 등록된 상품 (코드 중복)"})
+    if name_norm and name_norm in registered_names:
+        return JSONResponse({"status": "duplicate", "message": "이미 등록된 상품 (상품명 중복)"})
 
     try:
         from employees import (
@@ -756,6 +768,7 @@ async def register_single_product(request: Request):
 
         result = await naver_api.register_product(payload)
         save_registered_code(p["code"])
+        save_registered_name(safe_name)
         return JSONResponse({"status": "success", "product_name": safe_name, "price": price})
 
     except Exception as e:
@@ -1497,11 +1510,12 @@ async def full_report():
 
 @app.get("/sync-registered-codes")
 async def sync_registered_codes():
-    """네이버 등록 상품의 sellerManagementCode 추출 → registered_codes.json 동기화
-    Railway 재배포 후 로컬 파일 초기화 시 수동 복구용"""
-    from main import REGISTERED_CODES_FILE
+    """네이버 등록 상품의 sellerManagementCode + 상품명 추출 → registered_codes/names.json 동기화
+    Railway 재배포 후 로컬 파일 초기화 시 수동 복구용. 결과가 0개면 기존 파일 유지(오버라이트 방지)."""
+    from main import REGISTERED_CODES_FILE, REGISTERED_NAMES_FILE, _normalize_name
     import asyncio as _asyncio
     codes: set[str] = set()
+    names: set[str] = set()
     page = 1
     while True:
         try:
@@ -1512,20 +1526,42 @@ async def sync_registered_codes():
         if not contents:
             break
         for prod in contents:
+            product_no = str(prod.get("originProductNo", ""))
             origin = prod.get("originProduct", {})
             seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+            prod_name = (origin.get("name") or "").strip()
             if seller_code:
                 codes.add(seller_code)
+            elif product_no:
+                codes.add(f"NAVER_ID_{product_no}")
+            if prod_name:
+                names.add(_normalize_name(prod_name))
         if len(contents) < 50:
             break
         page += 1
         await _asyncio.sleep(0.5)
-    with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(codes), f)
+
+    if len(codes) == 0 and len(names) == 0:
+        return JSONResponse({
+            "status": "skipped",
+            "message": "API가 0개 반환 — 기존 파일 유지 (중복 방지)",
+            "synced_codes": 0,
+            "synced_names": 0,
+        })
+
+    if codes:
+        with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(codes), f)
+    if names:
+        with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(names), f)
+
     return JSONResponse({
         "status": "ok",
-        "synced": len(codes),
-        "sample": list(codes)[:10],
+        "synced_codes": len(codes),
+        "synced_names": len(names),
+        "sample_codes": list(codes)[:10],
+        "sample_names": list(names)[:10],
     })
 
 
@@ -1781,6 +1817,11 @@ async def startup_event():
         """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 17개 등록"""
         if not _sync_done:
             print("[SCHED] 상품 등록 건너뜀 — registered_codes 동기화 미완료 (중복 방지)", flush=True)
+            return
+        _codes_now = load_registered_codes()
+        _names_now = load_registered_names()
+        if len(_codes_now) == 0 and len(_names_now) == 0:
+            print("[SCHED] 상품 등록 건너뜀 — 동기화 후에도 codes·names 모두 0개 (비정상 상태, 중복 방지)", flush=True)
             return
         print("[SCHED] 상품 자동 등록 시작", flush=True)
         try:
