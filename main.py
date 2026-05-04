@@ -1407,6 +1407,30 @@ def _extract_naver_keywords(search_results: list) -> list[str]:
     return [w for w, _ in counter.most_common(8)]
 
 
+# ─── DALL-E 하루 생성 개수 제한 ──────────────────────────────────────────────
+class _DailyDALLELimit:
+    def __init__(self, max_per_day: int):
+        self._max = max_per_day
+        self._date = None
+        self._count = 0
+
+    def allowed(self) -> bool:
+        from datetime import date as _d
+        today = _d.today()
+        if self._date != today:
+            self._date, self._count = today, 0
+        if self._count >= self._max:
+            return False
+        self._count += 1
+        return True
+
+    @property
+    def used(self) -> int:
+        return self._count
+
+_dalle_day_limit = _DailyDALLELimit(10)  # 스마트스토어: 하루 최대 10개
+
+
 # ─── DALL-E 3 공통 스타일 접미사 ─────────────────────────────────────────────
 # ─── 브랜드 글로벌 비주얼 가이드라인 (모든 이미지 공통 적용) ─────────────────
 _DALLE_SUFFIX = (
@@ -1552,6 +1576,9 @@ async def build_dalle_prompt_smart(
 async def _dalle_request(prompt: str, size: str = "1024x1024", quality: str = "hd") -> str | None:
     """DALL-E 3 공통 호출"""
     if not OPENAI_API_KEY:
+        return None
+    if not _dalle_day_limit.allowed():
+        print(f"[DALLE] 하루 한도 초과 ({_dalle_day_limit._max}개/일) — 스킵", flush=True)
         return None
     try:
         async with httpx.AsyncClient(timeout=90) as c:

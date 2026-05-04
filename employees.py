@@ -13,6 +13,20 @@ from typing import Optional, List, Dict
 import anthropic
 import httpx
 
+# DALL-E 하이브리드 배너 하루 제한 (스마트스토어 전체 10개 안에서 공유)
+_dalle_hybrid_count: dict = {"date": None, "n": 0}
+
+def _dalle_hybrid_allowed() -> bool:
+    from datetime import date as _d
+    today = _d.today()
+    if _dalle_hybrid_count["date"] != today:
+        _dalle_hybrid_count["date"] = today
+        _dalle_hybrid_count["n"] = 0
+    if _dalle_hybrid_count["n"] >= 10:
+        return False
+    _dalle_hybrid_count["n"] += 1
+    return True
+
 
 # ─── 직원 1: 소싱팀장 ────────────────────────────────────────────────────────
 async def employee_sourcing_manager(products: list, limit: int, anthropic_key: str) -> list:
@@ -765,7 +779,7 @@ async def _hybrid_generate_bg(prompt: str, flux_key: str, openai_key: str) -> Op
             print(f"[HYBRID] Flux 배경 실패: {e}", flush=True)
 
     # DALL-E 3 폴백
-    if openai_key:
+    if openai_key and _dalle_hybrid_allowed():
         try:
             async with httpx.AsyncClient(timeout=60) as c:
                 r = await c.post(
