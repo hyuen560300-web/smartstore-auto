@@ -1651,6 +1651,94 @@ async def cleanup_empty_products():
     })
 
 
+# 비동기 빈 상품 정리 상태 추적
+_empty_cleanup_state: dict = {"running": False, "deleted": 0, "errors": 0, "done": False, "started_at": None}
+
+@app.post("/cleanup-empty-products/async")
+async def cleanup_empty_products_async():
+    """빈 상품 정리를 백그라운드로 실행 (타임아웃 없이). 결과는 /cleanup-empty-products/status 로 확인."""
+    if _empty_cleanup_state["running"]:
+        return JSONResponse({"status": "already_running", **_empty_cleanup_state})
+    asyncio.create_task(_run_cleanup_empty_background())
+    return JSONResponse({"status": "accepted", "message": "빈 상품 정리 백그라운드 시작. /cleanup-empty-products/status 로 확인."})
+
+@app.get("/cleanup-empty-products/status")
+async def cleanup_empty_products_status():
+    return JSONResponse(_empty_cleanup_state)
+
+async def _run_cleanup_empty_background():
+    import httpx as _httpx
+    from main import NAVER_BASE as _NAVER_BASE
+    global _empty_cleanup_state
+    _KST = timezone(timedelta(hours=9))
+    _empty_cleanup_state = {"running": True, "deleted": 0, "errors": 0, "done": False, "started_at": datetime.now(_KST).isoformat()}
+    deleted: list[str] = []
+    errors: list[str] = []
+
+    async def _get_origin(product_id: str):
+        try:
+            token = await naver_api.get_token()
+            async with _httpx.AsyncClient(timeout=15) as _c:
+                r = await _c.get(
+                    f"{_NAVER_BASE}/v2/products/origin-products/{product_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if r.status_code == 200:
+                    return r.json().get("originProduct", {})
+                if r.status_code == 404:
+                    return None
+        except Exception:
+            pass
+        return {}
+
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=50)
+        except Exception as e:
+            _empty_cleanup_state.update({"running": False, "done": True, "error": str(e), "deleted": len(deleted), "errors": len(errors)})
+            return
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for prod in contents:
+            product_id = str(prod.get("originProductNo", ""))
+            if not product_id:
+                continue
+            await asyncio.sleep(0.5)
+            origin = prod.get("originProduct", {})
+            if not origin:
+                origin = await _get_origin(product_id)
+                if origin is None:
+                    deleted.append(product_id)
+                    continue
+                if not origin:
+                    await asyncio.sleep(2.0)
+                    origin = await _get_origin(product_id)
+                    if origin is None:
+                        deleted.append(product_id)
+                        continue
+                    if not origin:
+                        continue
+            name = origin.get("name", "").strip() if origin else ""
+            price = int(origin.get("salePrice", 0)) if origin else 0
+            if not name and price == 0:
+                ok = await naver_api.delete_product(product_id)
+                if ok:
+                    deleted.append(product_id)
+                else:
+                    errors.append(product_id)
+        _empty_cleanup_state["deleted"] = len(deleted)
+        _empty_cleanup_state["errors"] = len(errors)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(1.0)
+
+    _empty_cleanup_state.update({"running": False, "done": True, "deleted": len(deleted), "errors": len(errors)})
+    print(f"[CLEANUP-EMPTY] 완료 — 삭제:{len(deleted)}, 실패:{len(errors)}", flush=True)
+
+
 _sync_done = False  # 동기화 완료 플래그 — 스케줄러가 완료 전 실행되는 것을 막음
 
 async def _sync_registered_codes():
