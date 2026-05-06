@@ -2046,6 +2046,7 @@ async def _run_update_product_info_ss():
                 print(f"[UPDATE-INFO-SS] list_products 실패 p{page}: {e}", flush=True)
                 break
             contents = resp.get("contents", [])
+            print(f"[UPDATE-INFO-SS] p{page} contents={len(contents)}", flush=True)
             if not contents:
                 break
 
@@ -2061,6 +2062,7 @@ async def _run_update_product_info_ss():
                 # 폴백: 최상위 sellerCodeInfo (구 버전 상품)
                 if not code:
                     code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+                print(f"[UPDATE-INFO-SS] pno={pno} code={code!r} origin_empty={not origin}", flush=True)
                 if not code or not code.upper().startswith("DG_"):
                     ss_skipped += 1
                     continue
@@ -2073,26 +2075,32 @@ async def _run_update_product_info_ss():
                 info = dg_cache[dg_no]
                 shopify_vendor_map[dg_no] = info["brand"] or info["maker"]
 
-                # Naver 상품 업데이트
-                update_payload = {
-                    "detailAttribute": {
-                        "naverShoppingSearchInfo": {
-                            "manufacturerName": info["maker"][:50],
-                            "brandName":        info["brand"][:50],
-                        },
-                        "originAreaInfo": {
-                            "originAreaCode": "0200037",
-                            "content": info["origin"][:50],
-                            "plural": False,
-                            "importer": "해당없음",
-                        },
-                        "productInfoProvidedNotice": {
-                            "productInfoProvidedNoticeType": "ETC",
-                            "etc": {"manufacturer": info["maker"][:50]},
-                        },
-                    }
+                # Naver 상품 업데이트 — PUT은 전체 originProduct 필요 → read-modify-write
+                _READONLY = {"originProductNo", "channelProductNo", "regDate",
+                             "modDate", "statusFrom", "totalSalesQuantity"}
+                full_payload = {k: v for k, v in origin.items() if k not in _READONLY}
+                # detailAttribute 딥 머지 (기존 필드 유지 + 제조사/브랜드/원산지만 교체)
+                da = dict(full_payload.get("detailAttribute") or {})
+                da["naverShoppingSearchInfo"] = {
+                    **(da.get("naverShoppingSearchInfo") or {}),
+                    "manufacturerName": info["maker"][:50],
+                    "brandName":        info["brand"][:50],
                 }
-                ok, err = await naver_api.update_product(pno, update_payload)
+                da["originAreaInfo"] = {
+                    **(da.get("originAreaInfo") or {}),
+                    "originAreaCode": "0200037",
+                    "content":        info["origin"][:50],
+                    "plural":         False,
+                    "importer":       "해당없음",
+                }
+                pnoti = dict(da.get("productInfoProvidedNotice") or {})
+                pnoti_etc = dict(pnoti.get("etc") or {})
+                pnoti_etc["manufacturer"] = info["maker"][:50]
+                pnoti["productInfoProvidedNoticeType"] = "ETC"
+                pnoti["etc"] = pnoti_etc
+                da["productInfoProvidedNotice"] = pnoti
+                full_payload["detailAttribute"] = da
+                ok, err = await naver_api.update_product(pno, full_payload)
                 if ok:
                     ss_updated += 1
                 else:
