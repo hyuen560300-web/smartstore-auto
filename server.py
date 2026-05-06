@@ -1938,6 +1938,177 @@ async def restore_suspended_products():
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# 도매꾹 maker/brand/origin → 스마트스토어 + 쇼피파이 일괄 업데이트
+# ────────────────────────────────────────────────────────────────────────────
+async def _dg_get_info_ss(dg_no: str) -> dict:
+    """도매꾹 getItem API로 maker/brand/origin 조회. 없으면 기본값."""
+    DEFAULT = {"maker": "해외브랜드", "brand": "해외브랜드", "origin": "해외"}
+    if not DOMEGGOOK_API_KEY or not dg_no:
+        return DEFAULT
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://domeggook.com/ssl/api/",
+                params={"ver": "4.0", "mode": "getItem", "aid": DOMEGGOOK_API_KEY,
+                        "no": dg_no, "otype": "json"},
+            )
+            if r.status_code == 200:
+                d = r.json().get("domeggook", {})
+                maker  = str(d.get("maker")  or d.get("manuf")  or "").strip()
+                brand  = str(d.get("brand")  or "").strip()
+                origin = str(d.get("origin") or d.get("origin_country") or "").strip()
+                if maker or brand or origin:
+                    return {
+                        "maker":  maker  or DEFAULT["maker"],
+                        "brand":  brand  or maker or DEFAULT["brand"],
+                        "origin": origin or DEFAULT["origin"],
+                    }
+    except Exception as e:
+        print(f"[DG-INFO] getItem 실패({dg_no}): {e}", flush=True)
+    return DEFAULT
+
+
+def _tg_ss(msg: str):
+    """동기 Telegram 헬퍼 (asyncio.create_task 래핑)"""
+    async def _send():
+        import httpx as _httpx
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        if not bot_token or not chat_id:
+            return
+        try:
+            async with _httpx.AsyncClient(timeout=10) as c:
+                await c.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
+                )
+        except Exception:
+            pass
+    asyncio.create_task(_send())
+
+
+_update_info_ss_running = False
+
+@app.post("/update-product-info")
+async def update_product_info_ss():
+    """도매꾹 API에서 maker/brand/origin 조회 →
+    스마트스토어 manufacturer/brand/origin + 쇼피파이 vendor 일괄 업데이트.
+    sellerManagementCode = DG_XXXXX 형식 상품 대상."""
+    global _update_info_ss_running
+    if _update_info_ss_running:
+        return JSONResponse({"status": "running", "message": "이미 실행 중"})
+    _update_info_ss_running = True
+    asyncio.create_task(_run_update_product_info_ss())
+    return JSONResponse({"status": "accepted", "message": "백그라운드 실행 시작. 완료 시 텔레그램 알림."}, status_code=202)
+
+
+async def _run_update_product_info_ss():
+    global _update_info_ss_running
+    SHOPIFY_SERVER = "https://shopify-trendify-production.up.railway.app"
+    ss_updated, ss_failed, ss_skipped = 0, 0, 0
+    shopify_vendor_map: dict[str, str] = {}  # DG번호 → vendor명
+    dg_cache: dict[str, dict] = {}
+
+    try:
+        _tg_ss("🔄 <b>[스마트스토어] 제조사/브랜드/원산지 업데이트 시작</b>")
+        # 1. 전체 Naver 상품 페이지네이션
+        page = 1
+        while True:
+            try:
+                resp = await naver_api.list_products(page=page, size=50)
+            except Exception as e:
+                print(f"[UPDATE-INFO-SS] list_products 실패 p{page}: {e}", flush=True)
+                break
+            contents = resp.get("contents", [])
+            if not contents:
+                break
+
+            for prod in contents:
+                pno    = str(prod.get("originProductNo", ""))
+                origin = prod.get("originProduct", {})
+                if not pno:
+                    continue
+
+                # sellerManagementCode 추출
+                code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+                if not code or not code.upper().startswith("DG_"):
+                    ss_skipped += 1
+                    continue
+                dg_no = code[3:]  # "DG_12345" → "12345"
+
+                # 도매꾹 조회
+                if dg_no not in dg_cache:
+                    dg_cache[dg_no] = await _dg_get_info_ss(dg_no)
+                    await asyncio.sleep(0.2)
+                info = dg_cache[dg_no]
+                shopify_vendor_map[dg_no] = info["brand"] or info["maker"]
+
+                # Naver 상품 업데이트
+                update_payload = {
+                    "detailAttribute": {
+                        "naverShoppingSearchInfo": {
+                            "manufacturerName": info["maker"][:50],
+                            "brandName":        info["brand"][:50],
+                        },
+                        "originAreaInfo": {
+                            "originAreaCode": "0200037",
+                            "content": info["origin"][:50],
+                            "plural": False,
+                            "importer": "해당없음",
+                        },
+                        "productInfoProvidedNotice": {
+                            "productInfoProvidedNoticeType": "ETC",
+                            "etc": {"manufacturer": info["maker"][:50]},
+                        },
+                    }
+                }
+                ok, err = await naver_api.update_product(pno, update_payload)
+                if ok:
+                    ss_updated += 1
+                else:
+                    print(f"[UPDATE-INFO-SS] ❌ Naver #{pno}: {err}", flush=True)
+                    ss_failed += 1
+                await asyncio.sleep(0.3)
+
+            if len(contents) < 50:
+                break
+            page += 1
+            await asyncio.sleep(1.0)
+
+        # 2. Shopify vendor 업데이트 (쇼피파이 서버 호출)
+        sh_updated, sh_failed = 0, 0
+        if shopify_vendor_map:
+            try:
+                async with httpx.AsyncClient(timeout=60) as c:
+                    r = await c.post(
+                        f"{SHOPIFY_SERVER}/update-vendor-by-sku",
+                        json={"updates": shopify_vendor_map, "default_vendor": "Overseas Brand"},
+                    )
+                    if r.status_code == 200:
+                        sh_res = r.json()
+                        sh_updated = sh_res.get("updated", 0)
+                        sh_failed  = sh_res.get("failed", 0)
+                    else:
+                        print(f"[UPDATE-INFO-SS] Shopify 서버 오류: {r.status_code}", flush=True)
+            except Exception as e:
+                print(f"[UPDATE-INFO-SS] Shopify 호출 실패: {e}", flush=True)
+
+    except Exception as e:
+        print(f"[UPDATE-INFO-SS] 치명적 오류: {e}", flush=True)
+    finally:
+        _update_info_ss_running = False
+
+    _tg_ss(
+        f"✅ <b>[스마트스토어+쇼피파이] 제조사/원산지 업데이트 완료</b>\n"
+        f"<b>스마트스토어</b>\n"
+        f"• 성공: {ss_updated}개 / 실패: {ss_failed}개 / 스킵: {ss_skipped}개\n"
+        f"<b>쇼피파이</b>\n"
+        f"• vendor 업데이트: {sh_updated}개 / 실패: {sh_failed}개"
+    )
+    print(f"[UPDATE-INFO-SS] 완료 SS={ss_updated}/{ss_failed}, SH={sh_updated}/{sh_failed}", flush=True)
+
+
 _sync_done = False  # 동기화 완료 플래그 — 스케줄러가 완료 전 실행되는 것을 막음
 
 async def _sync_registered_codes():
