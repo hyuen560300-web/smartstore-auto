@@ -1740,6 +1740,92 @@ async def _run_cleanup_empty_background():
     print(f"[CLEANUP-EMPTY] 완료 — 삭제:{len(deleted)}, 실패:{len(errors)}", flush=True)
 
 
+@app.get("/scan-all-products")
+async def scan_all_products(days: int = 365, check_garbled: bool = True):
+    """전체 상품 스캔 — 모든 페이지 순회하며 이상 상품(garbled 이름, 0원) 탐색.
+    Returns: total_scanned, garbled_names, zero_price, items"""
+    import httpx as _httpx
+    import re as _re
+    try:
+        now = datetime.now(timezone.utc)
+        token = await naver_api.get_token()
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        all_items = []
+        garbled = []
+        zero_price = []
+        page = 1
+
+        def _is_garbled(name: str) -> bool:
+            if not name or len(name) < 3:
+                return True
+            # Detects nonsensical Korean-English mixes or overly random character patterns
+            if _re.search(r'[A-Z]{4,}', name):  # Long uppercase English strings in Korean name
+                return True
+            if _re.search(r'[가-힣][A-Za-z]{4,}[가-힣]', name):  # English word buried mid-Korean
+                return True
+            return False
+
+        async with _httpx.AsyncClient(timeout=30) as c:
+            while True:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=headers,
+                    json={
+                        "productStatusTypes": ["SALE", "SUSPENSION"],
+                        "page": page,
+                        "size": 100,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": (now - timedelta(days=days)).strftime("%Y-%m-%d"),
+                        "toDate": now.strftime("%Y-%m-%d"),
+                    }
+                )
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                contents = data.get("contents", [])
+                if not contents:
+                    break
+
+                for prod in contents:
+                    pno = str(prod.get("originProductNo", ""))
+                    origin = prod.get("originProduct", {})
+                    if not origin and pno:
+                        try:
+                            dr = await c.get(
+                                f"{NAVER_BASE}/v2/products/origin-products/{pno}",
+                                headers=headers, timeout=10
+                            )
+                            if dr.status_code == 200:
+                                origin = dr.json().get("originProduct", {})
+                        except Exception:
+                            pass
+                    name = origin.get("name", "")
+                    price = origin.get("salePrice", 0)
+                    item = {"id": pno, "name": name, "price": price, "status": origin.get("statusType", "")}
+                    all_items.append(item)
+                    if check_garbled and _is_garbled(name):
+                        garbled.append(item)
+                    if price == 0 and name:
+                        zero_price.append(item)
+
+                if len(contents) < 100:
+                    break
+                page += 1
+                await asyncio.sleep(1.0)
+
+        return JSONResponse({
+            "status": "ok",
+            "total_scanned": len(all_items),
+            "garbled_count": len(garbled),
+            "zero_price_count": len(zero_price),
+            "garbled": garbled,
+            "zero_price": zero_price,
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 @app.post("/scan-suspended-products")
 async def scan_suspended_products():
     """SUSPENSION(판매중지) 상품 목록 조회 + 판매 재개 가능 상품 파악.
