@@ -1826,6 +1826,31 @@ async def scan_all_products(days: int = 365, check_garbled: bool = True):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.get("/debug-product/{product_no}")
+async def debug_product(product_no: str):
+    """특정 상품의 originProduct 원본 JSON 반환 — sellerCodeInfo 위치 확인용"""
+    try:
+        token = await naver_api.get_token()
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                f"{NAVER_BASE}/v2/products/origin-products/{product_no}",
+                headers=headers,
+            )
+            if r.status_code == 200:
+                data = r.json().get("originProduct", {})
+                return JSONResponse({
+                    "seller_code_top": data.get("sellerCodeInfo"),
+                    "seller_code_detail": (data.get("detailAttribute") or {}).get("sellerCodeInfo"),
+                    "has_detail_attribute": bool(data.get("detailAttribute")),
+                    "detail_attribute_keys": list((data.get("detailAttribute") or {}).keys()),
+                    "top_keys": list(data.keys()),
+                })
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:300]}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/scan-suspended-products")
 async def scan_suspended_products():
     """SUSPENSION(판매중지) 상품 목록 조회 + 판매 재개 가능 상품 파악.
