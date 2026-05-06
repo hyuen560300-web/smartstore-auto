@@ -59,6 +59,7 @@ from main import (
     DOMEGGOOK_API_KEY,
     _DG_KEYWORDS,
     pipeline_fix_products,
+    NAVER_BASE,
 )
 from employees import (
     employee_season_planner,
@@ -1737,6 +1738,118 @@ async def _run_cleanup_empty_background():
 
     _empty_cleanup_state.update({"running": False, "done": True, "deleted": len(deleted), "errors": len(errors)})
     print(f"[CLEANUP-EMPTY] 완료 — 삭제:{len(deleted)}, 실패:{len(errors)}", flush=True)
+
+
+@app.post("/scan-suspended-products")
+async def scan_suspended_products():
+    """SUSPENSION(판매중지) 상품 목록 조회 + 판매 재개 가능 상품 파악.
+    Returns: total_suspension, items (id, name, price)"""
+    import httpx as _httpx
+    try:
+        now = datetime.now(timezone.utc)
+        token = await naver_api.get_token()
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        items = []
+        page = 1
+        async with _httpx.AsyncClient(timeout=30) as c:
+            while True:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=headers,
+                    json={
+                        "productStatusTypes": ["SUSPENSION"],
+                        "page": page,
+                        "size": 50,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": (now - timedelta(days=365)).strftime("%Y-%m-%d"),
+                        "toDate": now.strftime("%Y-%m-%d"),
+                    }
+                )
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                contents = data.get("contents", [])
+                if not contents:
+                    break
+                for prod in contents:
+                    pno = str(prod.get("originProductNo", ""))
+                    origin = prod.get("originProduct", {})
+                    if not origin and pno:
+                        try:
+                            dr = await c.get(
+                                f"{NAVER_BASE}/v2/products/origin-products/{pno}",
+                                headers=headers, timeout=10
+                            )
+                            if dr.status_code == 200:
+                                origin = dr.json().get("originProduct", {})
+                        except Exception:
+                            pass
+                    items.append({
+                        "id": pno,
+                        "name": origin.get("name", ""),
+                        "price": origin.get("salePrice", 0),
+                        "status": origin.get("statusType", "SUSPENSION"),
+                    })
+                if len(contents) < 50:
+                    break
+                page += 1
+                await asyncio.sleep(0.5)
+        return JSONResponse({"status": "ok", "total_suspension": len(items), "items": items})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/restore-suspended-products")
+async def restore_suspended_products():
+    """모든 SUSPENSION 상품을 SALE 상태로 복원 (판매 재개)"""
+    import httpx as _httpx
+    try:
+        now = datetime.now(timezone.utc)
+        token = await naver_api.get_token()
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        restored = []
+        failed = []
+        page = 1
+        async with _httpx.AsyncClient(timeout=30) as c:
+            while True:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=headers,
+                    json={
+                        "productStatusTypes": ["SUSPENSION"],
+                        "page": page,
+                        "size": 50,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": (now - timedelta(days=365)).strftime("%Y-%m-%d"),
+                        "toDate": now.strftime("%Y-%m-%d"),
+                    }
+                )
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                contents = data.get("contents", [])
+                if not contents:
+                    break
+                for prod in contents:
+                    pno = str(prod.get("originProductNo", ""))
+                    if not pno:
+                        continue
+                    ok = await naver_api.set_product_status(pno, "SALE")
+                    if ok:
+                        restored.append(pno)
+                    else:
+                        failed.append(pno)
+                    await asyncio.sleep(0.3)
+                if len(contents) < 50:
+                    break
+                page += 1
+                await asyncio.sleep(1.0)
+        return JSONResponse({"status": "ok", "restored": len(restored), "failed": len(failed),
+                             "restored_ids": restored, "failed_ids": failed})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 _sync_done = False  # 동기화 완료 플래그 — 스케줄러가 완료 전 실행되는 것을 막음
