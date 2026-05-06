@@ -2030,8 +2030,12 @@ async def _run_update_product_info_ss():
                 if not pno:
                     continue
 
-                # sellerManagementCode 추출
-                code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+                # sellerManagementCode 추출 (detailAttribute.sellerCodeInfo 안에 있음)
+                detail_attr = origin.get("detailAttribute") or {}
+                code = (detail_attr.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+                # 폴백: 최상위 sellerCodeInfo (구 버전 상품)
+                if not code:
+                    code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
                 if not code or not code.upper().startswith("DG_"):
                     ss_skipped += 1
                     continue
