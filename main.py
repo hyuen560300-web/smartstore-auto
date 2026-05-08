@@ -2399,14 +2399,25 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
     print(f"[총괄] 파싱 완료: {len(products)}개", flush=True)
 
     # ① 소싱팀장: 잘 팔릴 상품 선별
+    _before_sourcing = len(products)
     products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
     print(f"[소싱팀장] 선별: {len(products)}개", flush=True)
+    try:
+        from server import _log_employee
+        _log_employee("소싱팀장", last_result=f"{_before_sourcing}개 → {len(products)}개 선별")
+    except Exception:
+        pass
 
     # ② 시즌 기획자: 현재 시즌 파악
     season_data = employee_season_planner()
     season_info = season_data["upcoming"][0]["event"] if season_data["upcoming"] else ""
     if season_info:
         print(f"[시즌기획자] 현재 시즌: {season_info}", flush=True)
+    try:
+        from server import _log_employee
+        _log_employee("시즌기획자", upcoming_events=[e["event"] for e in season_data["upcoming"][:3]])
+    except Exception:
+        pass
 
     # ③ 트렌드 스카우터: 구글 트렌딩 키워드 수집 (실패 시 빈 리스트로 계속)
     try:
@@ -2415,6 +2426,11 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
         print(f"[트렌드스카우터] 실패(무시): {_te}", flush=True)
         trend_keywords = []
     print(f"[트렌드스카우터] 키워드 {len(trend_keywords)}개 수집", flush=True)
+    try:
+        from server import _log_employee
+        _log_employee("트렌드스카우터", keywords=trend_keywords[:10])
+    except Exception:
+        pass
 
     # ③a 네이버 패션 트렌드 (ratio≥15.0) — 카테고리 매핑 및 AI 카피 강화
     try:
@@ -2448,6 +2464,11 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             if not safe:
                 print(f"[IP감시관] 차단: {p.get('name','')} — {danger_kw}", flush=True)
                 results["ip_blocked"] += 1
+                try:
+                    from server import _log_employee
+                    _log_employee("IP감시관", blocked=1)
+                except Exception:
+                    pass
                 continue
 
             # ⑤ 리뷰 분석가: Pain Point 분석

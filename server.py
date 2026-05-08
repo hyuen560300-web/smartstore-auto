@@ -2413,6 +2413,54 @@ async def _next_excel_internal() -> str | None:
     return str(save_path)
 
 
+# ─── 스마트스토어 내부 AI 직원 활동 로그 (오케스트레이터 보고용) ──────────────────
+import time as _time_module
+from datetime import datetime as _dt
+
+_TEAM_ACTIVITY: dict[str, dict] = {
+    "소싱팀장":           {"calls": 0, "last_run": None, "last_result": ""},
+    "IP감시관":           {"calls": 0, "last_run": None, "blocked": 0},
+    "시즌기획자":         {"calls": 0, "last_run": None, "upcoming_events": []},
+    "트렌드스카우터":     {"calls": 0, "last_run": None, "keywords": []},
+    "리뷰분석가":         {"calls": 0, "last_run": None, "last_product": ""},
+    "품질검수관":         {"calls": 0, "last_run": None, "pass": 0, "fail": 0},
+    "가격최적화분석가":   {"calls": 0, "last_run": None, "avg_margin": 0.0},
+    "하이브리드배너생성자": {"calls": 0, "last_run": None, "success": 0, "fail": 0},
+}
+
+
+def _log_employee(name: str, **kwargs) -> None:
+    """내부 직원 활동 기록 — pipeline_register_from_domeggook 등에서 호출."""
+    if name not in _TEAM_ACTIVITY:
+        _TEAM_ACTIVITY[name] = {"calls": 0, "last_run": None}
+    _TEAM_ACTIVITY[name]["calls"] = _TEAM_ACTIVITY[name].get("calls", 0) + 1
+    _TEAM_ACTIVITY[name]["last_run"] = _dt.now().strftime("%Y-%m-%d %H:%M")
+    for k, v in kwargs.items():
+        if k in ("blocked", "pass", "fail", "success"):
+            _TEAM_ACTIVITY[name][k] = _TEAM_ACTIVITY[name].get(k, 0) + int(v)
+        else:
+            _TEAM_ACTIVITY[name][k] = v
+
+
+@app.get("/employee-report")
+async def employee_report():
+    """오케스트레이터 회의에 보고용 — 내부 AI 직원 활동 현황 + 최근 파이프라인 통계."""
+    codes = load_registered_codes()
+    names = load_registered_names()
+    report = {
+        "generated_at": _dt.now().strftime("%Y-%m-%d %H:%M KST"),
+        "pipeline_stats": {
+            "registered_total": len(codes),
+            "registered_names": len(names),
+        },
+        "team_activity": {
+            k: {kk: vv for kk, vv in v.items()}
+            for k, v in _TEAM_ACTIVITY.items()
+        },
+    }
+    return JSONResponse(report)
+
+
 # ─── 오케스트레이터 명령 수신 ──────────────────────────────────────────────────
 _COMMAND_MAP_SS = {
     "register_domeggook": "도매꾹 상품 등록",
