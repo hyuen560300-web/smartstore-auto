@@ -2440,6 +2440,13 @@ def _log_employee(name: str, **kwargs) -> None:
             _TEAM_ACTIVITY[name][k] = _TEAM_ACTIVITY[name].get(k, 0) + int(v)
         else:
             _TEAM_ACTIVITY[name][k] = v
+    # 중앙 DB 기록 (실패해도 무시)
+    try:
+        from db import log_action as _db_log_action
+        action_type = str(kwargs.get("action_type") or "employee_activity")
+        _db_log_action(name, action_type, "smartstore", {k: str(v)[:100] for k, v in kwargs.items()})
+    except Exception:
+        pass
 
 
 @app.get("/employee-report")

@@ -1,4 +1,4 @@
-# cache-bust: 20260430
+# cache-bust: 20260430b
 fastapi
 uvicorn[standard]
 httpx
@@ -8,6 +8,7 @@ openpyxl
 python-multipart
 bcrypt
 Pillow
-apscheduler
+apscheduler<4
 rembg
 onnxruntime
+psycopg2-binary>=2.9.0
