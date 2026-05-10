@@ -98,6 +98,10 @@ async def _run_seo_title_refresh(limit: int = 30) -> dict:
     trend_kws = list(dict.fromkeys(google_kws + fashion_kws))[:15]
 
     if not trend_kws:
+        # 폴백: 도매꾹 검색 키워드 사용
+        trend_kws = list(_DG_KEYWORDS)[:15]
+        print("[SEO갱신] 트렌드 수집 실패 — 기본 키워드로 대체", flush=True)
+    if not trend_kws:
         return {"ok": False, "reason": "트렌드 키워드 없음"}
 
     products_data = await naver_api.list_products(page=1, size=100)
