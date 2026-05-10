@@ -873,8 +873,10 @@ async def download_excel_from_url(request: Request):
 DRIVE_FOLDER_ID   = "1jTkPYwxOqdGEcCQCUgm5A2YlNDGRqprF"
 FALLBACK_FILE_ID  = "1h6KTzD5-rcqCODII0GHsLPdIxaYTSlVz"
 GOOGLE_API_KEY    = os.environ.get("GOOGLE_API_KEY", "")
-DRIVE_INDEX_FILE  = "/tmp/uploads/drive_index.json"
-EXCEL_PROGRESS    = "/tmp/uploads/excel_progress.json"
+_TMP_UPLOADS = Path("/tmp/uploads")
+_TMP_UPLOADS.mkdir(parents=True, exist_ok=True)
+DRIVE_INDEX_FILE  = str(_TMP_UPLOADS / "drive_index.json")
+EXCEL_PROGRESS    = str(_TMP_UPLOADS / "excel_progress.json")
 
 
 def _load_drive_index() -> list:
