@@ -88,8 +88,15 @@ def health():
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
     """네이버 트렌드 키워드로 상품 제목 갱신. 스케줄러·엔드포인트 공용."""
-    from main import fetch_naver_trends, generate_product_copy
-    trend_kws: list[str] = await fetch_naver_trends()
+    from employees import employee_trend_scout, employee_naver_fashion_trend_scout
+    from main import NAVER_DATALAB_CLIENT_ID, NAVER_DATALAB_CLIENT_SECRET
+
+    google_kws: list[str] = await employee_trend_scout() or []
+    fashion_kws: list[str] = await employee_naver_fashion_trend_scout(
+        NAVER_DATALAB_CLIENT_ID, NAVER_DATALAB_CLIENT_SECRET, top_n=10, ratio_threshold=10.0
+    ) if NAVER_DATALAB_CLIENT_ID else []
+    trend_kws = list(dict.fromkeys(google_kws + fashion_kws))[:15]
+
     if not trend_kws:
         return {"ok": False, "reason": "트렌드 키워드 없음"}
 
