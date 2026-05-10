@@ -154,7 +154,7 @@ GOOGLE_AI_API_KEY   = _clean_key(os.environ.get("GOOGLE_AI_API_KEY", ""))
 FLUX_API_KEY        = _clean_key(os.environ.get("FLUX_API_KEY", ""))
 REPLICATE_API_KEY   = _clean_key(os.environ.get("REPLICATE_API_KEY", ""))
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
-EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "./uploads")
+EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "/tmp/uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
 DOMEGGOOK_API_KEY          = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
 NAVER_DATALAB_CLIENT_ID    = os.environ.get("NAVER_DATALAB_CLIENT_ID", "")
@@ -172,35 +172,96 @@ _DG_KEYWORDS: list[str] = [
 
 NAVER_BASE = "https://api.commerce.naver.com/external"
 
-Path(EXCEL_FOLDER).mkdir(exist_ok=True)
-REGISTERED_CODES_FILE = "./uploads/registered_codes.json"
-REGISTERED_NAMES_FILE = "./uploads/registered_names.json"
-CLEANUP_LOG_FILE      = "./uploads/auto_cleanup.jsonl"
+Path(EXCEL_FOLDER).mkdir(parents=True, exist_ok=True)
+REGISTERED_CODES_FILE = os.path.join(EXCEL_FOLDER, "registered_codes.json")
+REGISTERED_NAMES_FILE = os.path.join(EXCEL_FOLDER, "registered_names.json")
+CLEANUP_LOG_FILE      = os.path.join(EXCEL_FOLDER, "auto_cleanup.jsonl")
+
+_CONTEXT_STORE_URL = os.environ.get(
+    "CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app"
+)
+
+
+def _ctx_get(key: str):
+    """context_store에서 값 조회. 실패 시 None 반환."""
+    try:
+        import requests as _req
+        r = _req.get(f"{_CONTEXT_STORE_URL}/context/{key}", timeout=5)
+        if r.status_code == 200:
+            return json.loads(r.json().get("value", "null"))
+    except Exception:
+        pass
+    return None
+
+
+def _ctx_set(key: str, value) -> None:
+    """context_store에 값 저장. 실패 시 무시."""
+    try:
+        import requests as _req
+        _req.post(
+            f"{_CONTEXT_STORE_URL}/context",
+            json={"key": key, "value": json.dumps(value), "category": "cache"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
 
 def load_registered_codes() -> set:
+    # 1순위: /tmp 파일
     try:
         with open(REGISTERED_CODES_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
     except Exception:
-        return set()
+        pass
+    # 2순위: PostgreSQL context_store 복원
+    data = _ctx_get("smartstore.registered_codes")
+    if isinstance(data, list):
+        try:
+            with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+        return set(data)
+    return set()
+
 
 def save_registered_code(code: str):
     codes = load_registered_codes()
     codes.add(str(code))
-    with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(codes), f)
+    codes_list = list(codes)
+    try:
+        with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
+            json.dump(codes_list, f)
+    except Exception:
+        pass
+    _ctx_set("smartstore.registered_codes", codes_list)
+
 
 def _normalize_name(name: str) -> str:
     """상품명 정규화: 공백·특수문자 제거 후 소문자화 (중복 체크용)."""
     import re
     return re.sub(r"[\s\W]+", "", name).lower()
 
+
 def load_registered_names() -> set:
+    # 1순위: /tmp 파일
     try:
         with open(REGISTERED_NAMES_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
     except Exception:
-        return set()
+        pass
+    # 2순위: PostgreSQL context_store 복원
+    data = _ctx_get("smartstore.registered_names")
+    if isinstance(data, list):
+        try:
+            with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+        return set(data)
+    return set()
+
 
 def save_registered_name(name: str):
     norm = _normalize_name(name)
@@ -208,8 +269,13 @@ def save_registered_name(name: str):
         return
     names = load_registered_names()
     names.add(norm)
-    with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(names), f)
+    names_list = list(names)
+    try:
+        with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
+            json.dump(names_list, f)
+    except Exception:
+        pass
+    _ctx_set("smartstore.registered_names", names_list)
 
 
 # ─── 네이버 커머스 API ────────────────────────────────────────────────────────
