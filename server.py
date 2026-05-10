@@ -143,9 +143,13 @@ async def _run_seo_title_refresh(limit: int = 30) -> dict:
 
 
 @app.post("/seo-refresh")
-async def seo_refresh(background_tasks: BackgroundTasks, limit: int = 30):
-    """즉시 SEO 제목 갱신 실행 (limit: 최대 처리 상품 수)."""
-    background_tasks.add_task(_run_seo_title_refresh, limit)
+async def seo_refresh(limit: int = 30, sync: bool = False):
+    """즉시 SEO 제목 갱신. sync=true면 완료까지 기다리고 결과 반환."""
+    if sync:
+        result = await _run_seo_title_refresh(limit)
+        return result
+    import asyncio
+    asyncio.create_task(_run_seo_title_refresh(limit))
     return {"ok": True, "message": f"SEO 제목 갱신 시작 (최대 {limit}개)", "status": "running"}
 
 
