@@ -140,7 +140,11 @@ async def _run_seo_title_refresh(limit: int = 30) -> dict:
             if not new_name or new_name == cur_name:
                 skipped += 1
                 continue
-            ok, err = await naver_api.update_product(prod_id, {"name": new_name})
+            safe_status = status if status in ("SALE", "SALE_STOPPED", "SUSPENSION") else "SALE"
+            ok, err = await naver_api.update_product(prod_id, {
+                "name": new_name,
+                "statusType": safe_status,
+            })
             if ok:
                 updated += 1
                 log_items.append({"id": prod_id, "before": cur_name[:30], "after": new_name[:30]})
