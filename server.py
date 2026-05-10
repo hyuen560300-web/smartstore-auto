@@ -2365,6 +2365,69 @@ async def startup_event():
     # 매주 월요일 00:00 저성과 상품 정리
     scheduler.add_job(job_auto_cleanup, "cron", day_of_week="mon", hour=0, minute=0, id="auto_cleanup")
 
+    async def job_seo_title_refresh():
+        """3일마다 — 네이버 트렌드 키워드로 저성과 상품 제목 갱신."""
+        print("[SEO갱신] 트렌드 키워드 기반 상품 제목 업데이트 시작", flush=True)
+        try:
+            from main import fetch_naver_trends, generate_product_copy
+            trend_kws: list[str] = await fetch_naver_trends()
+            if not trend_kws:
+                print("[SEO갱신] 트렌드 키워드 없음 — 스킵", flush=True)
+                return
+
+            products_data = await naver_api.list_products(page=1, size=100)
+            items = products_data.get("contents", [])
+            if not items:
+                print("[SEO갱신] 상품 목록 없음", flush=True)
+                return
+
+            updated = skipped = errors = 0
+            for item in items[:30]:  # 한 번에 최대 30개
+                prod_id   = str(item.get("id", "") or item.get("channelProductNo", ""))
+                cur_name  = str(item.get("name", "") or item.get("productName", ""))
+                category  = str(item.get("category", "") or item.get("wholeCategoryName", ""))
+                price     = int(item.get("salePrice", 0) or item.get("price", 0))
+                status    = str(item.get("statusType", "") or item.get("status", ""))
+
+                if not prod_id or not cur_name:
+                    continue
+                # 판매 중 상품만, 이미 트렌드 키워드 2개 이상 포함이면 스킵
+                if status not in ("SALE", "", "ON_SALE"):
+                    skipped += 1
+                    continue
+                matching = sum(1 for kw in trend_kws[:5] if kw in cur_name)
+                if matching >= 2:
+                    skipped += 1
+                    continue
+
+                try:
+                    context = {"trends": trend_kws[:8]}
+                    ai = await generate_product_copy(
+                        {"name": cur_name, "category": category, "price": price}, context
+                    )
+                    new_name = (ai.get("product_name") or "").strip()
+                    if not new_name or new_name == cur_name:
+                        skipped += 1
+                        continue
+
+                    ok, err = await naver_api.update_product(prod_id, {"name": new_name})
+                    if ok:
+                        updated += 1
+                        print(f"  [SEO] ✅ {cur_name[:20]} → {new_name[:20]}", flush=True)
+                    else:
+                        errors += 1
+                        print(f"  [SEO] ❌ {cur_name[:20]}: {err[:60]}", flush=True)
+                except Exception as exc:
+                    errors += 1
+                    print(f"  [SEO] 예외 ({cur_name[:20]}): {exc}", flush=True)
+
+            print(f"[SEO갱신] 완료 — 갱신 {updated}개 / 스킵 {skipped}개 / 오류 {errors}개", flush=True)
+        except Exception as e:
+            print(f"[SEO갱신] 실패: {e}", flush=True)
+
+    # 3일마다 SEO 제목 자동 갱신
+    scheduler.add_job(job_seo_title_refresh, "interval", days=3, id="seo_title_refresh")
+
     try:
         scheduler.start()
         print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
