@@ -112,15 +112,19 @@ async def _run_seo_title_refresh(limit: int = 30) -> dict:
     updated = skipped = errors = 0
     log_items: list[dict] = []
     for item in items[:limit]:
-        prod_id  = str(item.get("id", "") or item.get("channelProductNo", ""))
-        cur_name = str(item.get("name", "") or item.get("productName", ""))
-        category = str(item.get("category", "") or item.get("wholeCategoryName", ""))
-        price    = int(item.get("salePrice", 0) or item.get("price", 0))
-        status   = str(item.get("statusType", "") or item.get("status", ""))
+        prod_id  = str(item.get("originProductNo", "") or item.get("id", ""))
+        origin   = item.get("originProduct", {})
+        cur_name = str(origin.get("name", "") or item.get("name", ""))
+        category = str(
+            (origin.get("detailAttribute") or {}).get("naverShoppingSearchInfo", {}).get("category1Name", "")
+            or item.get("wholeCategoryName", "")
+        )
+        price    = int(origin.get("salePrice", 0) or item.get("salePrice", 0))
+        status   = str(item.get("statusType", "") or origin.get("statusType", ""))
 
         if not prod_id or not cur_name:
             continue
-        if status not in ("SALE", "", "ON_SALE"):
+        if status not in ("SALE", "", "ON_SALE", "SALE_STOPPED"):
             skipped += 1
             continue
         if sum(1 for kw in trend_kws[:5] if kw in cur_name) >= 2:
