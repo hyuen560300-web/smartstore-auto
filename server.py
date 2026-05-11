@@ -1508,8 +1508,8 @@ async def register_digital_product(request: Request):
                     "afterServiceGuideContent": "카카오 mnm1876 또는 mnm1876@naver.com으로 문의해 주세요.",
                 },
                 "productInfoProvidedNotice": {
-                    "productInfoProvidedNoticeType": "SOFTWARE",
-                    "software": {
+                    "productInfoProvidedNoticeType": "DIGITAL_CONTENTS",
+                    "digitalContents": {
                         "manufacturer": "AI Suite",
                         "producer": "mnm1876",
                         "afterServiceDirector": "mnm1876",
@@ -1517,7 +1517,7 @@ async def register_digital_product(request: Request):
                         "grade": "해당없음",
                         "completionDate": "2026-05",
                         "specification": "Python 3.10 이상 / n8n / Railway 환경 필요",
-                        "packing": "이메일/카카오 발송 (디지털)",
+                        "packing": "이메일/카카오 발송 (디지털 콘텐츠)",
                         "warrantyPolicy": "설치 완료 후 7일 이내 미작동 시 100% 환불",
                         "customerServicePhoneNumber": "010-9299-9666",
                     },
