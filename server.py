@@ -640,6 +640,139 @@ async def fix_products_sync(request: Request):
     return JSONResponse(result)
 
 
+@app.get("/find-duplicate-products")
+async def find_duplicate_products_naver():
+    """스마트스토어 등록 상품 중 sellerManagementCode 기준 중복 목록 반환 (삭제 안 함)."""
+    from main import _normalize_name as _nn
+    all_prods = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            product_no = str(p.get("originProductNo", ""))
+            origin = p.get("originProduct", {})
+            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+            name = (origin.get("name") or "").strip()
+            all_prods.append({"product_no": product_no, "code": seller_code, "name": name})
+        if len(contents) < 50:
+            break
+        page += 1
+        import asyncio as _ai; await _ai.sleep(0.3)
+    code_map: dict[str, list] = {}
+    name_map: dict[str, list] = {}
+    for p in all_prods:
+        code_map.setdefault(p["code"], []).append(p)
+        nk = _nn(p["name"])
+        if nk:
+            name_map.setdefault(nk, []).append(p)
+    dup_codes = {k: v for k, v in code_map.items() if len(v) > 1}
+    dup_names = {k: v for k, v in name_map.items() if len(v) > 1}
+    return {
+        "total": len(all_prods),
+        "duplicate_code_groups": len(dup_codes),
+        "duplicate_name_groups": len(dup_names),
+        "duplicate_codes": [{"code": k, "count": len(v), "products": v} for k, v in dup_codes.items()],
+        "duplicate_names": [{"name": k, "count": len(v), "products": v} for k, v in dup_names.items()],
+    }
+
+
+@app.post("/products/deduplicate")
+async def deduplicate_naver(background_tasks: BackgroundTasks):
+    """스마트스토어 중복 상품 삭제 — 같은 code/name 중 최신 1개만 유지 (백그라운드)."""
+    async def _run():
+        from main import _normalize_name as _nn
+        import asyncio as _ai
+        all_prods = []
+        page = 1
+        while True:
+            resp = await naver_api.list_products(page=page, size=50)
+            contents = resp.get("contents", [])
+            if not contents:
+                break
+            for p in contents:
+                product_no = str(p.get("originProductNo", ""))
+                origin = p.get("originProduct", {})
+                seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+                name = (origin.get("name") or "").strip()
+                all_prods.append({"product_no": product_no, "code": seller_code, "name": name})
+            if len(contents) < 50:
+                break
+            page += 1
+            await _ai.sleep(0.3)
+        # code 기준 중복 — 작은 ID 먼저 → 오래된 것 삭제
+        deleted = 0
+        kept = 0
+        seen_codes: set[str] = set()
+        seen_names: set[str] = set()
+        for p in sorted(all_prods, key=lambda x: int(x["product_no"] or 0), reverse=True):
+            code = p["code"]
+            nk = _nn(p["name"])
+            is_dup = code in seen_codes or (nk and nk in seen_names)
+            if is_dup:
+                ok = await naver_api.delete_product(p["product_no"])
+                if ok:
+                    deleted += 1
+                    print(f"[DEDUP] 삭제: [{p['product_no']}] {p['name'][:40]} (code:{code})", flush=True)
+                await _ai.sleep(0.5)
+            else:
+                seen_codes.add(code)
+                if nk:
+                    seen_names.add(nk)
+                kept += 1
+        print(f"[DEDUP 완료] 삭제={deleted} / 유지={kept}", flush=True)
+        return {"deleted": deleted, "kept": kept}
+    background_tasks.add_task(_run)
+    return {"message": "중복 상품 정리 시작 (백그라운드)", "check": "/find-duplicate-products"}
+
+
+@app.post("/products/deduplicate/sync")
+async def deduplicate_naver_sync():
+    """스마트스토어 중복 상품 삭제 — 완료까지 대기 (동기)."""
+    from main import _normalize_name as _nn
+    import asyncio as _ai
+    all_prods = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            product_no = str(p.get("originProductNo", ""))
+            origin = p.get("originProduct", {})
+            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+            name = (origin.get("name") or "").strip()
+            all_prods.append({"product_no": product_no, "code": seller_code, "name": name})
+        if len(contents) < 50:
+            break
+        page += 1
+        await _ai.sleep(0.3)
+    deleted = 0
+    kept = 0
+    seen_codes: set[str] = set()
+    seen_names: set[str] = set()
+    for p in sorted(all_prods, key=lambda x: int(x["product_no"] or 0), reverse=True):
+        code = p["code"]
+        nk = _nn(p["name"])
+        is_dup = code in seen_codes or (nk and nk in seen_names)
+        if is_dup:
+            ok = await naver_api.delete_product(p["product_no"])
+            if ok:
+                deleted += 1
+                print(f"[DEDUP] 삭제: [{p['product_no']}] {p['name'][:40]}", flush=True)
+            await _ai.sleep(0.5)
+        else:
+            seen_codes.add(code)
+            if nk:
+                seen_names.add(nk)
+            kept += 1
+    print(f"[DEDUP 완료] 삭제={deleted} / 유지={kept}", flush=True)
+    return {"deleted": deleted, "kept": kept}
+
+
 @app.post("/register-domeggook-sync")
 async def register_domeggook_sync(request: Request):
     """도매꾹 등록 동기 실행 — 결과/에러 즉시 반환 (진단용). Body: {"limit": 1}"""
@@ -2529,6 +2662,12 @@ async def _sync_registered_codes():
         if names:
             with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
                 json.dump(list(names), f)
+        # context_store도 동기화 — Railway 재시작 후 /tmp 초기화 복원용
+        from main import _ctx_set as _mcs
+        if codes:
+            _mcs("smartstore.registered_codes", list(codes))
+        if names:
+            _mcs("smartstore.registered_names", list(names))
         print(f"[STARTUP] 동기화 완료: codes={len(codes)}개 / names={len(names)}개", flush=True)
     except Exception as e:
         print(f"[STARTUP] 동기화 실패 (기존 파일 유지): {e}", flush=True)
