@@ -349,6 +349,18 @@ async def find_category(keyword: str = "소프트웨어"):
     return JSONResponse({"status": r.status_code, "body": r.json() if r.is_success else r.text[:500]})
 
 
+@app.get("/origin-areas")
+async def get_origin_areas(category_id: int = 50001514):
+    """카테고리별 원산지 코드 목록 조회"""
+    token = await naver_api.get_token()
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(
+            f"https://api.commerce.naver.com/external/v1/product-sale-types/{category_id}/origin-areas",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    return JSONResponse({"status": r.status_code, "body": r.json() if r.is_success else r.text[:800]})
+
+
 @app.post("/register-products-debug")
 async def register_products_debug():
     """상품 등록 1개 동기 실행 — 에러 즉시 반환"""
