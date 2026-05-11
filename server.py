@@ -1789,13 +1789,14 @@ async def register_digital_product(request: Request):
 async def update_digital_product(product_no: int, request: Request):
     """디지털 상품 이미지·상세내용·원산지 업데이트"""
     body = await request.json()
-    image_url   = str(body.get("image", "")).strip()
-    detail      = str(body.get("detailContent", ""))
-    name        = str(body.get("name", ""))
-    price       = int(body.get("price", 0))
-    stock       = int(body.get("stock", 9999))
-    origin_code = str(body.get("originAreaCode", "0009380"))  # 0009380 = 국산(한국)
-    status_type = str(body.get("statusType", "SALE"))  # SALE | SUSPENSION | CLOSE
+    image_url    = str(body.get("image", "")).strip()
+    detail       = str(body.get("detailContent", ""))
+    name         = str(body.get("name", ""))
+    price        = int(body.get("price", 0))
+    stock        = int(body.get("stock", 9999))
+    origin_code  = str(body.get("originAreaCode", "0009380"))  # 0009380 = 국산(한국)
+    status_type  = str(body.get("statusType", "SALE"))  # SALE | SUSPENSION | CLOSE
+    leaf_cat_id  = int(body.get("leafCategoryId", 50001514))
 
     if image_url.startswith("http"):
         try:
@@ -1807,7 +1808,7 @@ async def update_digital_product(product_no: int, request: Request):
     origin_payload = {
         "statusType": status_type,
         "saleType": "NEW",
-        "leafCategoryId": 50001514,
+        "leafCategoryId": leaf_cat_id,
         "name": name,
         "detailContent": detail,
         "images": {
