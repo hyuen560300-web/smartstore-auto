@@ -83,7 +83,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "4.0"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "4.1"}
 
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
@@ -1622,6 +1622,28 @@ async def update_digital_product(product_no: int, request: Request):
         return JSONResponse({"status": "error", "message": err}, status_code=500)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.get("/origin-areas")
+async def get_origin_areas():
+    """네이버 원산지 코드 목록 조회"""
+    import httpx as _hx
+    headers = await naver_api._headers()
+    # 여러 후보 endpoint 시도
+    candidates = [
+        "https://api.commerce.naver.com/external/v2/products/meta/origin-areas",
+        "https://api.commerce.naver.com/external/v1/product-service/meta/origin-areas",
+        "https://api.commerce.naver.com/external/v1/products/meta/origin-areas",
+    ]
+    results = {}
+    async with _hx.AsyncClient(timeout=10) as c:
+        for url in candidates:
+            try:
+                r = await c.get(url, headers=headers)
+                results[url] = {"status": r.status_code, "body": r.text[:500]}
+            except Exception as e:
+                results[url] = {"error": str(e)}
+    return JSONResponse(results)
 
 
 @app.get("/get-product/{product_no}")
