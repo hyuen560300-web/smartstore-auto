@@ -1419,6 +1419,65 @@ async def get_orders(days: int = 7):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.post("/register-digital")
+async def register_digital_product(request: Request):
+    """디지털 상품 직접 등록 (AI 파이프라인 없이 payload 그대로 전달)"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "JSON 파싱 실패"}, status_code=400)
+
+    leaf_id   = int(body.get("leafCategoryId", 50000727))
+    name      = str(body.get("name", "")).strip()
+    price     = int(body.get("price", 0))
+    detail    = str(body.get("detailContent", ""))
+    image_url = str(body.get("image", ""))
+    stock     = int(body.get("stock", 9999))
+
+    if not name or not price:
+        return JSONResponse({"status": "error", "message": "name, price 필수"}, status_code=400)
+
+    payload = {
+        "originProduct": {
+            "statusType": "SALE",
+            "saleType": "NEW",
+            "leafCategoryId": leaf_id,
+            "name": name,
+            "detailContent": detail or name,
+            "images": {
+                "representativeImage": {"url": image_url},
+                "optionalImages": [],
+            },
+            "salePrice": price,
+            "stockQuantity": stock,
+            "deliveryInfo": {
+                "deliveryType": "DELIVERY",
+                "deliveryAttributeType": "NORMAL",
+                "deliveryCompany": "DIRECT_DELIVERY",
+                "deliveryFee": {
+                    "deliveryFeeType": "FREE",
+                    "deliveryFeePayType": "PREPAID",
+                    "baseFee": 0,
+                    "freeConditionalAmount": 0,
+                },
+                "claimDeliveryInfo": {
+                    "returnDeliveryFee": 0,
+                    "exchangeDeliveryFee": 0,
+                    "deliveryCompany": "DIRECT_DELIVERY",
+                    "returnDeliveryCompany": "DIRECT_DELIVERY",
+                },
+            },
+        }
+    }
+
+    try:
+        result = await naver_api.register_product(payload)
+        product_no = result.get("originProductNo") or result.get("id")
+        return JSONResponse({"status": "ok", "originProductNo": product_no, "raw": result})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 @app.post("/confirm-orders")
 async def confirm_orders(request: Request):
     """✅ 주문 발주확인 처리"""
