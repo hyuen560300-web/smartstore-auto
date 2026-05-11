@@ -1431,11 +1431,25 @@ async def register_digital_product(request: Request):
     name      = str(body.get("name", "")).strip()
     price     = int(body.get("price", 0))
     detail    = str(body.get("detailContent", ""))
-    image_url = str(body.get("image", ""))
+    image_url = str(body.get("image", "")).strip()
     stock     = int(body.get("stock", 9999))
 
     if not name or not price:
         return JSONResponse({"status": "error", "message": "name, price 필수"}, status_code=400)
+
+    # 외부 이미지 URL → Naver CDN 업로드 (이미지 없으면 기본 썸네일 사용)
+    if image_url and image_url.startswith("http"):
+        try:
+            image_url = await naver_api.upload_image(image_url)
+        except Exception as img_e:
+            return JSONResponse({"status": "error", "message": f"이미지 업로드 실패: {img_e}"}, status_code=500)
+    elif not image_url:
+        # 기본 플레이스홀더 이미지 업로드
+        placeholder = "https://via.placeholder.com/1000x1000/1a1a2e/ffffff?text=AI+Suite"
+        try:
+            image_url = await naver_api.upload_image(placeholder)
+        except Exception:
+            return JSONResponse({"status": "error", "message": "이미지 URL 필수 (image 파라미터에 공개 이미지 URL 입력)"}, status_code=400)
 
     payload = {
         "originProduct": {
