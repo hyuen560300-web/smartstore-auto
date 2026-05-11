@@ -1486,9 +1486,7 @@ async def register_digital_product(request: Request):
             "salePrice": price,
             "stockQuantity": stock,
             "deliveryInfo": {
-                "deliveryType": "DELIVERY",
-                "deliveryAttributeType": "NORMAL",
-                "deliveryCompany": "DIRECT_DELIVERY",
+                "deliveryType": "NOTHING",
                 "deliveryFee": {
                     "deliveryFeeType": "FREE",
                     "deliveryFeePayType": "PREPAID",
@@ -1498,8 +1496,8 @@ async def register_digital_product(request: Request):
                 "claimDeliveryInfo": {
                     "returnDeliveryFee": 0,
                     "exchangeDeliveryFee": 0,
-                    "deliveryCompany": "DIRECT_DELIVERY",
-                    "returnDeliveryCompany": "DIRECT_DELIVERY",
+                    "deliveryCompany": "CJGLS",
+                    "returnDeliveryCompany": "CJGLS",
                 },
             },
             "detailAttribute": {
