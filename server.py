@@ -83,7 +83,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "3.9"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "4.0"}
 
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
@@ -1620,6 +1620,33 @@ async def update_digital_product(product_no: int, request: Request):
         if ok:
             return JSONResponse({"status": "ok", "product_no": product_no})
         return JSONResponse({"status": "error", "message": err}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.get("/get-product/{product_no}")
+async def get_product_detail(product_no: int):
+    """상품 원본 데이터 조회 (originAreaInfo 확인용)"""
+    try:
+        import httpx as _hx
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                f"https://api.commerce.naver.com/external/v2/products/origin-products/{product_no}",
+                headers=headers,
+            )
+        if r.status_code == 200:
+            data = r.json()
+            origin = data.get("originProduct", {})
+            detail_attr = origin.get("detailAttribute", {})
+            return JSONResponse({
+                "status": "ok",
+                "name": origin.get("name"),
+                "statusType": origin.get("statusType"),
+                "originAreaInfo": detail_attr.get("originAreaInfo"),
+                "leafCategoryId": origin.get("leafCategoryId"),
+            })
+        return JSONResponse({"status": "error", "code": r.status_code, "body": r.text[:500]}, status_code=500)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
