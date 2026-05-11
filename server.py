@@ -1515,17 +1515,15 @@ async def register_digital_product(request: Request):
                 "productInfoProvidedNotice": {
                     "productInfoProvidedNoticeType": "ETC",
                     "etc": {
+                        "itemName": name[:50],
+                        "modelName": "AI Suite v1",
+                        "manufacturer": "AI Suite (mnm1876)",
+                        "customerServicePhoneNumber": "010-9299-9666",
                         "returnCostReason": "디지털 콘텐츠 특성상 수령 후 환불 불가",
                         "noRefundReason": "디지털 콘텐츠 특성상 수령 후 환불 불가",
                         "qualityAssuranceStandard": "설치 완료 후 7일 이내 미작동 시 환불",
                         "compensationProcedure": "010-9299-9666 또는 mnm1876@naver.com",
                         "troubleShootingContents": "카카오 mnm1876 / 010-9299-9666",
-                        "itemList": [
-                            {"title": "품목 및 재질", "contents": "디지털 소프트웨어 (자동화 스크립트 패키지)"},
-                            {"title": "제조국(원산지)", "contents": "대한민국"},
-                            {"title": "제조자(수입자)", "contents": "AI Suite / mnm1876"},
-                            {"title": "A/S 책임자와 전화번호", "contents": "010-9299-9666"},
-                        ],
                     },
                 },
             },
