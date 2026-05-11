@@ -679,12 +679,16 @@ async def find_duplicate_products_naver():
     }
 
 
-@app.get("/find-similar-products")
-async def find_similar_products_naver(prefix_len: int = 12):
-    """이름은 달라도 같은 상품일 가능성이 높은 그룹 탐지.
-    - 정규화 이름 앞 prefix_len 글자가 같은 상품 그룹화
-    - 같은 카테고리 + 가격 20% 이내 상품 그룹화"""
-    from main import _normalize_name as _nn
+@app.post("/find-similar-products")
+async def find_similar_products_bg(background_tasks: BackgroundTasks, prefix_len: int = 12):
+    """유사 상품 탐지 — 백그라운드 실행, 결과는 context_store[smartstore.similar_products_report]에 저장."""
+    background_tasks.add_task(_run_find_similar, prefix_len)
+    return {"message": "유사 상품 분석 시작 (백그라운드)", "result_key": "smartstore.similar_products_report"}
+
+
+async def _run_find_similar(prefix_len: int = 12):
+    """이름은 달라도 같은 상품일 가능성이 높은 그룹 탐지 — 내부 실행용."""
+    from main import _normalize_name as _nn, _ctx_set as _mcs
     import asyncio as _ai
     all_prods = []
     page = 1
@@ -747,7 +751,6 @@ async def find_similar_products_naver(prefix_len: int = 12):
                     })
 
     # context_store에 결과 저장
-    from main import _ctx_set as _mcs
     summary = {
         "total": len(all_prods),
         "prefix_dup_groups": len(prefix_groups),
@@ -756,7 +759,18 @@ async def find_similar_products_naver(prefix_len: int = 12):
         "suspicious": suspicious[:50],
     }
     _mcs("smartstore.similar_products_report", summary)
+    print(f"[유사상품] 분석 완료: {len(all_prods)}개 / 유사그룹:{len(prefix_groups)} / 의심쌍:{len(suspicious)}", flush=True)
     return summary
+
+
+@app.get("/similar-products-result")
+async def similar_products_result():
+    """find-similar-products 백그라운드 분석 결과 조회 (context_store)."""
+    from main import _ctx_get
+    data = _ctx_get("smartstore.similar_products_report")
+    if not data:
+        return {"status": "not_ready", "message": "POST /find-similar-products 먼저 실행하세요"}
+    return data
 
 
 @app.post("/products/deduplicate")
