@@ -1467,7 +1467,11 @@ async def register_digital_product(request: Request):
                     "returnDeliveryCompany": "DIRECT_DELIVERY",
                 },
             },
-        }
+        },
+        "smartstoreChannelProduct": {
+            "naverShoppingRegistration": True,
+            "channelProductDisplayStatusType": "ON",
+        },
     }
 
     try:
