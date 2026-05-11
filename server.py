@@ -1508,8 +1508,11 @@ async def register_digital_product(request: Request):
                     "afterServiceGuideContent": "카카오 mnm1876 또는 mnm1876@naver.com으로 문의해 주세요.",
                 },
                 "originAreaInfo": {
-                    "originNationType": "ETC",
-                    "content": "상세페이지 참고 (디지털 소프트웨어)",
+                    "originNationType": "DOMESTIC",
+                    "originArea": {
+                        "code": "0200037",
+                        "importer": "",
+                    },
                 },
                 "minorPurchasable": True,
                 "productInfoProvidedNotice": {
