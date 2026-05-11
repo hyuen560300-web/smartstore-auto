@@ -83,7 +83,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "3.7"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "3.8"}
 
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
@@ -1576,7 +1576,6 @@ async def update_digital_product(product_no: int, request: Request):
 
     payload = {
         "originProduct": {
-            "statusType": "SALE",
             "saleType": "NEW",
             "leafCategoryId": 50001514,
             "name": name,
