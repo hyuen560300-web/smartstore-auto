@@ -83,7 +83,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "3.3-etc"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "3.4-debug"}
 
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
@@ -359,6 +359,22 @@ async def get_origin_areas(category_id: int = 50001514):
             headers={"Authorization": f"Bearer {token}"},
         )
     return JSONResponse({"status": r.status_code, "body": r.json() if r.is_success else r.text[:800]})
+
+
+@app.get("/debug-product/{product_no}")
+async def debug_product_origin(product_no: int):
+    """기존 등록 상품의 originAreaInfo 구조 확인"""
+    token = await naver_api.get_token()
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(
+            f"https://api.commerce.naver.com/external/v2/products/origin-products/{product_no}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if not r.is_success:
+        return JSONResponse({"status": r.status_code, "body": r.text[:800]})
+    data = r.json()
+    origin_info = data.get("originProduct", {}).get("detailAttribute", {}).get("originAreaInfo")
+    return JSONResponse({"originAreaInfo": origin_info, "raw_snippet": str(data)[:500]})
 
 
 @app.post("/register-products-debug")
