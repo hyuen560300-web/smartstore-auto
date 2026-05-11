@@ -2871,7 +2871,7 @@ async def startup_event():
 
     async def job_register_products():
         """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 17개 등록"""
-        if os.getenv("AUTO_REGISTER_ENABLED", "true").lower() != "true":
+        if os.getenv("AUTO_REGISTER_ENABLED", "false").lower() != "true":
             print("[SCHED] 상품 자동 등록 비활성화 (AUTO_REGISTER_ENABLED=false)", flush=True)
             return
         if not _sync_done:
