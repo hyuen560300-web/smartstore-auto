@@ -679,6 +679,86 @@ async def find_duplicate_products_naver():
     }
 
 
+@app.get("/find-similar-products")
+async def find_similar_products_naver(prefix_len: int = 12):
+    """이름은 달라도 같은 상품일 가능성이 높은 그룹 탐지.
+    - 정규화 이름 앞 prefix_len 글자가 같은 상품 그룹화
+    - 같은 카테고리 + 가격 20% 이내 상품 그룹화"""
+    from main import _normalize_name as _nn
+    import asyncio as _ai
+    all_prods = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            product_no = str(p.get("originProductNo", ""))
+            origin = p.get("originProduct", {})
+            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+            name = (origin.get("name") or "").strip()
+            category = str((origin.get("productInfoProvidedNotice") or {}).get("productInfoProvidedNoticeType", "") or
+                           (origin.get("detailAttribute") or {}).get("productInfoProvidedNoticeType", "") or "")
+            price = int(origin.get("salePrice", 0) or 0)
+            norm = _nn(name)
+            all_prods.append({
+                "product_no": product_no, "code": seller_code,
+                "name": name, "norm": norm, "price": price
+            })
+        if len(contents) < 50:
+            break
+        page += 1
+        await _ai.sleep(0.3)
+
+    # 1) 이름 앞 prefix_len 글자 일치 그룹 (정규화 기준)
+    prefix_map: dict[str, list] = {}
+    for p in all_prods:
+        key = p["norm"][:prefix_len]
+        if len(key) >= 6:
+            prefix_map.setdefault(key, []).append(p)
+    prefix_groups = [
+        {"prefix": k, "count": len(v),
+         "products": [{"no": x["product_no"], "name": x["name"], "price": x["price"]} for x in v]}
+        for k, v in prefix_map.items() if len(v) > 1
+    ]
+
+    # 2) 이름이 다른데 너무 유사한 그룹 (앞 8자 동일, 가격 50% 이내)
+    suspicious: list[dict] = []
+    seen_pairs: set = set()
+    for i, a in enumerate(all_prods):
+        for b in all_prods[i+1:]:
+            if a["product_no"] == b["product_no"]:
+                continue
+            key = tuple(sorted([a["product_no"], b["product_no"]]))
+            if key in seen_pairs:
+                continue
+            norm_a, norm_b = a["norm"], b["norm"]
+            if len(norm_a) < 6 or len(norm_b) < 6:
+                continue
+            # 앞 8자 일치 + 이름은 다름
+            if norm_a[:8] == norm_b[:8] and norm_a != norm_b:
+                pa, pb = a["price"], b["price"]
+                if pb and pa and abs(pa - pb) / max(pa, pb) < 0.5:
+                    seen_pairs.add(key)
+                    suspicious.append({
+                        "product_a": {"no": a["product_no"], "name": a["name"], "price": pa},
+                        "product_b": {"no": b["product_no"], "name": b["name"], "price": pb},
+                    })
+
+    # context_store에 결과 저장
+    from main import _ctx_set as _mcs
+    summary = {
+        "total": len(all_prods),
+        "prefix_dup_groups": len(prefix_groups),
+        "suspicious_pairs": len(suspicious),
+        "prefix_groups": prefix_groups[:50],
+        "suspicious": suspicious[:50],
+    }
+    _mcs("smartstore.similar_products_report", summary)
+    return summary
+
+
 @app.post("/products/deduplicate")
 async def deduplicate_naver(background_tasks: BackgroundTasks):
     """스마트스토어 중복 상품 삭제 — 같은 code/name 중 최신 1개만 유지 (백그라운드)."""
