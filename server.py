@@ -1486,7 +1486,9 @@ async def register_digital_product(request: Request):
             "salePrice": price,
             "stockQuantity": stock,
             "deliveryInfo": {
-                "deliveryType": "NOTHING",
+                "deliveryType": "DELIVERY",
+                "deliveryAttributeType": "NORMAL",
+                "deliveryCompany": "CJGLS",
                 "deliveryFee": {
                     "deliveryFeeType": "FREE",
                     "deliveryFeePayType": "PREPAID",
