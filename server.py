@@ -83,7 +83,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "3.4-debug"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "3.5-flatcode"}
 
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
@@ -1536,8 +1536,10 @@ async def register_digital_product(request: Request):
                     "afterServiceGuideContent": "카카오 mnm1876 또는 mnm1876@naver.com으로 문의해 주세요.",
                 },
                 "originAreaInfo": {
-                    "originNationType": "ETC",
+                    "originAreaCode": "ETC",
                     "content": "국내산 (디지털 소프트웨어)",
+                    "plural": False,
+                    "importer": "",
                 },
                 "minorPurchasable": True,
                 "productInfoProvidedNotice": {
