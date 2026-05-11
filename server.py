@@ -336,6 +336,19 @@ async def debug_naver():
     return JSONResponse(result)
 
 
+@app.get("/find-category")
+async def find_category(keyword: str = "소프트웨어"):
+    """Naver Commerce 카테고리 검색 (leaf ID 확인용)"""
+    token = await naver_api.get_token()
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(
+            "https://api.commerce.naver.com/external/v1/categories",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"keyword": keyword},
+        )
+    return JSONResponse({"status": r.status_code, "body": r.json() if r.is_success else r.text[:500]})
+
+
 @app.post("/register-products-debug")
 async def register_products_debug():
     """상품 등록 1개 동기 실행 — 에러 즉시 반환"""
