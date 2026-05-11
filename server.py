@@ -1680,12 +1680,13 @@ async def register_digital_product(request: Request):
     except Exception:
         return JSONResponse({"status": "error", "message": "JSON 파싱 실패"}, status_code=400)
 
-    leaf_id   = int(body.get("leafCategoryId", 50000727))
-    name      = str(body.get("name", "")).strip()
-    price     = int(body.get("price", 0))
-    detail    = str(body.get("detailContent", ""))
-    image_url = str(body.get("image", "")).strip()
-    stock     = int(body.get("stock", 9999))
+    leaf_id     = int(body.get("leafCategoryId", 50000727))
+    name        = str(body.get("name", "")).strip()
+    price       = int(body.get("price", 0))
+    detail      = str(body.get("detailContent", ""))
+    image_url   = str(body.get("image", "")).strip()
+    stock       = int(body.get("stock", 9999))
+    origin_code = str(body.get("originAreaCode", "0009380"))  # 0009380 = 국산(서울특별시 은평구)
 
     if not name or not price:
         return JSONResponse({"status": "error", "message": "name, price 필수"}, status_code=400)
@@ -1748,8 +1749,8 @@ async def register_digital_product(request: Request):
                     "afterServiceGuideContent": "카카오 mnm1876 또는 mnm1876@naver.com으로 문의해 주세요.",
                 },
                 "originAreaInfo": {
-                    "originAreaCode": "0200037",
-                    "content": "국내산 (디지털 소프트웨어)",
+                    "originAreaCode": origin_code,
+                    "content": "국내산 (대한민국)",
                     "plural": False,
                     "importer": "해당없음",
                 },
