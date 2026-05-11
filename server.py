@@ -1699,7 +1699,7 @@ async def update_digital_product(product_no: int, request: Request):
     name      = str(body.get("name", ""))
     price     = int(body.get("price", 0))
     stock     = int(body.get("stock", 9999))
-    origin_code = str(body.get("originAreaCode", "0200082"))
+    origin_code = str(body.get("originAreaCode", "0009380"))  # 0009380 = 국산(한국)
 
     if image_url.startswith("http"):
         try:
