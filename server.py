@@ -1557,6 +1557,75 @@ async def register_digital_product(request: Request):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.post("/update-digital/{product_no}")
+async def update_digital_product(product_no: int, request: Request):
+    """디지털 상품 이미지·상세내용·원산지 업데이트"""
+    body = await request.json()
+    image_url = str(body.get("image", "")).strip()
+    detail    = str(body.get("detailContent", ""))
+    name      = str(body.get("name", ""))
+    price     = int(body.get("price", 0))
+    stock     = int(body.get("stock", 9999))
+    origin_code = str(body.get("originAreaCode", "0200082"))
+
+    if image_url.startswith("http"):
+        try:
+            image_url = await naver_api.upload_image(image_url)
+        except Exception as e:
+            return JSONResponse({"status": "error", "message": f"이미지 업로드 실패: {e}"}, status_code=500)
+
+    payload = {
+        "originProduct": {
+            "statusType": "SALE",
+            "saleType": "NEW",
+            "leafCategoryId": 50001514,
+            "name": name,
+            "detailContent": detail,
+            "images": {
+                "representativeImage": {"url": image_url},
+                "optionalImages": [],
+            },
+            "salePrice": price,
+            "stockQuantity": stock,
+            "deliveryInfo": {
+                "deliveryType": "DELIVERY",
+                "deliveryAttributeType": "NORMAL",
+                "deliveryCompany": "CJGLS",
+                "deliveryFee": {"deliveryFeeType": "FREE", "deliveryFeePayType": "PREPAID", "baseFee": 0, "freeConditionalAmount": 0},
+                "claimDeliveryInfo": {"returnDeliveryFee": 0, "exchangeDeliveryFee": 0, "deliveryCompany": "CJGLS", "returnDeliveryCompany": "CJGLS"},
+            },
+            "detailAttribute": {
+                "afterServiceInfo": {"afterServiceTelephoneNumber": "010-9299-9666", "afterServiceGuideContent": "카카오 mnm1876 또는 mnm1876@naver.com으로 문의해 주세요."},
+                "originAreaInfo": {"originAreaCode": origin_code, "content": "국내산 (대한민국)", "plural": False, "importer": "해당없음"},
+                "minorPurchasable": True,
+                "productInfoProvidedNotice": {
+                    "productInfoProvidedNoticeType": "ETC",
+                    "etc": {
+                        "itemName": name[:50],
+                        "modelName": "AI Suite v1",
+                        "manufacturer": "AI Suite (mnm1876)",
+                        "customerServicePhoneNumber": "010-9299-9666",
+                        "returnCostReason": "디지털 콘텐츠 특성상 수령 후 환불 불가",
+                        "noRefundReason": "디지털 콘텐츠 특성상 수령 후 환불 불가",
+                        "qualityAssuranceStandard": "설치 완료 후 7일 이내 미작동 시 환불",
+                        "compensationProcedure": "010-9299-9666 또는 mnm1876@naver.com",
+                        "troubleShootingContents": "카카오 mnm1876 / 010-9299-9666",
+                    },
+                },
+            },
+        },
+        "smartstoreChannelProduct": {"naverShoppingRegistration": True, "channelProductDisplayStatusType": "ON"},
+    }
+
+    try:
+        ok, err = await naver_api.update_product(product_no, payload)
+        if ok:
+            return JSONResponse({"status": "ok", "product_no": product_no})
+        return JSONResponse({"status": "error", "message": err}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 @app.post("/confirm-orders")
 async def confirm_orders(request: Request):
     """✅ 주문 발주확인 처리"""
