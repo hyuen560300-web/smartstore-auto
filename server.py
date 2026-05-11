@@ -83,7 +83,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "4.1"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "4.2"}
 
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
@@ -1694,12 +1694,13 @@ async def register_digital_product(request: Request):
 async def update_digital_product(product_no: int, request: Request):
     """디지털 상품 이미지·상세내용·원산지 업데이트"""
     body = await request.json()
-    image_url = str(body.get("image", "")).strip()
-    detail    = str(body.get("detailContent", ""))
-    name      = str(body.get("name", ""))
-    price     = int(body.get("price", 0))
-    stock     = int(body.get("stock", 9999))
+    image_url   = str(body.get("image", "")).strip()
+    detail      = str(body.get("detailContent", ""))
+    name        = str(body.get("name", ""))
+    price       = int(body.get("price", 0))
+    stock       = int(body.get("stock", 9999))
     origin_code = str(body.get("originAreaCode", "0009380"))  # 0009380 = 국산(한국)
+    status_type = str(body.get("statusType", "SALE"))  # SALE | SUSPENSION | CLOSE
 
     if image_url.startswith("http"):
         try:
@@ -1709,7 +1710,7 @@ async def update_digital_product(product_no: int, request: Request):
 
     # update_product()가 내부에서 {"originProduct": payload}로 감싸므로 inner dict만 전달
     origin_payload = {
-        "statusType": "SALE",
+        "statusType": status_type,
         "saleType": "NEW",
         "leafCategoryId": 50001514,
         "name": name,
@@ -2790,6 +2791,9 @@ async def startup_event():
 
     async def job_register_products():
         """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 17개 등록"""
+        if os.getenv("AUTO_REGISTER_ENABLED", "true").lower() != "true":
+            print("[SCHED] 상품 자동 등록 비활성화 (AUTO_REGISTER_ENABLED=false)", flush=True)
+            return
         if not _sync_done:
             print("[SCHED] 상품 등록 건너뜀 — registered_codes 동기화 미완료 (중복 방지)", flush=True)
             return
