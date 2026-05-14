@@ -773,6 +773,71 @@ async def similar_products_result():
     return data
 
 
+@app.post("/products/activate-sale-wait")
+async def activate_sale_wait_products():
+    """판매대기(SALE_WAIT) 상품 전체를 판매중(SALE)으로 변경 — 동기 실행."""
+    import asyncio as _ai
+    from datetime import datetime, timezone, timedelta
+
+    headers = await naver_api._headers()
+    changed, failed, total = [], [], 0
+
+    async with httpx.AsyncClient(timeout=30) as c:
+        page = 1
+        while True:
+            now = datetime.now(timezone.utc)
+            r = await c.post(
+                f"{NAVER_BASE}/v1/products/search",
+                headers=headers,
+                json={
+                    "productStatusTypes": ["SALE_WAIT"],
+                    "page": page,
+                    "size": 100,
+                    "orderType": "NO",
+                    "periodType": "PROD_REG_DAY",
+                    "fromDate": "2020-01-01",
+                    "toDate": now.strftime("%Y-%m-%d"),
+                },
+            )
+            if not r.is_success:
+                return JSONResponse({"error": f"상품 조회 실패: {r.status_code} {r.text[:200]}"}, status_code=500)
+            data = r.json()
+            contents = data.get("contents", [])
+            total += len(contents)
+
+            for item in contents:
+                prod_no = str(item.get("originProductNo", ""))
+                name = item.get("name", "")[:40]
+                if not prod_no:
+                    continue
+                # 상태 변경: SALE_WAIT → SALE
+                upd = await c.put(
+                    f"{NAVER_BASE}/v2/products/origin-products/{prod_no}",
+                    headers=headers,
+                    json={"originProduct": {"statusType": "SALE"}},
+                    timeout=15,
+                )
+                if upd.status_code == 200:
+                    changed.append({"id": prod_no, "name": name})
+                    print(f"[ACTIVATE] ✅ {prod_no} {name}", flush=True)
+                else:
+                    failed.append({"id": prod_no, "name": name, "error": upd.text[:100]})
+                    print(f"[ACTIVATE] ❌ {prod_no} {name} → {upd.status_code} {upd.text[:80]}", flush=True)
+                await _ai.sleep(0.5)
+
+            if len(contents) < 100:
+                break
+            page += 1
+
+    return JSONResponse({
+        "total_sale_wait": total,
+        "changed": len(changed),
+        "failed": len(failed),
+        "changed_list": changed,
+        "failed_list": failed,
+    })
+
+
 @app.post("/products/deduplicate")
 async def deduplicate_naver(background_tasks: BackgroundTasks):
     """스마트스토어 중복 상품 삭제 — 같은 code/name 중 최신 1개만 유지 (백그라운드)."""
