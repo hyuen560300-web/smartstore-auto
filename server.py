@@ -774,92 +774,108 @@ async def similar_products_result():
 
 
 @app.post("/products/activate-sale-wait")
-async def activate_sale_wait_products():
-    """판매대기(SALE_WAIT) 상품 전체를 판매중(SALE)으로 변경 — 동기 실행.
-
-    검색 API는 SALE_WAIT 필터 미지원 → 전체 상품 조회 후 statusType 필터링.
+async def activate_sale_wait_products(background_tasks: BackgroundTasks):
+    """판매대기(SALE_WAIT) 상품 전체를 판매중(SALE)으로 변경 — 백그라운드 실행.
+    결과는 context_store[smartstore.activate_result]에 저장.
     """
-    import asyncio as _ai
-    from datetime import datetime, timezone
+    async def _run():
+        import asyncio as _ai
+        from datetime import datetime, timezone
 
-    headers = await naver_api._headers()
-    changed, failed = [], []
-    scanned = 0
+        headers = await naver_api._headers()
+        changed, failed = [], []
+        scanned = 0
 
-    async with httpx.AsyncClient(timeout=30) as c:
-        page = 1
-        while True:
-            now = datetime.now(timezone.utc)
-            # productStatusTypes 생략 → 전체 상태(SALE_WAIT 포함) 조회
-            r = await c.post(
-                f"{NAVER_BASE}/v1/products/search",
-                headers=headers,
-                json={
-                    "page": page,
-                    "size": 100,
-                    "orderType": "NO",
-                    "periodType": "PROD_REG_DAY",
-                    "fromDate": "2020-01-01",
-                    "toDate": now.strftime("%Y-%m-%d"),
-                },
-            )
-            if not r.is_success:
-                return JSONResponse({"error": f"상품 조회 실패: {r.status_code} {r.text[:200]}"}, status_code=500)
+        async with httpx.AsyncClient(timeout=30) as c:
+            page = 1
+            while True:
+                now = datetime.now(timezone.utc)
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=headers,
+                    json={
+                        "page": page,
+                        "size": 100,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": "2020-01-01",
+                        "toDate": now.strftime("%Y-%m-%d"),
+                    },
+                )
+                if not r.is_success:
+                    print(f"[ACTIVATE] 조회 실패 p{page}: {r.status_code} {r.text[:100]}", flush=True)
+                    break
 
-            contents = r.json().get("contents", [])
-            scanned += len(contents)
+                contents = r.json().get("contents", [])
+                scanned += len(contents)
+                print(f"[ACTIVATE] 페이지 {page} — {len(contents)}개 스캔 중 (누적 {scanned})", flush=True)
 
-            for item in contents:
-                prod_no = str(item.get("originProductNo", ""))
-                if not prod_no:
-                    continue
+                for item in contents:
+                    prod_no = str(item.get("originProductNo", ""))
+                    if not prod_no:
+                        continue
 
-                # 검색 결과에 statusType이 있으면 바로 사용, 없으면 상세 조회
-                status = item.get("statusType", "")
-                name = item.get("name", "")[:40]
-                if not status:
-                    dr = await c.get(
+                    # 검색 결과 statusType 우선, 없으면 상세 조회
+                    status = item.get("statusType", "")
+                    name = item.get("name", "")[:40]
+                    if not status:
+                        dr = await c.get(
+                            f"{NAVER_BASE}/v2/products/origin-products/{prod_no}",
+                            headers=headers, timeout=15,
+                        )
+                        if dr.is_success:
+                            origin = dr.json().get("originProduct", {})
+                            status = origin.get("statusType", "")
+                            name = origin.get("name", name)[:40]
+
+                    if status != "SALE_WAIT":
+                        continue
+
+                    print(f"[ACTIVATE] 판매대기 발견: {prod_no} {name}", flush=True)
+                    upd = await c.put(
                         f"{NAVER_BASE}/v2/products/origin-products/{prod_no}",
                         headers=headers,
+                        json={"originProduct": {"statusType": "SALE"}},
                         timeout=15,
                     )
-                    if dr.is_success:
-                        origin = dr.json().get("originProduct", {})
-                        status = origin.get("statusType", "")
-                        name = origin.get("name", name)[:40]
+                    if upd.status_code == 200:
+                        changed.append({"id": prod_no, "name": name})
+                        print(f"[ACTIVATE] ✅ {prod_no} {name}", flush=True)
+                    else:
+                        failed.append({"id": prod_no, "name": name, "error": upd.text[:100]})
+                        print(f"[ACTIVATE] ❌ {prod_no} {name} → {upd.status_code}", flush=True)
+                    await _ai.sleep(0.5)
 
-                if status != "SALE_WAIT":
-                    continue  # SALE_WAIT 아니면 건너뜀
+                if len(contents) < 100:
+                    break
+                page += 1
+                await _ai.sleep(0.3)
 
-                print(f"[ACTIVATE] 발견: {prod_no} [{status}] {name}", flush=True)
-                # SALE_WAIT → SALE 변경
-                upd = await c.put(
-                    f"{NAVER_BASE}/v2/products/origin-products/{prod_no}",
-                    headers=headers,
-                    json={"originProduct": {"statusType": "SALE"}},
-                    timeout=15,
-                )
-                if upd.status_code == 200:
-                    changed.append({"id": prod_no, "name": name})
-                    print(f"[ACTIVATE] ✅ {prod_no} {name}", flush=True)
-                else:
-                    failed.append({"id": prod_no, "name": name, "error": upd.text[:100]})
-                    print(f"[ACTIVATE] ❌ {prod_no} {name} → {upd.status_code} {upd.text[:80]}", flush=True)
-                await _ai.sleep(0.5)
+        result = {
+            "scanned": scanned,
+            "sale_wait_found": len(changed) + len(failed),
+            "changed": len(changed),
+            "failed": len(failed),
+            "changed_list": changed,
+            "failed_list": failed,
+            "done": True,
+        }
+        from main import _ctx_set as _mcs
+        _mcs("smartstore.activate_result", result)
+        print(f"[ACTIVATE] 완료 — 스캔 {scanned}개 / 판매대기 {len(changed)+len(failed)}개 / 전환 {len(changed)}개", flush=True)
 
-            if len(contents) < 100:
-                break
-            page += 1
-            await _ai.sleep(0.3)
+    background_tasks.add_task(_run)
+    return JSONResponse({"status": "started", "message": "백그라운드 실행 중 — /products/activate-sale-wait/result 로 결과 확인"})
 
-    return JSONResponse({
-        "scanned": scanned,
-        "sale_wait_found": len(changed) + len(failed),
-        "changed": len(changed),
-        "failed": len(failed),
-        "changed_list": changed,
-        "failed_list": failed,
-    })
+
+@app.get("/products/activate-sale-wait/result")
+async def activate_sale_wait_result():
+    """activate-sale-wait 백그라운드 작업 결과 조회."""
+    from main import _ctx_get as _mcg
+    data = _mcg("smartstore.activate_result")
+    if not data:
+        return JSONResponse({"status": "not_started_or_running", "message": "아직 실행 중이거나 시작 안 됨"})
+    return JSONResponse(data)
 
 
 @app.post("/products/deduplicate")
