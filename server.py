@@ -775,22 +775,26 @@ async def similar_products_result():
 
 @app.post("/products/activate-sale-wait")
 async def activate_sale_wait_products():
-    """판매대기(SALE_WAIT) 상품 전체를 판매중(SALE)으로 변경 — 동기 실행."""
+    """판매대기(SALE_WAIT) 상품 전체를 판매중(SALE)으로 변경 — 동기 실행.
+
+    검색 API는 SALE_WAIT 필터 미지원 → 전체 상품 조회 후 statusType 필터링.
+    """
     import asyncio as _ai
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
 
     headers = await naver_api._headers()
-    changed, failed, total = [], [], 0
+    changed, failed = [], []
+    scanned = 0
 
     async with httpx.AsyncClient(timeout=30) as c:
         page = 1
         while True:
             now = datetime.now(timezone.utc)
+            # productStatusTypes 생략 → 전체 상태(SALE_WAIT 포함) 조회
             r = await c.post(
                 f"{NAVER_BASE}/v1/products/search",
                 headers=headers,
                 json={
-                    "productStatusTypes": ["SALE_WAIT"],
                     "page": page,
                     "size": 100,
                     "orderType": "NO",
@@ -801,16 +805,34 @@ async def activate_sale_wait_products():
             )
             if not r.is_success:
                 return JSONResponse({"error": f"상품 조회 실패: {r.status_code} {r.text[:200]}"}, status_code=500)
-            data = r.json()
-            contents = data.get("contents", [])
-            total += len(contents)
+
+            contents = r.json().get("contents", [])
+            scanned += len(contents)
 
             for item in contents:
                 prod_no = str(item.get("originProductNo", ""))
-                name = item.get("name", "")[:40]
                 if not prod_no:
                     continue
-                # 상태 변경: SALE_WAIT → SALE
+
+                # 검색 결과에 statusType이 있으면 바로 사용, 없으면 상세 조회
+                status = item.get("statusType", "")
+                name = item.get("name", "")[:40]
+                if not status:
+                    dr = await c.get(
+                        f"{NAVER_BASE}/v2/products/origin-products/{prod_no}",
+                        headers=headers,
+                        timeout=15,
+                    )
+                    if dr.is_success:
+                        origin = dr.json().get("originProduct", {})
+                        status = origin.get("statusType", "")
+                        name = origin.get("name", name)[:40]
+
+                if status != "SALE_WAIT":
+                    continue  # SALE_WAIT 아니면 건너뜀
+
+                print(f"[ACTIVATE] 발견: {prod_no} [{status}] {name}", flush=True)
+                # SALE_WAIT → SALE 변경
                 upd = await c.put(
                     f"{NAVER_BASE}/v2/products/origin-products/{prod_no}",
                     headers=headers,
@@ -828,9 +850,11 @@ async def activate_sale_wait_products():
             if len(contents) < 100:
                 break
             page += 1
+            await _ai.sleep(0.3)
 
     return JSONResponse({
-        "total_sale_wait": total,
+        "scanned": scanned,
+        "sale_wait_found": len(changed) + len(failed),
         "changed": len(changed),
         "failed": len(failed),
         "changed_list": changed,
