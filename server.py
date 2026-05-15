@@ -2712,7 +2712,7 @@ async def _run_update_product_info_ss():
     dg_cache: dict[str, dict] = {}
 
     try:
-        _tg_ss("🔄 <b>[스마트스토어] 제조사/브랜드/원산지 업데이트 시작</b>")
+        print("[UPDATE-INFO-SS] 제조사/브랜드/원산지 업데이트 시작", flush=True)
         # 1. 전체 Naver 상품 페이지네이션
         page = 1
         while True:
@@ -2812,13 +2812,6 @@ async def _run_update_product_info_ss():
     finally:
         _update_info_ss_running = False
 
-    _tg_ss(
-        f"✅ <b>[스마트스토어+쇼피파이] 제조사/원산지 업데이트 완료</b>\n"
-        f"<b>스마트스토어</b>\n"
-        f"• 성공: {ss_updated}개 / 실패: {ss_failed}개 / 스킵: {ss_skipped}개\n"
-        f"<b>쇼피파이</b>\n"
-        f"• vendor 업데이트: {sh_updated}개 / 실패: {sh_failed}개"
-    )
     print(f"[UPDATE-INFO-SS] 완료 SS={ss_updated}/{ss_failed}, SH={sh_updated}/{sh_failed}", flush=True)
 
 
@@ -2906,7 +2899,10 @@ async def startup_event():
 
     async def job_process_orders():
         print("[SCHED] 주문 처리", flush=True)
-        await pipeline_process_orders()
+        result = await pipeline_process_orders()
+        count = result.get("count", 0)
+        if count > 0:
+            _tg_ss(f"🛒 <b>[스마트스토어] 신규 주문 {count}건</b>")
 
     async def job_error_audit():
         print("[SCHED] 에러 감사원", flush=True)
