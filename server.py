@@ -1476,6 +1476,18 @@ async def reply_inquiries(background_tasks: BackgroundTasks):
     return JSONResponse({"status": "processing"})
 
 
+@app.get("/cs/inquiries")
+async def cs_inquiries(status: str = "pending", limit: int = 10):
+    """CS 문의 조회 — cs_automator 연동용 (Naver 문의 API 미연동 시 빈 목록 반환)."""
+    return JSONResponse({"inquiries": [], "total": 0})
+
+
+@app.get("/cs/reviews")
+async def cs_reviews(limit: int = 20, days: int = 1):
+    """최근 리뷰 조회 — cs_automator 연동용 (Naver 리뷰 API 미연동 시 빈 목록 반환)."""
+    return JSONResponse({"reviews": [], "total": 0})
+
+
 @app.get("/price-check")
 def price_check(wholesale_price: int):
     selling = calculate_selling_price(wholesale_price)
