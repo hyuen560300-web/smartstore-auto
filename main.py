@@ -2285,21 +2285,26 @@ async def _is_text_heavy_image(image_url: str) -> bool:
 async def _check_image_quality(image_url: str) -> tuple[bool, str, int, int]:
     """
     이미지 품질 체크 — (사용가능여부, 사유, 가로, 세로)
-    사유: "ok" | "too_small" | "text_heavy" | "error"
+    사유: "ok" | "too_small" | "text_heavy" | "blurry" | "error"
     """
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
             r = await c.get(_extract_hq_url(image_url))
             r.raise_for_status()
-        from PIL import Image
+        from PIL import Image, ImageFilter, ImageStat
         img = Image.open(_io.BytesIO(r.content))
         w, h = img.size
         if h > w * 2.5:
             return False, "text_heavy", w, h
-        if min(w, h) < 300:     # 300px 미만만 거부 (너무 작은 것만)
+        if min(w, h) < 300:
             return False, "too_small", w, h
+        # Laplacian 근사 blur 체크 (PIL만 사용)
+        edges = img.convert("L").filter(ImageFilter.FIND_EDGES)
+        sharpness = ImageStat.Stat(edges).stddev[0]
+        if sharpness < 8.0:
+            return False, "blurry", w, h
         return True, "ok", w, h
-    except Exception as e:
+    except Exception:
         return True, "error", 0, 0  # 체크 실패 시 원본 그대로 사용
 
 
@@ -2323,6 +2328,9 @@ async def get_product_image(p: dict) -> str | None:
     # ── 1. 오너클랜 원본 → 업스케일 → 직원19 하이브리드 배너 → QC 95점+ ──────────
     if image_url.startswith("http"):
         ok, reason, w, h = await _check_image_quality(image_url)
+        if reason == "blurry":
+            print(f"[IMAGE] ⛔ 흐린 이미지 — AI 대체 없이 상품 스킵: {product_name[:20]}", flush=True)
+            return None
         if ok:
             print(f"[IMAGE] 업스케일 시도: {product_name[:20]} ({w}×{h})", flush=True)
             upscaled = await upscale_image(image_url)
