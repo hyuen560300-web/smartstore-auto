@@ -163,12 +163,25 @@ NAVER_DATALAB_CLIENT_SECRET = os.environ.get("NAVER_DATALAB_CLIENT_SECRET", "")
 DOMEGGOOK_API_URL  = "https://domeggook.com/ssl/api/"
 DOMEGGOOK_IMG_BASE = "https://img.domeggook.com/"
 # 기본 검색 키워드 — DOMEGGOOK_KEYWORDS 환경변수로 덮어쓰기 가능
-_DG_KEYWORDS: list[str] = [
+_DG_KEYWORDS_ALL: list[str] = [
     kw.strip() for kw in os.environ.get(
         "DOMEGGOOK_KEYWORDS",
-        "생활용품,주방용품,뷰티,건강,패션잡화,스포츠,유아용품,반려동물,디지털,청소"
+        (
+            "생활용품,주방용품,뷰티,건강,패션잡화,스포츠,유아용품,반려동물,디지털,청소,"
+            "인테리어,수납정리,침구,욕실용품,화장품,다이어트,헤어케어,네일,향수,문구,"
+            "캠핑,등산,골프,자전거,요가,홈트레이닝,원예,공구,자동차용품,여행용품"
+        )
     ).split(",") if kw.strip()
 ]
+
+def _get_rotating_keywords(n: int = 10) -> list[str]:
+    """날짜 시드 기반으로 매일 다른 키워드 n개 선택."""
+    import random as _r, datetime as _dt
+    seed = int(_dt.date.today().strftime("%Y%m%d"))
+    rng = _r.Random(seed)
+    return rng.sample(_DG_KEYWORDS_ALL, min(n, len(_DG_KEYWORDS_ALL)))
+
+_DG_KEYWORDS = _get_rotating_keywords(10)
 
 NAVER_BASE = "https://api.commerce.naver.com/external"
 
