@@ -2541,8 +2541,8 @@ async def debug_product(product_no: str):
 
 @app.post("/scan-suspended-products")
 async def scan_suspended_products():
-    """SUSPENSION(판매중지) 상품 목록 조회 + 판매 재개 가능 상품 파악.
-    Returns: total_suspension, items (id, name, price)"""
+    """SUSPENSION(판매중지) + PROHIBITION(판매금지) 상품 목록 조회.
+    Returns: total_suspension, items (id, name, price, status)"""
     import httpx as _httpx
     try:
         now = datetime.now(timezone.utc)
@@ -2556,7 +2556,7 @@ async def scan_suspended_products():
                     f"{NAVER_BASE}/v1/products/search",
                     headers=headers,
                     json={
-                        "productStatusTypes": ["SUSPENSION"],
+                        "productStatusTypes": ["SUSPENSION", "PROHIBITION"],
                         "page": page,
                         "size": 50,
                         "orderType": "NO",
@@ -2588,7 +2588,7 @@ async def scan_suspended_products():
                         "id": pno,
                         "name": origin.get("name", ""),
                         "price": origin.get("salePrice", 0),
-                        "status": origin.get("statusType", "SUSPENSION"),
+                        "status": origin.get("statusType", prod.get("statusType", "SUSPENSION")),
                     })
                 if len(contents) < 50:
                     break
