@@ -83,7 +83,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "smartstore_auto", "version": "4.2"}
+    return {"status": "ok", "service": "smartstore_auto", "version": "4.3"}
 
 
 async def _run_seo_title_refresh(limit: int = 30) -> dict:
