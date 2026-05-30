@@ -2418,17 +2418,28 @@ async def _run_cleanup_empty_background():
             if not origin:
                 origin = await _get_origin(product_id)
                 if origin is None:
-                    deleted.append(product_id)
+                    # 404: origin 자체가 없으면 채널 상품도 삭제
+                    ok = await naver_api.delete_product(product_id)
+                    if ok:
+                        deleted.append(product_id)
+                    else:
+                        errors.append(product_id)
                     _empty_cleanup_state["deleted"] = len(deleted)
+                    _empty_cleanup_state["errors"] = len(errors)
                     continue
                 if not origin:
                     await asyncio.sleep(1.0)
                     origin = await _get_origin(product_id)
-                    if origin is None:
-                        deleted.append(product_id)
+                    if origin is None or not origin:
+                        # 2회 시도 후도 빈 origin → 유령 상품 삭제
+                        print(f"[CLEANUP-EMPTY] 빈 origin 삭제: {product_id}", flush=True)
+                        ok = await naver_api.delete_product(product_id)
+                        if ok:
+                            deleted.append(product_id)
+                        else:
+                            errors.append(product_id)
                         _empty_cleanup_state["deleted"] = len(deleted)
-                        continue
-                    if not origin:
+                        _empty_cleanup_state["errors"] = len(errors)
                         continue
             name = origin.get("name", "").strip() if origin else ""
             price = int(origin.get("salePrice", 0)) if origin else 0
