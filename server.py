@@ -2536,6 +2536,31 @@ async def scan_all_products(days: int = 365, check_garbled: bool = True):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.get("/sample-products")
+async def sample_products(page: int = 1, size: int = 20):
+    """상품 샘플 조회 — 이름·가격·상태 요약 (진단용)"""
+    try:
+        resp = await naver_api.list_products(page=page, size=size)
+        contents = resp.get("contents", [])
+        items = []
+        for p in contents:
+            origin = p.get("originProduct", {})
+            name = (origin.get("name") or "").strip()
+            price = origin.get("salePrice", 0) or 0
+            status = origin.get("statusType", "")
+            items.append({
+                "id": str(p.get("originProductNo", "")),
+                "name": name[:50],
+                "price": price,
+                "status": status,
+                "name_len": len(name),
+            })
+        bad = [x for x in items if not x["name"] or len(x["name"]) < 3 or x["price"] <= 0]
+        return JSONResponse({"total_on_page": len(items), "bad_count": len(bad), "items": items, "bad": bad})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/debug-product/{product_no}")
 async def debug_product(product_no: str):
     """특정 상품의 originProduct 원본 JSON 반환 — sellerCodeInfo 위치 확인용"""
