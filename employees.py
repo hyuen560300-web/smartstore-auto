@@ -51,8 +51,15 @@ async def employee_sourcing_manager(products: list, limit: int, anthropic_key: s
         system=[{"type": "text", "text": "당신은 이커머스 상품 소싱 전문가입니다. 반드시 JSON 배열만 출력하세요.", "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": f"""
 스마트스토어에서 잘 팔릴 상품 {limit}개의 idx를 골라주세요.
-기준: 트렌디함, 합리적 가격대, 검색 수요 높은 카테고리
-JSON 배열만 출력: [0, 3, 7, ...]
+
+[필수 선별 기준 — 반드시 준수]
+1. 상품명(name)이 비어있거나 1글자 이하인 상품은 절대 선택 금지
+2. 가격(price)이 0 이하인 상품은 절대 선택 금지
+3. 아래 리스트는 이미 이미지·가격 필터를 통과한 상품들임
+4. 트렌디함, 합리적 가격대, 검색 수요 높은 카테고리 우선 선택
+5. 상품명이 의미없는 코드/번호로만 이루어진 것 제외
+
+JSON 배열만 출력 (설명 없이): [0, 3, 7, ...]
 
 {json.dumps(product_list, ensure_ascii=False)}
 """}]

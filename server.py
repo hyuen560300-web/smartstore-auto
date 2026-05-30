@@ -508,13 +508,17 @@ async def myip():
 async def register_pod_product(request: Request):
     """Printful POD 상품 스마트스토어 자동 등록 (shopify-trendify에서 호출)."""
     data = await request.json()
-    name: str = data.get("name", "Trending T-Shirt")
+    name: str = str(data.get("name", "")).strip()
     image_url: str = data.get("image_url", "")
-    price_krw: int = round(int(data.get("price_krw", 34900)) / 10) * 10  # Naver API 10원 단위
+    price_krw: int = round(int(data.get("price_krw", 0)) / 10) * 10  # Naver API 10원 단위
     theme: str = data.get("theme", "")
 
-    if not image_url:
-        return JSONResponse({"status": "error", "error": "image_url required"}, status_code=400)
+    if not name:
+        return JSONResponse({"status": "error", "error": "name 필수"}, status_code=400)
+    if price_krw <= 0:
+        return JSONResponse({"status": "error", "error": "price_krw > 0 필수"}, status_code=400)
+    if not image_url or not image_url.startswith("http"):
+        return JSONResponse({"status": "error", "error": "image_url(http) 필수"}, status_code=400)
 
     try:
         # 이미지 네이버 CDN 업로드
