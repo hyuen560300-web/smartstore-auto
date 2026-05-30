@@ -1121,8 +1121,7 @@ def build_product_payload(
             "statusType": "SALE",
             "saleType": "NEW",
             "leafCategoryId": get_category_id(raw, hot_trends),
-            "name": (clean_product_name(ai.get("product_name") or ai.get("name") or str(raw.get("name", "")))
-                     or str(raw.get("name", "상품"))[:25]),
+            "name": (clean_product_name(ai.get("product_name") or ai.get("name") or str(raw.get("name", "")))),
             "detailContent": ai.get("description", ai.get("emotional_copy", "")),
             "images": {
                 "representativeImage": {"url": str(raw.get("image", ""))},
@@ -2599,7 +2598,14 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
             price = price_result["suggested_price"]
             print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
 
-            # ⑦ 이미지 디렉터: 메인 이미지
+            # ⑦ 등록 전 필수 데이터 검증 (name + price 없으면 절대 등록 금지)
+            final_name = (ai.get("product_name") or "").strip() or str(p.get("name", "")).strip()
+            if not final_name or price <= 0:
+                print(f"[검증] SKIP — 상품명/가격 없음: name={final_name!r} price={price}", flush=True)
+                results["skip"] += 1
+                continue
+
+            # ⑧ 이미지 디렉터: 메인 이미지
             _cat = str(p.get("category", ""))
             naver_img_url = await get_product_image(p)
             if not naver_img_url:
