@@ -2361,12 +2361,27 @@ async def cleanup_empty_products_status():
 
 async def _run_cleanup_empty_background():
     import httpx as _httpx
+    import re as _re
     from main import NAVER_BASE as _NAVER_BASE
     global _empty_cleanup_state
     _KST = timezone(timedelta(hours=9))
     _empty_cleanup_state = {"running": True, "deleted": 0, "errors": 0, "done": False, "started_at": datetime.now(_KST).isoformat()}
     deleted: list[str] = []
     errors: list[str] = []
+
+    def _is_bad_product(name: str, price: int) -> bool:
+        """삭제 대상: 빈 이름, 너무 짧은 이름, garbled 이름, 0원 상품"""
+        if not name or len(name) < 3:
+            return True
+        if price <= 0:
+            return True
+        # 의미없는 코드성 이름 (긴 대문자 영어만 있는 경우)
+        if _re.search(r'^[A-Z0-9\-_]{5,}$', name):
+            return True
+        # 상품명이 영어 대문자 4글자 이상 연속 (한국어 상품에 부적절)
+        if _re.search(r'[A-Z]{5,}', name) and not _re.search(r'[가-힣]', name):
+            return True
+        return False
 
     async def _get_origin(product_id: str):
         try:
@@ -2398,35 +2413,38 @@ async def _run_cleanup_empty_background():
             product_id = str(prod.get("originProductNo", ""))
             if not product_id:
                 continue
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             origin = prod.get("originProduct", {})
             if not origin:
                 origin = await _get_origin(product_id)
                 if origin is None:
                     deleted.append(product_id)
+                    _empty_cleanup_state["deleted"] = len(deleted)
                     continue
                 if not origin:
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(1.0)
                     origin = await _get_origin(product_id)
                     if origin is None:
                         deleted.append(product_id)
+                        _empty_cleanup_state["deleted"] = len(deleted)
                         continue
                     if not origin:
                         continue
             name = origin.get("name", "").strip() if origin else ""
             price = int(origin.get("salePrice", 0)) if origin else 0
-            if not name and price == 0:
+            if _is_bad_product(name, price):
+                print(f"[CLEANUP-EMPTY] 삭제 대상: {product_id} name={name!r} price={price}", flush=True)
                 ok = await naver_api.delete_product(product_id)
                 if ok:
                     deleted.append(product_id)
                 else:
                     errors.append(product_id)
-        _empty_cleanup_state["deleted"] = len(deleted)
-        _empty_cleanup_state["errors"] = len(errors)
+                _empty_cleanup_state["deleted"] = len(deleted)
+                _empty_cleanup_state["errors"] = len(errors)
         if len(contents) < 50:
             break
         page += 1
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
 
     _empty_cleanup_state.update({"running": False, "done": True, "deleted": len(deleted), "errors": len(errors)})
     print(f"[CLEANUP-EMPTY] 완료 — 삭제:{len(deleted)}, 실패:{len(errors)}", flush=True)
