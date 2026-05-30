@@ -32,6 +32,7 @@ def _dalle_hybrid_allowed() -> bool:
 async def employee_sourcing_manager(products: list, limit: int, anthropic_key: str) -> list:
     """Excel 상품 중 잘 팔릴 상품 선별"""
     filtered = [p for p in products if (
+        str(p.get("name", "")).strip() and
         str(p.get("image", "")).startswith("http") and
         p.get("price", 0) > 0
     )]

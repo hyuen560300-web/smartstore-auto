@@ -818,7 +818,9 @@ async def fetch_domeggook_products(
         if p:
             products.append(p)
 
-    print(f"[DOMEGGOOK] 변환 완료: {len(products)}개", flush=True)
+    # 소싱 단계 필수 데이터 검증: name + price + image 없으면 제외
+    products = [p for p in products if p.get("name","").strip() and p.get("price",0) > 0 and str(p.get("image","")).startswith("http")]
+    print(f"[DOMEGGOOK] 변환 완료: {len(products)}개 (name+price+image 검증 통과)", flush=True)
     return products
 
 
@@ -893,7 +895,7 @@ def parse_excel(filepath):
             continue
         price = _to_int(item.get("price")) or _to_int(item.get("market_price"))
         item["price"] = price
-        if price > 0:
+        if price > 0 and str(item.get("image", "")).startswith("http"):
             products.append(item)
 
     return products
