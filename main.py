@@ -3469,7 +3469,6 @@ _GEO_MARKER = "geo-summary"
 
 async def update_existing_products_seo(limit: int = 100, skip_has_geo: bool = True) -> dict:
     """스마트스토어 기존 상품에 GEO FAQ·HS코드·통관정보 일괄 업데이트."""
-    api = NaverAPI()
     results = {"updated": 0, "skipped": 0, "failed": 0, "total": 0}
     print(f"[SEO-UPDATE] 스마트스토어 최대 {limit}개 업데이트 시작", flush=True)
 
@@ -3477,7 +3476,7 @@ async def update_existing_products_seo(limit: int = 100, skip_has_geo: bool = Tr
     all_items: list[dict] = []
     page = 1
     while len(all_items) < limit:
-        resp = await api.list_products(page=page, size=50, days=3650)
+        resp = await naver_api.list_products(page=page, size=50, days=3650)
         contents = resp.get("contents", [])
         if not contents:
             break
@@ -3541,7 +3540,7 @@ async def update_existing_products_seo(limit: int = 100, skip_has_geo: bool = Tr
                 detail_attr["searchTagInfo"] = search_tag_info
                 updated_origin["detailAttribute"] = detail_attr
 
-            ok, err = await api.update_product(product_no, updated_origin)
+            ok, err = await naver_api.update_product(product_no, updated_origin)
             if ok:
                 results["updated"] += 1
                 print(f"  ✓ [{product_no}] {stub['name'][:30]}", flush=True)
