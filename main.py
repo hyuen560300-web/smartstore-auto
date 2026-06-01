@@ -167,21 +167,38 @@ _DG_KEYWORDS_ALL: list[str] = [
     kw.strip() for kw in os.environ.get(
         "DOMEGGOOK_KEYWORDS",
         (
-            "생활용품,주방용품,뷰티,건강,패션잡화,스포츠,유아용품,반려동물,디지털,청소,"
-            "인테리어,수납정리,침구,욕실용품,화장품,다이어트,헤어케어,네일,향수,문구,"
-            "캠핑,등산,골프,자전거,요가,홈트레이닝,원예,공구,자동차용품,여행용품"
+            # 생활/주방
+            "생활용품,주방용품,청소용품,수납정리,침구,욕실용품,인테리어소품,커튼,러그,조명,"
+            # 뷰티/건강
+            "화장품,스킨케어,헤어케어,네일,향수,다이어트,건강식품,영양제,마스크팩,선크림,"
+            # 패션
+            "패션잡화,여성의류,남성의류,가방,지갑,벨트,모자,양말,속옷,신발,"
+            # 스포츠/아웃도어
+            "스포츠용품,캠핑,등산,골프,자전거,요가매트,홈트레이닝,낚시,수영,런닝,"
+            # 유아/반려
+            "유아용품,출산용품,아동의류,장난감,반려동물,강아지용품,고양이용품,애완용품,"
+            # 디지털/전자
+            "디지털기기,스마트폰악세사리,이어폰,충전기,케이블,블루투스,노트북,태블릿,"
+            # 자동차/공구
+            "자동차용품,차량방향제,공구,DIY,원예,텃밭,씨앗,비료,"
+            # 여행/취미
+            "여행용품,캐리어,여권지갑,독서,문구,사무용품,취미,만들기,"
+            # 식품/음료
+            "간식,건과류,음료,커피,차,조미료,반찬,건강음료,"
+            # 계절/특수
+            "여름용품,수영복,래쉬가드,겨울용품,방한용품,핫팩,선풍기,에어컨커버"
         )
     ).split(",") if kw.strip()
 ]
 
-def _get_rotating_keywords(n: int = 10) -> list[str]:
+def _get_rotating_keywords(n: int = 15) -> list[str]:
     """날짜 시드 기반으로 매일 다른 키워드 n개 선택."""
     import random as _r, datetime as _dt
     seed = int(_dt.date.today().strftime("%Y%m%d"))
     rng = _r.Random(seed)
     return rng.sample(_DG_KEYWORDS_ALL, min(n, len(_DG_KEYWORDS_ALL)))
 
-_DG_KEYWORDS = _get_rotating_keywords(10)
+_DG_KEYWORDS = _get_rotating_keywords(15)
 
 NAVER_BASE = "https://api.commerce.naver.com/external"
 
@@ -1071,22 +1088,26 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
 
     resp = await client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=2000,
+        max_tokens=3000,
         system=[{
             "type": "text",
             "text": (
-                "당신은 10년차 네이버 스마트스토어 마케팅 전문가입니다. "
+                "당신은 네이버·카페24·Shopify 멀티플랫폼 이커머스 마케팅 전문가입니다. "
                 "상품명 규칙: ① naver_keywords가 제공된 경우 해당 키워드를 상품명 앞부분에 배치 "
-                "② [브랜드명]+[핵심키워드]+[속성/규격] 25자 내외 "
+                "② [핵심키워드]+[속성/규격] 25자 내외 "
                 "③ 특수문자([],(),/,*), 관리번호, 동일단어 중복 절대 금지 "
                 "④ 최고·제일·1등·공짜·무료·특가 등 네이버 금지어 사용 금지. "
+                "SEO: 네이버/구글 검색 노출용 키워드 자연스럽게 포함. "
+                "GEO(생성형AI 검색 최적화): ChatGPT·Perplexity·Google AI Overview에서 "
+                "이 상품이 추천되도록 '질문-답변' 구조의 자연어 설명 작성. "
+                "HS코드: 실제 관세청 기준 6자리 HS코드 추정 (틀리면 0000.00). "
                 "반드시 JSON만 출력하세요."
             ),
             "cache_control": {"type": "ephemeral"}
         }],
         messages=[{
             "role": "user",
-            "content": f"""아래 상품을 스마트스토어 SEO 최적화 형식으로 변환하세요.
+            "content": f"""아래 상품을 멀티플랫폼(스마트스토어·카페24·Shopify) SEO/GEO 최적화 형식으로 변환하세요.
 {extra_context}
 
 상품 정보:
@@ -1094,18 +1115,29 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
 
 출력 형식 (JSON만):
 {{
-  "product_name": "브랜드+핵심키워드+속성/규격, 25자 내외, 모델번호/특수문자/중복단어/금지어 없이 자연스러운 한국어",
-  "headline": "Pillow 배너용 핵심 편익 (예: '한 번으로 3배 오래!'), 18자 이내, 숫자 필수",
-  "sub_headline": "배너 서브 문구 (예: '교체 빈도 줄이고 비용 절약'), 28자 이내",
-  "emotional_copy": "감성 설득 문구 2~3문장. 구매자의 일상과 연결되는 따뜻하고 공감가는 문장으로 작성. 100자 내외.",
+  "product_name": "핵심키워드+속성/규격, 25자 내외, 특수문자/중복단어/금지어 없이 자연스러운 한국어",
+  "headline": "배너용 핵심 편익 (예: '한 번으로 3배 오래!'), 18자 이내, 숫자 필수",
+  "sub_headline": "배너 서브 문구 28자 이내",
+  "emotional_copy": "감성 설득 문구 2~3문장. 구매자 일상과 연결, 100자 내외.",
   "recommend_list": ["이런 분 추천 1 (20자 이내)", "이런 분 추천 2", "이런 분 추천 3", "이런 분 추천 4", "이런 분 추천 5"],
-  "reason_1": "사야 하는 이유 1 — Pain Point 해결 중심, 구체적 수치 포함 (40자 이내)",
+  "reason_1": "사야 하는 이유 1 — Pain Point 해결, 구체적 수치 포함 (40자 이내)",
   "reason_2": "사야 하는 이유 2 — 차별점/기술력 강조 (40자 이내)",
   "reason_3": "사야 하는 이유 3 — 시즌/트렌드/절약 연결 (40자 이내)",
   "spec_rows": [["항목","값"],["항목","값"],["항목","값"],["항목","값"],["항목","값"]],
-  "spec_hint": "디테일컷 DALL-E 프롬프트용 힌트 — 소재·기능·특징 영어 10단어 이내 (예: soft microfiber texture and adjustable buckle)",
+  "spec_hint": "DALL-E 프롬프트용 힌트 — 소재·기능·특징 영어 10단어 이내",
   "compare_points": ["타사 대비 차별점 1 (30자)", "차별점 2", "차별점 3"],
-  "tags": ["태그1","태그2","태그3","태그4","태그5"]
+  "tags": ["태그1","태그2","태그3","태그4","태그5"],
+  "seo_description": "네이버·구글 검색 노출용 200자 내외 상품 설명. 핵심 키워드 3~5개 자연스럽게 포함. 상품 특징·용도·소재·사이즈 중심.",
+  "geo_faq": [
+    {{"q": "이 상품은 어떤 분께 추천하나요?", "a": "30자 내외 자연어 답변"}},
+    {{"q": "소재/사이즈/용도 관련 자주 묻는 질문", "a": "30자 내외 답변"}},
+    {{"q": "배송·반품 관련 질문", "a": "30자 내외 답변"}}
+  ],
+  "hs_code": "관세청 기준 6자리 HS코드 (예: 392490, 610910). 불확실하면 000000",
+  "hs_code_desc": "HS코드 품목 설명 영문 (예: Household articles of plastics)",
+  "customs_product_name": "통관 시 품목명 영문 (예: Plastic storage container)",
+  "customs_material": "주요 소재 영문 (예: Polypropylene, Cotton, Stainless steel)",
+  "customs_origin": "원산지 추정 (China / Korea / Unknown 중 1개)"
 }}"""
         }]
     )
@@ -1139,6 +1171,17 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
             "compare_points": ["검증된 품질", "합리적 가격", "빠른 배송"],
             "tags": [name[:5], "추천", "특가", "당일발송", "품질보장"],
             "description": f"{name} 상품입니다.",
+            "seo_description": f"{name} 상품입니다. 합리적인 가격과 빠른 배송으로 만족스러운 쇼핑을 경험하세요.",
+            "geo_faq": [
+                {"q": "이 상품은 어떤 분께 추천하나요?", "a": f"{name}이 필요하신 분께 추천합니다."},
+                {"q": "배송은 얼마나 걸리나요?", "a": "주문 후 1~3일 이내 배송됩니다."},
+                {"q": "반품이 가능한가요?", "a": "수령 후 7일 이내 반품 가능합니다."},
+            ],
+            "hs_code": "000000",
+            "hs_code_desc": "General merchandise",
+            "customs_product_name": name,
+            "customs_material": "Unknown",
+            "customs_origin": "Unknown",
         }
 
 
