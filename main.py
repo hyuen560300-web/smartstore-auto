@@ -701,6 +701,106 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
 import re as _re_img
 
 
+# ─── 소싱 품질 필터 ──────────────────────────────────────────────────────────
+
+_FAKE_BRAND_NAMES = {
+    "나이키", "nike", "아디다스", "adidas", "구찌", "gucci",
+    "루이비통", "louis vuitton", "에르메스", "hermes", "샤넬", "chanel",
+    "롤렉스", "rolex", "버버리", "burberry", "발렌시아가", "balenciaga",
+    "프라다", "prada", "몽클레어", "moncler", "캐나다구스", "canada goose",
+    "무스너클", "오메가", "까르띠에", "cartier", "페라리", "포르쉐",
+    "애플정품", "삼성정품", "아이폰정품",
+}
+_FORBIDDEN_KEYWORDS = {
+    "성인용", "19금", "섹스", "콘돔", "처방전", "의약품", "마약",
+    "도박", "베팅", "복권당첨", "불법", "총기", "폭발물",
+}
+
+def _is_fake_product(p: dict) -> bool:
+    """가짜·위험 상품 판별. True 반환 시 소싱 제외."""
+    name  = (p.get("name") or "").lower()
+    price = int(p.get("price") or 0)
+    # 금지 키워드
+    for kw in _FORBIDDEN_KEYWORDS:
+        if kw.lower() in name:
+            return True
+    # 위조 브랜드 + 비정상 저가 (정품 불가 가격대)
+    for brand in _FAKE_BRAND_NAMES:
+        if brand.lower() in name and price < 50_000:
+            return True
+    # 비정상 가격
+    if price < 1_000:
+        return True
+    return False
+
+
+async def _check_image_sharpness(url: str) -> float:
+    """이미지 URL → Laplacian variance (선명도 지수). 실패·조회불가 시 -1 반환."""
+    try:
+        from PIL import Image, ImageFilter
+        import numpy as np
+        import io as _io
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200 or not r.content:
+            return -1
+        img = Image.open(_io.BytesIO(r.content)).convert("L")
+        # 최소 해상도 체크 (600x600 미만 → 즉시 저품질)
+        if img.width < 600 or img.height < 600:
+            return 0.0
+        arr = np.array(img.filter(ImageFilter.FIND_EDGES), dtype=float)
+        return float(np.var(arr))
+    except Exception:
+        return -1
+
+
+async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
+    """도매꾹 소싱 품질 3단계 필터: ① 가짜 상품 ② 이미지 없음 ③ 흐릿한 이미지"""
+    BLUR_THRESHOLD = 150  # Laplacian variance 150 미만 = 흐릿함
+
+    before = len(products)
+
+    # ① 가짜/위험 상품 (이미지 다운로드 없이 즉시 판별)
+    valid, fake_removed = [], 0
+    for p in products:
+        if _is_fake_product(p):
+            fake_removed += 1
+            print(f"[품질필터] ❌ 가짜/위험: {p.get('name','')[:40]}", flush=True)
+        else:
+            valid.append(p)
+    if fake_removed:
+        print(f"[품질필터] 가짜 제거 {fake_removed}개", flush=True)
+
+    # ② 이미지 선명도 병렬 체크 (5개씩)
+    async def _score(p: dict) -> tuple[dict, float]:
+        return p, await _check_image_sharpness(p.get("image", ""))
+
+    scored: list[tuple[dict, float]] = []
+    for i in range(0, len(valid), 5):
+        chunk_res = await asyncio.gather(*[_score(p) for p in valid[i:i+5]])
+        scored.extend(chunk_res)
+        if i + 5 < len(valid):
+            await asyncio.sleep(0.2)
+
+    passed, blur_removed = [], 0
+    for p, score in scored:
+        if score < 0:
+            blur_removed += 1
+            print(f"[품질필터] ❌ 이미지 없음/오류: {p.get('name','')[:40]}", flush=True)
+        elif score < BLUR_THRESHOLD:
+            blur_removed += 1
+            print(f"[품질필터] ❌ 흐릿한 이미지(score={score:.0f}): {p.get('name','')[:40]}", flush=True)
+        else:
+            passed.append(p)
+
+    if blur_removed:
+        print(f"[품질필터] 흐릿/없는 이미지 제거 {blur_removed}개", flush=True)
+
+    print(f"[품질필터] 최종 통과 {len(passed)}개 / 원본 {before}개 "
+          f"(가짜 -{fake_removed} / 이미지불량 -{blur_removed})", flush=True)
+    return passed
+
+
 async def _dg_content_to_naver_html(content_html: str) -> str:
     """도매꾹 상세 설명 HTML → 이미지 URL을 Naver 업로드 URL로 교체한 HTML.
     이미지가 없거나 전부 실패하면 빈 문자열 반환 (AI 폴백 사용)."""
@@ -821,6 +921,9 @@ async def fetch_domeggook_products(
     # 소싱 단계 필수 데이터 검증: name + price + image 없으면 제외
     products = [p for p in products if p.get("name","").strip() and p.get("price",0) > 0 and str(p.get("image","")).startswith("http")]
     print(f"[DOMEGGOOK] 변환 완료: {len(products)}개 (name+price+image 검증 통과)", flush=True)
+
+    # 품질 필터: 가짜 상품 + 흐릿한/없는 이미지 제거
+    products = await _dg_apply_quality_filter(products)
     return products
 
 
