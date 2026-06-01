@@ -1273,36 +1273,79 @@ async def create_banner_image(image_url: str, main_text: str, sub_text: str = ""
 
 
 # ─── 스마트스토어 상세페이지 HTML 빌더 ──────────────────────────────────────
-_IMG = 'style="max-width:100%;height:auto;display:block;margin:20px auto;"'
+# 이미지 CSS: 작은 원본 이미지를 강제로 늘리지 않도록 width:auto 우선
+_IMG = ('style="max-width:100%;width:auto;height:auto;display:block;'
+        'margin:20px auto;min-width:200px;"')
+_IMG_FIXED = ('style="width:860px;max-width:100%;height:auto;display:block;'
+              'margin:20px auto;"')  # 실제 860px 이상 이미지용
 _WRAP = ('style="max-width:860px;margin:0 auto;padding:0 16px 24px;'
          'font-family:\'나눔고딕\',Apple SD Gothic Neo,sans-serif;color:#333;"')
+
+
+def _build_seo_text_section(ai: dict, product_name: str) -> str:
+    """SEO/GEO 최적화 텍스트 섹션 — 네이버 검색 노출 + 지역 타깃 포함."""
+    tags = ai.get("tags", [])[:8]
+    name = ai.get("product_name", product_name or "상품")
+    emotional = ai.get("emotional_copy", "")
+    kw_str = " · ".join(tags) if tags else name
+
+    geo_keywords = [
+        "전국 빠른 배송", "서울 당일출고", "무료배송 가능",
+        "스마트스토어 공식판매", "정품 보장",
+    ]
+    geo_html = " &nbsp;|&nbsp; ".join(geo_keywords)
+
+    seo_block = (
+        f'<div style="background:#f8f9ff;border-radius:10px;padding:16px 20px;'
+        f'margin:16px 0;border-left:3px solid #1a73e8;">'
+        f'<p style="font-size:13px;color:#888;margin:0 0 6px;">🔍 검색 키워드</p>'
+        f'<p style="font-size:14px;color:#1a73e8;font-weight:600;margin:0;">'
+        f'{kw_str}</p>'
+        f'<p style="font-size:12px;color:#aaa;margin:8px 0 0;">{geo_html}</p>'
+        f'</div>'
+    )
+
+    intro_html = (
+        f'<div {_WRAP}>'
+        f'<h1 style="font-size:20px;color:#1a1a1a;margin:24px 0 10px;line-height:1.5;">'
+        f'{name}</h1>'
+        + (f'<p style="font-size:15px;line-height:1.9;color:#555;margin:0 0 16px;">'
+           f'{emotional}</p>' if emotional else "")
+        + seo_block
+        + f'</div>'
+    )
+    return intro_html
+
 
 def build_detail_html(
     banner_url: str,
     product_img_url: str,
     ai: dict,
     detail_img_url: str = "",
+    product_name: str = "",
 ) -> str:
     """
-    5-타입 스마트스토어 표준 상세페이지
-    ① 메인 인트로 (배너) — 훅
-    ② 실제 사용컷 (라이프스타일) + 감성 문구
-    ③ 이런 분께 추천 체크리스트
-    ④ 디테일/기능컷 + 스펙 테이블
-    ⑤ 비교/인증 + 배송/공지 고정
+    6-타입 스마트스토어 표준 상세페이지 (SEO/GEO 강화)
+    ① SEO/GEO 텍스트 인트로 — 검색 노출 최적화
+    ② 메인 배너 이미지
+    ③ 실제 사용컷 + 이 상품을 선택해야 하는 이유
+    ④ 이런 분께 추천 체크리스트
+    ⑤ 디테일/기능컷 + 스펙 테이블
+    ⑥ 비교/인증 + 배송/공지 고정
     """
-    # ① 메인 인트로 배너
+    # ① SEO/GEO 텍스트 인트로 (네이버 텍스트 인덱싱용 — 맨 앞)
+    sec0 = _build_seo_text_section(ai, product_name)
+
+    # ② 메인 인트로 배너 (이미지 강제 860px — 고화질 배너는 항상 full width)
     sec1 = (
-        f'<img src="{banner_url}" {_IMG}>'
+        f'<img src="{banner_url}" {_IMG_FIXED}>'
         f'<div {_WRAP}>'
         + (f'<h2 style="font-size:22px;color:#1a1a1a;margin:20px 0 8px;line-height:1.5;">'
            f'{ai.get("headline","")}</h2>' if ai.get("headline") else "")
-        + (f'<p style="font-size:15px;line-height:1.9;color:#555;margin:0;">'
-           f'{ai.get("emotional_copy","")}</p>' if ai.get("emotional_copy") else "")
         + '</div>'
     ) if banner_url else ""
 
-    # ② 실제 사용컷 (라이프스타일) + 감성 문구 3가지
+    # ③ 실제 사용컷 (라이프스타일) + 이유 3가지
     r1, r2, r3 = ai.get("reason_1",""), ai.get("reason_2",""), ai.get("reason_3","")
     reason_blocks = "".join(
         f'<div style="background:{bg};border-radius:10px;padding:16px 18px;margin:8px 0;">'
@@ -1313,14 +1356,14 @@ def build_detail_html(
         ], start=1) if txt
     )
     sec2 = (
-        f'<img src="{product_img_url}" {_IMG}>'
+        f'<img src="{product_img_url}" {_IMG_FIXED}>'
         f'<div {_WRAP}>'
         f'<h3 style="font-size:17px;border-left:4px solid #1a73e8;padding-left:12px;margin:20px 0 14px;">'
         f'✅ 이 상품을 선택해야 하는 이유</h3>'
         + reason_blocks + '</div>'
     ) if product_img_url else ""
 
-    # ③ 이런 분께 추천 체크리스트
+    # ④ 이런 분께 추천 체크리스트
     recs = [r for r in ai.get("recommend_list", []) if r][:5]
     if recs:
         items_html = "".join(
@@ -1341,7 +1384,7 @@ def build_detail_html(
     else:
         sec3 = ""
 
-    # ④ 디테일/기능 설명컷 + 스펙 테이블
+    # ⑤ 디테일/기능 설명컷 + 스펙 테이블
     spec_rows = ai.get("spec_rows", [])
     spec_html = ""
     if spec_rows:
@@ -1357,12 +1400,13 @@ def build_detail_html(
             f'📋 상품 스펙</h3>'
             f'<table style="width:100%;border-collapse:collapse;">{rows_html}</table>'
         )
+    # 디테일 이미지: 원본 비율 유지 (작은 이미지 강제 확대 금지)
     sec4 = (
         (f'<img src="{detail_img_url}" {_IMG}>' if detail_img_url else "")
         + (f'<div {_WRAP}>{spec_html}</div>' if spec_html else "")
     )
 
-    # ⑤ 비교/인증 + 배송/공지 고정
+    # ⑥ 비교/인증 + 배송/공지 고정
     compare = [c for c in ai.get("compare_points", []) if c]
     compare_html = ""
     if compare:
@@ -1377,7 +1421,7 @@ def build_detail_html(
         'font-size:13px;color:#666;line-height:1.8;">'
         '<b style="color:#333;">📦 배송 안내</b><br>'
         '· 주문 후 1~3일 이내 출고 (주말·공휴일 제외)<br>'
-        '· 도서산간 지역 추가 배송비 발생 가능<br><br>'
+        '· 전국 무료배송 / 도서산간 추가비 발생 가능<br><br>'
         '<b style="color:#333;">🔄 교환/반품 안내</b><br>'
         '· 수령 후 7일 이내 교환/반품 가능<br>'
         '· 단순 변심 반품 시 왕복 배송비 고객 부담<br>'
@@ -1385,11 +1429,11 @@ def build_detail_html(
     )
     sec5 = f'<div {_WRAP}>{compare_html}</div>' + delivery_html
 
-    html = sec1 + sec2 + sec3 + sec4 + sec5
+    html = sec0 + sec1 + sec2 + sec3 + sec4 + sec5
 
-    # ⑦ 모든 섹션이 비어있으면 최소 폴백 HTML 강제 생성
+    # 모든 섹션이 비어있으면 최소 폴백 HTML 강제 생성
     if not html.strip():
-        name = ai.get("product_name", "상품")
+        name = ai.get("product_name", product_name or "상품")
         html = (
             f'<div {_WRAP}>'
             f'<h2 style="font-size:20px;color:#1a1a1a;margin:24px 0 12px;">{name}</h2>'
@@ -2637,7 +2681,8 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                     pass
 
             # ⑩ HTML 상세페이지 빌드
-            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
+            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url,
+                                            product_name=str(p.get("name", "")))
 
             # ⑪ 3단계 통합 QC 파이프라인 (기술+비전+콘텐츠)
             _, reject_kws = _get_scene_context(str(p.get("name", "")))
@@ -2816,7 +2861,8 @@ async def pipeline_register_from_domeggook(
                     except Exception:
                         pass
 
-            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url)
+            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url,
+                                            product_name=str(p.get("name", "")))
 
             # 도매꾹 상세 설명 이미지가 있으면 AI 섹션 뒤에 추가
             if dg_content_html:
@@ -3085,7 +3131,8 @@ async def pipeline_fix_products(
                 print(f"  [DESC] origin keys={list(origin.keys())[:6]}", flush=True)
                 print(f"  [DESC] banner_src={'있음' if banner_src else '없음'}", flush=True)
 
-                detail_html   = build_detail_html(banner_src, banner_src, ai, "")
+                detail_html   = build_detail_html(banner_src, banner_src, ai, "",
+                                                  product_name=name)
                 print(f"  [DESC] html len={len(detail_html)}", flush=True)
 
                 if detail_html:
