@@ -3460,3 +3460,98 @@ async def pipeline_auto_cleanup(
         flush=True,
     )
     return results
+
+
+# ──────────────────────────────────────────────────────────────
+# 기존 상품 SEO/GEO/HS코드 일괄 업데이트
+# ──────────────────────────────────────────────────────────────
+_GEO_MARKER = "geo-summary"
+
+async def update_existing_products_seo(limit: int = 100, skip_has_geo: bool = True) -> dict:
+    """스마트스토어 기존 상품에 GEO FAQ·HS코드·통관정보 일괄 업데이트."""
+    api = NaverAPI()
+    results = {"updated": 0, "skipped": 0, "failed": 0, "total": 0}
+    print(f"[SEO-UPDATE] 스마트스토어 최대 {limit}개 업데이트 시작", flush=True)
+
+    # 상품 수집 (list_products는 size 50이므로 페이지 순회)
+    all_items: list[dict] = []
+    page = 1
+    while len(all_items) < limit:
+        resp = await api.list_products(page=page, size=50, days=3650)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_items.extend(contents)
+        if len(contents) < 50:
+            break
+        page += 1
+
+    all_items = all_items[:limit]
+    results["total"] = len(all_items)
+    print(f"[SEO-UPDATE] 수집 완료 {len(all_items)}개", flush=True)
+
+    for item in all_items:
+        product_no = str(item.get("originProductNo", ""))
+        origin = item.get("originProduct", {})
+        if not origin or not product_no:
+            results["skipped"] += 1
+            continue
+
+        detail_content = origin.get("detailContent", "") or ""
+        if skip_has_geo and _GEO_MARKER in detail_content:
+            results["skipped"] += 1
+            continue
+
+        try:
+            stub = {
+                "name": origin.get("name", ""),
+                "price": origin.get("salePrice", 0),
+                "category": "",
+            }
+            copy = await generate_product_copy(stub)
+            if not copy:
+                results["failed"] += 1
+                continue
+
+            # GEO FAQ HTML 블록
+            geo_faq = copy.get("geo_faq", [])
+            if geo_faq:
+                faq_html = '<div class="geo-summary" style="background:#f9f9f9;padding:12px;margin-bottom:16px;border-radius:6px">'
+                for qa in geo_faq[:3]:
+                    q = qa.get("q", "")
+                    a = qa.get("a", "")
+                    if q and a:
+                        faq_html += f"<p><strong>{q}</strong><br>{a}</p>"
+                faq_html += "</div>"
+                new_detail = faq_html + detail_content
+            else:
+                new_detail = detail_content
+
+            # 수정할 originProduct (전체 교체)
+            updated_origin = dict(origin)
+            updated_origin["detailContent"] = new_detail
+
+            # 검색 태그 업데이트
+            tags = copy.get("tags", [])
+            if tags:
+                tag_list = [{"tagName": t} for t in tags[:10] if t]
+                detail_attr = dict(updated_origin.get("detailAttribute", {}))
+                search_tag_info = dict(detail_attr.get("searchTagInfo", {}))
+                search_tag_info["searchTagList"] = tag_list
+                detail_attr["searchTagInfo"] = search_tag_info
+                updated_origin["detailAttribute"] = detail_attr
+
+            ok, err = await api.update_product(product_no, updated_origin)
+            if ok:
+                results["updated"] += 1
+                print(f"  ✓ [{product_no}] {stub['name'][:30]}", flush=True)
+            else:
+                results["failed"] += 1
+                print(f"  ✗ [{product_no}] {err[:80]}", flush=True)
+            await asyncio.sleep(0.6)
+        except Exception as e:
+            print(f"  ✗ [{product_no}] {e}", flush=True)
+            results["failed"] += 1
+
+    print(f"[SEO-UPDATE] 스마트스토어 완료 — {results}", flush=True)
+    return results

@@ -60,6 +60,7 @@ from main import (
     _DG_KEYWORDS,
     pipeline_fix_products,
     NAVER_BASE,
+    update_existing_products_seo,
 )
 from employees import (
     employee_season_planner,
@@ -1087,6 +1088,23 @@ async def domeggook_debug():
         "direct_api": direct_result,
         "fetch_func": func_result,
     })
+
+
+@app.post("/update-products-seo")
+async def update_products_seo_smartstore(request: Request, background_tasks: BackgroundTasks):
+    """스마트스토어 기존 상품 GEO/SEO/HS코드 일괄 업데이트 (백그라운드)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    limit = int(body.get("limit", 100))
+    skip_has_geo = bool(body.get("skip_has_geo", True))
+
+    async def _run():
+        await update_existing_products_seo(limit=limit, skip_has_geo=skip_has_geo)
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"status": "started", "message": f"스마트스토어 상품 최대 {limit}개 SEO 업데이트 시작"})
 
 
 @app.post("/register-single")
