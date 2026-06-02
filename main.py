@@ -673,7 +673,7 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     """도매꾹 getItemList item + getItemView detail → 내부 product dict.
     실제 응답 구조 기반:
       item: {no, title, thumb(풀URL), price, deli}
-      detail: {basis:{title,section,keywords}, price:{dome}, qty:{inventory}, thumb:{original,large}}
+      detail: {basis:{title,section,keywords,img_use}, price:{dome}, qty:{inventory}, thumb:{original,large,list}}
     """
     no   = str(item.get("no", "")).strip()
     name = str(item.get("title", "") or "").strip()
@@ -685,7 +685,6 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
         return None
 
     # 이미지 우선순위: 상세 original > 상세 large > 목록 thumb
-    # value or "" 로 None 방지 후 _dg_stt_to_original → 크기 접미사 완전 제거
     thumb_obj = detail.get("thumb", {}) if detail else {}
     image = (
         _dg_stt_to_original(thumb_obj.get("original") or "") or
@@ -693,9 +692,22 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
         _dg_stt_to_original(item.get("thumb") or "")
     )
 
+    # 이미지 장수: thumb.list 또는 개별 필드 카운트
+    thumb_list = thumb_obj.get("list", [])
+    if isinstance(thumb_list, list) and thumb_list:
+        img_count = len(thumb_list)
+    else:
+        # list 없으면 개별 필드(original/large/medium/small) 개수로 근사
+        img_count = sum(1 for k in ("original", "large", "medium", "small") if thumb_obj.get(k))
+        img_count = max(img_count, 1 if image else 0)
+
     # 카테고리: 상세 basis.section (예: "생활/주방 > 수납/정리")
     basis    = detail.get("basis", {}) if detail else {}
     category = str(basis.get("section") or basis.get("keywords") or "").split(">")[0].strip()
+
+    # 이미지사용허용 플래그: basis.img_use (Y/1 = 허용)
+    raw_img_use = str(basis.get("img_use", "Y") or "Y").strip().upper()
+    img_use_ok  = raw_img_use in ("Y", "1", "YES", "TRUE")
 
     # 재고: qty.inventory (기본 100 캡)
     qty   = detail.get("qty", {}) if detail else {}
@@ -705,15 +717,17 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     content = str(detail.get("content", "") or "") if detail else ""
 
     return {
-        "code":        f"DG_{no}",
-        "name":        name,
-        "price":       price,       # 도매꾹 도매가 = 공급가
-        "image":       image,
-        "category":    category,
-        "stock":       stock,
-        "source":      "domeggook",
-        "_dg_no":      no,
-        "_dg_content": content,     # 공급사 상세 설명 HTML (비어있으면 "")
+        "code":          f"DG_{no}",
+        "name":          name,
+        "price":         price,
+        "image":         image,
+        "category":      category,
+        "stock":         stock,
+        "source":        "domeggook",
+        "_dg_no":        no,
+        "_dg_content":   content,
+        "_dg_img_count": img_count,
+        "_dg_img_use":   img_use_ok,
     }
 
 
@@ -753,8 +767,25 @@ def _is_fake_product(p: dict) -> bool:
     return False
 
 
-async def _check_image_sharpness(url: str) -> float:
-    """이미지 URL → Laplacian variance (선명도 지수). 실패·조회불가 시 -1 반환."""
+async def _tg_sourcing_skip(name: str, reason: str):
+    """소싱 스킵 텔레그램 알림 — 비동기, 실패 무시."""
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not bot_token or not chat_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            await c.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": chat_id, "text": f"[소싱스킵] {name[:30]} - {reason}"},
+            )
+    except Exception:
+        pass
+
+
+async def _check_image_sharpness(url: str) -> tuple[float, int]:
+    """이미지 URL → (Laplacian variance, file_size_bytes).
+    실패·조회불가 시 (-1, 0) 반환."""
     try:
         from PIL import Image, ImageFilter
         import numpy as np
@@ -762,61 +793,117 @@ async def _check_image_sharpness(url: str) -> float:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
             r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code != 200 or not r.content:
-            return -1
+            return -1, 0
+        file_size = len(r.content)
         img = Image.open(_io.BytesIO(r.content)).convert("L")
-        # 최소 해상도 체크 (600x600 미만 → 즉시 저품질)
-        if img.width < 600 or img.height < 600:
-            return 0.0
+        if img.width < 500 or img.height < 500:
+            return 0.0, file_size
         arr = np.array(img.filter(ImageFilter.FIND_EDGES), dtype=float)
-        return float(np.var(arr))
+        return float(np.var(arr)), file_size
     except Exception:
-        return -1
+        return -1, 0
 
 
 async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
-    """도매꾹 소싱 품질 3단계 필터: ① 가짜 상품 ② 이미지 없음 ③ 흐릿한 이미지"""
-    BLUR_THRESHOLD = 150  # Laplacian variance 150 미만 = 흐릿함
+    """도매꾹 소싱 품질 필터 (6단계).
+    ① 가짜/위험 상품  ② 이미지사용 미허용  ③ 이미지 장수 < 3
+    ④ 이름 유사도 ≥ 70% (중복)  ⑤ 해상도 < 500px / 파일크기 < 50KB  ⑥ 흐릿한 이미지
+    스킵 시 텔레그램 [소싱스킵] 알림."""
+    from difflib import SequenceMatcher
+    BLUR_THRESHOLD  = 150   # Laplacian variance
+    MIN_FILE_KB     = 50    # 50KB
+    MIN_IMG_COUNT   = 3     # 최소 이미지 장수
+    SIM_THRESHOLD   = 0.70  # 이름 유사도 상한
 
     before = len(products)
+    registered_names = load_registered_names()  # 정규화된 이름 set
 
-    # ① 가짜/위험 상품 (이미지 다운로드 없이 즉시 판별)
+    async def _notify_skip(p: dict, reason: str):
+        print(f"[품질필터] ❌ {reason}: {p.get('name','')[:40]}", flush=True)
+        asyncio.create_task(_tg_sourcing_skip(p.get("name", ""), reason))
+
+    # ① 가짜/위험 상품
     valid, fake_removed = [], 0
     for p in products:
         if _is_fake_product(p):
             fake_removed += 1
-            print(f"[품질필터] ❌ 가짜/위험: {p.get('name','')[:40]}", flush=True)
+            await _notify_skip(p, "가짜/위험 상품")
         else:
             valid.append(p)
     if fake_removed:
         print(f"[품질필터] 가짜 제거 {fake_removed}개", flush=True)
 
-    # ② 이미지 선명도 병렬 체크 (5개씩)
-    async def _score(p: dict) -> tuple[dict, float]:
-        return p, await _check_image_sharpness(p.get("image", ""))
+    # ② 이미지사용 미허용
+    passed2, img_use_removed = [], 0
+    for p in valid:
+        if not p.get("_dg_img_use", True):
+            img_use_removed += 1
+            await _notify_skip(p, "이미지사용 미허용")
+        else:
+            passed2.append(p)
 
-    scored: list[tuple[dict, float]] = []
-    for i in range(0, len(valid), 5):
-        chunk_res = await asyncio.gather(*[_score(p) for p in valid[i:i+5]])
+    # ③ 이미지 장수 < 3
+    passed3, count_removed = [], 0
+    for p in passed2:
+        cnt = p.get("_dg_img_count", 3)
+        if cnt < MIN_IMG_COUNT:
+            count_removed += 1
+            await _notify_skip(p, f"이미지 {cnt}장 (최소 {MIN_IMG_COUNT}장)")
+        else:
+            passed3.append(p)
+
+    # ④ 이름 유사도 중복 체크 (difflib)
+    passed4, sim_removed = [], 0
+    for p in passed3:
+        norm = _normalize_name(p.get("name", ""))
+        similar = any(
+            SequenceMatcher(None, norm, rn).ratio() >= SIM_THRESHOLD
+            for rn in registered_names
+            if abs(len(norm) - len(rn)) <= max(len(norm), 1) // 2  # 길이 차 큰 건 건너뜀
+        )
+        if similar:
+            sim_removed += 1
+            await _notify_skip(p, "유사 상품명 중복")
+        else:
+            passed4.append(p)
+
+    # ⑤⑥ 이미지 다운로드 → 해상도·파일크기·선명도 병렬 체크 (5개씩)
+    async def _score(p: dict) -> tuple[dict, float, int]:
+        variance, fsize = await _check_image_sharpness(p.get("image", ""))
+        return p, variance, fsize
+
+    scored: list[tuple[dict, float, int]] = []
+    for i in range(0, len(passed4), 5):
+        chunk_res = await asyncio.gather(*[_score(p) for p in passed4[i:i+5]])
         scored.extend(chunk_res)
-        if i + 5 < len(valid):
+        if i + 5 < len(passed4):
             await asyncio.sleep(0.2)
 
-    passed, blur_removed = [], 0
-    for p, score in scored:
-        if score < 0:
-            blur_removed += 1
-            print(f"[품질필터] ❌ 이미지 없음/오류: {p.get('name','')[:40]}", flush=True)
-        elif score < BLUR_THRESHOLD:
-            blur_removed += 1
-            print(f"[품질필터] ❌ 흐릿한 이미지(score={score:.0f}): {p.get('name','')[:40]}", flush=True)
+    passed, img_removed = [], 0
+    for p, variance, fsize in scored:
+        name_s = p.get("name", "")[:40]
+        if variance < 0:
+            img_removed += 1
+            await _notify_skip(p, "이미지 없음/오류")
+        elif fsize < MIN_FILE_KB * 1024:
+            img_removed += 1
+            await _notify_skip(p, f"파일크기 {fsize//1024}KB < {MIN_FILE_KB}KB")
+        elif variance == 0.0:
+            img_removed += 1
+            await _notify_skip(p, "해상도 500px 미만")
+        elif variance < BLUR_THRESHOLD:
+            img_removed += 1
+            await _notify_skip(p, f"흐릿한 이미지(score={variance:.0f})")
         else:
             passed.append(p)
 
-    if blur_removed:
-        print(f"[품질필터] 흐릿/없는 이미지 제거 {blur_removed}개", flush=True)
-
-    print(f"[품질필터] 최종 통과 {len(passed)}개 / 원본 {before}개 "
-          f"(가짜 -{fake_removed} / 이미지불량 -{blur_removed})", flush=True)
+    removed_total = fake_removed + img_use_removed + count_removed + sim_removed + img_removed
+    print(
+        f"[품질필터] 최종 통과 {len(passed)}개 / 원본 {before}개 "
+        f"(가짜-{fake_removed} / 이미지허용-{img_use_removed} / 장수-{count_removed} "
+        f"/ 유사중복-{sim_removed} / 이미지불량-{img_removed})",
+        flush=True,
+    )
     return passed
 
 
