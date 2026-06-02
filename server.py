@@ -1718,6 +1718,67 @@ async def auto_cleanup(request: Request):
     return JSONResponse(result)
 
 
+@app.post("/force-reduce")
+async def force_reduce(request: Request):
+    """한도 초과 시 강제 정리 — 나이 기준으로 SALE/SALE_WAIT/OUT_OF_STOCK 상품 일괄 판매중지.
+    Body: {"min_age_days": 30, "limit": 200}
+    insight 데이터 없어도 처리. 최대 limit개만 중지."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    from main import naver_api, _retry
+    from datetime import datetime, timedelta, timezone
+    min_age_days = int(body.get("min_age_days", 30))
+    batch_limit  = int(body.get("limit", 200))
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=min_age_days)
+    active_statuses = {"SALE", "SALE_WAIT", "OUT_OF_STOCK"}
+
+    all_products = []
+    page = 1
+    while True:
+        try:
+            resp = await _retry(lambda p=page: naver_api.list_products(page=p, size=100), retries=3, delay=5.0, label=f"force-reduce p{page}")
+        except Exception:
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 100:
+            break
+        page += 1
+
+    print(f"[FORCE-REDUCE] 전체: {len(all_products)}개", flush=True)
+    deactivated, skipped, status_counts = 0, 0, {}
+    for prod in all_products:
+        origin = prod.get("originProduct", {})
+        st = origin.get("statusType", "")
+        status_counts[st] = status_counts.get(st, 0) + 1
+        if st not in active_statuses:
+            continue
+        try:
+            reg_date = datetime.fromisoformat(origin.get("regDate", "").replace("Z", "+00:00"))
+        except Exception:
+            skipped += 1
+            continue
+        if reg_date > cutoff:
+            skipped += 1
+            continue
+        if deactivated >= batch_limit:
+            break
+        product_no = str(prod.get("originProductNo", ""))
+        ok = await naver_api.set_product_status(product_no, "SUSPENSION")
+        if ok:
+            deactivated += 1
+            print(f"[FORCE-REDUCE] ✅ [{product_no}] {origin.get('name','')[:20]} ({st}, {(now-reg_date).days}일 경과)", flush=True)
+        else:
+            skipped += 1
+    print(f"[FORCE-REDUCE] 완료 — 중지:{deactivated} 스킵:{skipped} 상태분포:{status_counts}", flush=True)
+    return JSONResponse({"deactivated": deactivated, "skipped": skipped, "status_counts": status_counts, "total": len(all_products)})
+
+
 @app.get("/auto-cleanup-log")
 async def auto_cleanup_log(lines: int = 10):
     """최근 자동 판매중지 실행 로그 조회"""
