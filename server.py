@@ -1870,6 +1870,58 @@ async def _run_delete_blurry():
 _blurry_status: dict = {"running": False, "deleted": 0, "skipped": 0, "errors": 0, "done": False}
 
 
+async def _run_delete_all():
+    """전체 상품 삭제 백그라운드 작업."""
+    from main import naver_api, _retry
+    import asyncio
+
+    all_nos, page = [], 1
+    print(f"[DELETE-ALL] 상품 목록 수집 시작", flush=True)
+    while True:
+        try:
+            resp = await _retry(lambda p=page: naver_api.list_products(page=p, size=50, days=3650), retries=3, delay=5.0, label=f"delete-all p{page}")
+        except Exception as e:
+            print(f"[DELETE-ALL] 목록 조회 실패 p{page}: {e}", flush=True)
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        nos = [str(c.get("originProductNo", "")) for c in contents if c.get("originProductNo")]
+        all_nos.extend(nos)
+        print(f"[DELETE-ALL] 수집: {len(all_nos)}개", flush=True)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.5)
+
+    print(f"[DELETE-ALL] 전체 {len(all_nos)}개 삭제 시작", flush=True)
+    deleted = errors = 0
+
+    for no in all_nos:
+        try:
+            result = await naver_api.delete_product(no)
+            if result:
+                deleted += 1
+                if deleted % 50 == 0:
+                    print(f"[DELETE-ALL] 진행 {deleted}/{len(all_nos)}", flush=True)
+            else:
+                errors += 1
+                print(f"[DELETE-ALL] ❌ 삭제 실패 [{no}]", flush=True)
+            await asyncio.sleep(0.2)
+        except Exception as e:
+            errors += 1
+            print(f"[DELETE-ALL] 오류 [{no}]: {e}", flush=True)
+
+    print(f"[DELETE-ALL] ✅ 완료 — 삭제:{deleted} 실패:{errors}", flush=True)
+
+
+@app.post("/delete-all-products")
+async def delete_all_products(background_tasks: BackgroundTasks):
+    """전체 상품 삭제 (백그라운드). 진행: Railway 로그 [DELETE-ALL] 태그."""
+    background_tasks.add_task(_run_delete_all)
+    return JSONResponse({"status": "started", "message": "전체 상품 삭제 시작. Railway 로그에서 [DELETE-ALL] 태그 확인."})
+
+
 @app.post("/delete-blurry-products")
 async def delete_blurry_products(background_tasks: BackgroundTasks):
     """흐릿/소형 대표이미지 상품 전체 삭제 (백그라운드).
