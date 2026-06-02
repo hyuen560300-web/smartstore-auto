@@ -1779,6 +1779,77 @@ async def force_reduce(request: Request, background_tasks: BackgroundTasks):
     return JSONResponse({"status": "started", "min_age_days": min_age_days, "limit": batch_limit})
 
 
+async def _run_delete_blurry():
+    """대표이미지 흐릿/소형 상품 백그라운드 삭제."""
+    from main import naver_api, _retry, _check_image_quality
+    import asyncio, httpx
+
+    all_products, page = [], 1
+    while True:
+        try:
+            resp = await _retry(lambda p=page: naver_api.list_products(page=p, size=50, days=3650), retries=3, delay=5.0, label=f"blurry-scan p{page}")
+        except Exception as e:
+            print(f"[BLURRY-DELETE] 목록 조회 실패 p{page}: {e}", flush=True)
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        print(f"[BLURRY-DELETE] 수집: {len(all_products)}개", flush=True)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.5)
+
+    print(f"[BLURRY-DELETE] 전체 {len(all_products)}개 이미지 품질 검사 시작", flush=True)
+    deleted = skipped = errors = 0
+
+    for prod in all_products:
+        try:
+            origin    = prod.get("originProduct", {})
+            images    = origin.get("images", {})
+            rep_img   = images.get("representativeImage", {})
+            img_url   = rep_img.get("url", "")
+            product_no = str(prod.get("originProductNo", ""))
+            name       = origin.get("name", "")[:30]
+
+            if not img_url or not product_no:
+                skipped += 1
+                continue
+
+            ok, reason, w, h = await _check_image_quality(img_url)
+            if ok:
+                skipped += 1
+                continue
+
+            # blurry / too_small / text_heavy → 삭제
+            result = await naver_api.delete_product(product_no)
+            if result:
+                deleted += 1
+                print(f"[BLURRY-DELETE] ✅ 삭제 [{product_no}] {name} | {reason} ({w}×{h})", flush=True)
+            else:
+                errors += 1
+                print(f"[BLURRY-DELETE] ❌ 삭제 실패 [{product_no}] {name}", flush=True)
+
+            await asyncio.sleep(0.3)
+        except Exception as e:
+            errors += 1
+            print(f"[BLURRY-DELETE] 오류: {e}", flush=True)
+
+    print(f"[BLURRY-DELETE] 완료 — 삭제:{deleted} 정상스킵:{skipped} 오류:{errors}", flush=True)
+
+
+_blurry_status: dict = {"running": False, "deleted": 0, "skipped": 0, "errors": 0, "done": False}
+
+
+@app.post("/delete-blurry-products")
+async def delete_blurry_products(background_tasks: BackgroundTasks):
+    """흐릿/소형 대표이미지 상품 전체 삭제 (백그라운드).
+    진행 상황은 Railway 로그에서 [BLURRY-DELETE] 태그로 확인."""
+    background_tasks.add_task(_run_delete_blurry)
+    return JSONResponse({"status": "started", "message": "흐릿 이미지 상품 삭제 시작. Railway 로그에서 [BLURRY-DELETE] 태그 확인."})
+
+
 @app.get("/auto-cleanup-log")
 async def auto_cleanup_log(lines: int = 10):
     """최근 자동 판매중지 실행 로그 조회"""
