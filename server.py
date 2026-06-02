@@ -1781,20 +1781,32 @@ async def force_reduce(request: Request, background_tasks: BackgroundTasks):
 
 @app.get("/naver-product-count")
 async def naver_product_count():
-    """Naver API에서 실제 상품 수를 페이지 순회로 카운트 (SALE+SUSPENSION)."""
-    from main import naver_api, _retry
-    total, page = 0, 1
-    while True:
-        try:
-            resp = await _retry(lambda p=page: naver_api.list_products(page=p, size=100, days=3650), retries=2, delay=3.0, label=f"count p{page}")
-        except Exception as e:
-            return JSONResponse({"error": str(e), "counted_so_far": total})
-        contents = resp.get("contents", [])
-        total += len(contents)
-        if len(contents) < 100:
-            break
-        page += 1
-    return JSONResponse({"naver_product_count": total, "pages": page})
+    """Naver 검색 API totalElements로 실제 상품 수 즉시 조회 (상세 조회 없이)."""
+    from main import naver_api, NAVER_BASE
+    from datetime import datetime, timezone, timedelta
+    import httpx
+    headers = await naver_api._headers()
+    now = datetime.now(timezone.utc)
+    results = {}
+    async with httpx.AsyncClient(timeout=15) as c:
+        for st, label in [("SALE", "판매중"), ("SUSPENSION", "판매중지"), ("SALE_WAIT", "판매대기"), ("OUT_OF_STOCK", "품절")]:
+            try:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=headers,
+                    json={"productStatusTypes": [st], "page": 1, "size": 1,
+                          "orderType": "NO", "periodType": "PROD_REG_DAY",
+                          "fromDate": "2020-01-01", "toDate": now.strftime("%Y-%m-%d")},
+                )
+                data = r.json()
+                results[label] = data.get("totalElements", data.get("total", "?"))
+            except Exception as e:
+                results[label] = f"오류: {e}"
+    active = sum(v for v in results.values() if isinstance(v, int) and k in ("판매중", "판매대기", "품절")
+                 for k in [list(results.keys())[list(results.values()).index(v)]])
+    results["활성합계(한도대상)"] = sum(results.get(k, 0) for k in ["판매중", "판매대기", "품절"] if isinstance(results.get(k), int))
+    results["전체"] = sum(v for v in results.values() if isinstance(v, int) and v != results.get("활성합계(한도대상)"))
+    return JSONResponse(results)
 
 
 async def _run_delete_blurry():
