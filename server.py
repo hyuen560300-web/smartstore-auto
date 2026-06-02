@@ -1781,15 +1781,15 @@ async def force_reduce(request: Request, background_tasks: BackgroundTasks):
 
 @app.get("/naver-product-count")
 async def naver_product_count():
-    """Naver 검색 API totalElements로 실제 상품 수 즉시 조회 (상세 조회 없이)."""
+    """Naver 검색 API totalElements로 상태별 상품 수 즉시 조회."""
     from main import naver_api, NAVER_BASE
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
     import httpx
     headers = await naver_api._headers()
     now = datetime.now(timezone.utc)
-    results = {}
+    counts = {}
     async with httpx.AsyncClient(timeout=15) as c:
-        for st, label in [("SALE", "판매중"), ("SUSPENSION", "판매중지"), ("SALE_WAIT", "판매대기"), ("OUT_OF_STOCK", "품절")]:
+        for st, label in [("SALE","판매중"), ("SUSPENSION","판매중지"), ("SALE_WAIT","판매대기"), ("OUT_OF_STOCK","품절")]:
             try:
                 r = await c.post(
                     f"{NAVER_BASE}/v1/products/search",
@@ -1799,14 +1799,12 @@ async def naver_product_count():
                           "fromDate": "2020-01-01", "toDate": now.strftime("%Y-%m-%d")},
                 )
                 data = r.json()
-                results[label] = data.get("totalElements", data.get("total", "?"))
+                counts[label] = data.get("totalElements", data.get("total", -1))
             except Exception as e:
-                results[label] = f"오류: {e}"
-    active = sum(v for v in results.values() if isinstance(v, int) and k in ("판매중", "판매대기", "품절")
-                 for k in [list(results.keys())[list(results.values()).index(v)]])
-    results["활성합계(한도대상)"] = sum(results.get(k, 0) for k in ["판매중", "판매대기", "품절"] if isinstance(results.get(k), int))
-    results["전체"] = sum(v for v in results.values() if isinstance(v, int) and v != results.get("활성합계(한도대상)"))
-    return JSONResponse(results)
+                counts[label] = f"오류: {e}"
+    active_keys = ["판매중", "판매대기", "품절"]
+    active_total = sum(counts[k] for k in active_keys if isinstance(counts.get(k), int))
+    return JSONResponse({**counts, "활성합계_한도대상": active_total, "한도": 1000, "여유": 1000 - active_total})
 
 
 async def _run_delete_blurry():
