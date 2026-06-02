@@ -159,6 +159,8 @@ AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
 DOMEGGOOK_API_KEY          = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
 NAVER_DATALAB_CLIENT_ID    = os.environ.get("NAVER_DATALAB_CLIENT_ID", "")
 NAVER_DATALAB_CLIENT_SECRET = os.environ.get("NAVER_DATALAB_CLIENT_SECRET", "")
+TEMPLATED_API_KEY          = _clean_key(os.environ.get("TEMPLATED_API_KEY", ""))
+TEMPLATED_TEMPLATE_ID      = os.environ.get("TEMPLATED_TEMPLATE_ID", "")
 
 DOMEGGOOK_API_URL  = "https://domeggook.com/ssl/api/"
 DOMEGGOOK_IMG_BASE = "https://img.domeggook.com/"
@@ -1594,6 +1596,55 @@ def build_detail_html(
     return html
 
 
+# ─── Templated.io 상세페이지 이미지 생성 ─────────────────────────────────────
+async def generate_templated_detail(product: dict, ai: dict) -> str:
+    """Templated.io API로 상세페이지 이미지 렌더링 → 네이버 CDN URL 반환.
+    실패 시 빈 문자열 반환 (폴백: DALL-E 또는 build_detail_html 사용)."""
+    if not TEMPLATED_API_KEY or not TEMPLATED_TEMPLATE_ID:
+        return ""
+    try:
+        sp = ai.get("selling_points") or []
+        rl = ai.get("recommend_list") or []
+        feature1 = (sp[0] if sp else (rl[0] if rl else ""))[:40]
+        feature2 = (sp[1] if len(sp) > 1 else (rl[1] if len(rl) > 1 else ""))[:40]
+        feature3 = (sp[2] if len(sp) > 2 else (rl[2] if len(rl) > 2 else ""))[:40]
+        price_txt = f"₩{int(product.get('price', 0)):,}"
+        payload = {
+            "template": TEMPLATED_TEMPLATE_ID,
+            "layers": {
+                "main_image_con":  {"image_url": product.get("image", "")},
+                "product_title":   {"text": (ai.get("product_name") or str(product.get("name", "")))[:40]},
+                "product_price":   {"text": price_txt},
+                "feature1_text":   {"text": feature1},
+                "feature2_text":   {"text": feature2},
+                "feature3_text":   {"text": feature3},
+                "detail_section_": {"text": (ai.get("emotional_copy") or "")[:100]},
+                "detail_image_s":  {"image_url": product.get("image", "")},
+            },
+        }
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                "https://api.templated.io/v1/render",
+                headers={"Authorization": f"User {TEMPLATED_API_KEY}",
+                         "Content-Type": "application/json"},
+                json=payload,
+            )
+            r.raise_for_status()
+            render_url = r.json().get("render_url") or r.json().get("url", "")
+        if not render_url:
+            print("[TEMPLATED] render_url 없음", flush=True)
+            return ""
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+            img_resp = await c.get(render_url)
+            img_resp.raise_for_status()
+        naver_url = await naver_api.upload_detail_image(img_resp.content)
+        print(f"[TEMPLATED] ✅ 상세이미지: {naver_url[:70]}", flush=True)
+        return naver_url
+    except Exception as e:
+        print(f"[TEMPLATED] 실패 → 폴백: {e}", flush=True)
+        return ""
+
+
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
 PEXELS_KEYWORD_MAP = {
     "티셔츠": "t-shirt", "바지": "pants", "아우터": "jacket outer",
@@ -2996,9 +3047,10 @@ async def pipeline_register_from_domeggook(
             # 도매꾹 상세 설명 이미지 → Naver URL로 교체 (공급사 실제 스펙 이미지)
             dg_content_html = await _dg_content_to_naver_html(str(p.get("_dg_content", "")))
 
-            # 도매꾹 content 없을 때만 DALL-E detail shot 생성
-            detail_img_url = ""
-            if not dg_content_html:
+            # Templated.io 상세페이지 이미지 생성 (실패 시 DALL-E 폴백)
+            detail_img_url = await generate_templated_detail(p, ai)
+            if not detail_img_url and not dg_content_html:
+                # Templated 실패 + 공급사 상세 없을 때만 DALL-E fallback
                 dalle_detail_raw = await generate_dalle_detail_shot(
                     str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
                 if dalle_detail_raw:
