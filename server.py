@@ -1723,7 +1723,7 @@ async def _run_force_reduce(min_age_days: int, batch_limit: int):
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=min_age_days)
-    active_statuses = {"SALE", "SALE_WAIT", "OUT_OF_STOCK"}
+    active_statuses = {"SALE", "SALE_WAIT", "OUT_OF_STOCK", ""}
     all_products, page = [], 1
     while True:
         try:
