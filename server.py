@@ -1779,6 +1779,24 @@ async def force_reduce(request: Request, background_tasks: BackgroundTasks):
     return JSONResponse({"status": "started", "min_age_days": min_age_days, "limit": batch_limit})
 
 
+@app.get("/naver-product-count")
+async def naver_product_count():
+    """Naver API에서 실제 상품 수를 페이지 순회로 카운트 (SALE+SUSPENSION)."""
+    from main import naver_api, _retry
+    total, page = 0, 1
+    while True:
+        try:
+            resp = await _retry(lambda p=page: naver_api.list_products(page=p, size=100, days=3650), retries=2, delay=3.0, label=f"count p{page}")
+        except Exception as e:
+            return JSONResponse({"error": str(e), "counted_so_far": total})
+        contents = resp.get("contents", [])
+        total += len(contents)
+        if len(contents) < 100:
+            break
+        page += 1
+    return JSONResponse({"naver_product_count": total, "pages": page})
+
+
 async def _run_delete_blurry():
     """대표이미지 흐릿/소형 상품 백그라운드 삭제."""
     from main import naver_api, _retry, _check_image_quality
