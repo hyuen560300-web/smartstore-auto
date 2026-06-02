@@ -1030,6 +1030,8 @@ async def fetch_domeggook_products(
 
     # 품질 필터: 가짜 상품 + 흐릿한/없는 이미지 제거
     products = await _dg_apply_quality_filter(products)
+    # 블루오션 점수로 정렬 (높은 점수 = 검색량 많고 경쟁 적음)
+    products = await _rank_products_blue_ocean(products)
     return products
 
 
@@ -3731,3 +3733,406 @@ async def update_existing_products_seo(limit: int = 100, skip_has_geo: bool = Tr
 
     print(f"[SEO-UPDATE] 스마트스토어 완료 — {results}", flush=True)
     return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 소싱 고도화 v2 — ①블루오션 ②SEO ③성과정리 ④가격경쟁 ⑤리뷰모니터 ⑥카테고리
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _tg_notify(msg: str) -> None:
+    """텔레그램 범용 알림 (실패 무시)."""
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not bot_token or not chat_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            await c.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": chat_id, "text": msg[:4000]},
+            )
+    except Exception:
+        pass
+
+
+# ─── ① 블루오션 필터 ─────────────────────────────────────────────────────────
+
+async def _get_datalab_trend_score(keyword: str) -> float:
+    """네이버 데이터랩 검색 트렌드 점수 (0~100). 키 없거나 실패 시 50 반환."""
+    cid  = NAVER_DATALAB_CLIENT_ID
+    csec = NAVER_DATALAB_CLIENT_SECRET
+    if not cid or not csec:
+        return 50.0
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    body = {
+        "startDate": (today - _td(days=30)).strftime("%Y-%m-%d"),
+        "endDate":   today.strftime("%Y-%m-%d"),
+        "timeUnit":  "week",
+        "keywordGroups": [{"groupName": keyword[:20], "keywords": [keyword[:20]]}],
+        "device": "", "ages": [], "gender": "",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(
+                "https://openapi.naver.com/v1/datalab/search",
+                headers={"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": csec,
+                         "Content-Type": "application/json"},
+                json=body,
+            )
+        if r.status_code == 200:
+            data = r.json().get("results", [])
+            if data and data[0].get("data"):
+                return float(data[0]["data"][-1].get("ratio", 50))
+    except Exception:
+        pass
+    return 50.0
+
+
+async def _get_blue_ocean_score(keyword: str) -> float:
+    """블루오션 점수 = 검색 트렌드 / (경쟁상품수 + 1) × 10"""
+    trend, shopping = await asyncio.gather(
+        _get_datalab_trend_score(keyword),
+        search_naver_shopping(keyword[:15], display=20),
+        return_exceptions=True,
+    )
+    trend_val = float(trend) if isinstance(trend, (int, float)) else 50.0
+    comp_cnt  = len(shopping) if isinstance(shopping, list) else 10
+    return round(trend_val / (comp_cnt + 1) * 10, 2)
+
+
+async def _rank_products_blue_ocean(products: list[dict]) -> list[dict]:
+    """블루오션 점수 산출 후 내림차순 정렬 반환. 실패 시 원본 순서 유지."""
+    if not products:
+        return products
+    try:
+        names   = [p.get("name", "")[:15] for p in products]
+        unique  = list(dict.fromkeys(names))
+        scores  = await asyncio.gather(*[_get_blue_ocean_score(n) for n in unique], return_exceptions=True)
+        smap    = {n: (float(s) if isinstance(s, (int, float)) else 50.0) for n, s in zip(unique, scores)}
+        for p in products:
+            p["_blue_ocean_score"] = smap.get(p.get("name", "")[:15], 50.0)
+        ranked = sorted(products, key=lambda x: x.get("_blue_ocean_score", 0), reverse=True)
+        top3   = [(p.get("name", "")[:12], p.get("_blue_ocean_score", 0)) for p in ranked[:3]]
+        print(f"[블루오션] TOP3: {top3}", flush=True)
+        return ranked
+    except Exception as e:
+        print(f"[블루오션] 스코어링 실패 — 원본 순서: {e}", flush=True)
+        return products
+
+
+# ─── ③ 성과 기반 자동 교체 ──────────────────────────────────────────────────
+
+async def _source_replacement_product() -> None:
+    """저성과 삭제 후 1개 신규 소싱 대체. 실패 무시."""
+    try:
+        products = await fetch_domeggook_products(pool_size=5, min_price=3000, max_price=50000)
+        if not products:
+            return
+        p     = products[0]
+        copy  = await generate_product_copy(p, {})
+        price = calculate_selling_price(int(p.get("price", 10000)))
+        pload = build_product_payload(copy, price, p.get("image", ""), "", p)
+        res   = await naver_api.register_product(pload)
+        if res:
+            save_registered_code(str(p.get("code", "")))
+            print("[PERF] 소싱대체 완료 ✅", flush=True)
+    except Exception as e:
+        print(f"[PERF] 소싱대체 실패(무시): {e}", flush=True)
+
+
+async def _run_advanced_performance_cleanup() -> dict:
+    """7일 0클릭 → SUSPENSION, 14일 <10클릭+0주문 → DELETE + 소싱대체 트리거."""
+    print("[PERF-CLEANUP] 고도화 성과 정리 시작", flush=True)
+    now     = datetime.now(timezone.utc)
+    results = {"suspended": 0, "deleted": 0, "replaced": 0, "checked": 0, "errors": []}
+
+    all_products: list[dict] = []
+    page = 1
+    while True:
+        try:
+            resp = await _retry(
+                lambda p=page: naver_api.list_products(page=p, size=100),
+                retries=3, delay=5.0, label=f"perf list(p{page})"
+            )
+        except Exception as e:
+            results["errors"].append(f"목록조회: {str(e)[:60]}")
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 100:
+            break
+        page += 1
+
+    for prod in all_products:
+        try:
+            origin = prod.get("originProduct", {})
+            if origin.get("statusType") != "SALE":
+                continue
+            product_no = str(prod.get("originProductNo", ""))
+            channel_no = str(prod.get("channelProductNo", ""))
+            name       = origin.get("name", "")[:20]
+            reg_str    = origin.get("regDate", "")
+            if not reg_str or not product_no:
+                continue
+            reg_date = datetime.fromisoformat(reg_str.replace("Z", "+00:00"))
+            days_old = (now - reg_date).days
+            if days_old < 7:
+                continue
+            results["checked"] += 1
+
+            insight = await naver_api.get_product_insight(channel_no, days=14)
+            clicks  = int((insight or {}).get("clickCount") or 0)
+            orders  = int((insight or {}).get("orderCount") or 0)
+
+            if days_old >= 7 and clicks == 0 and orders == 0:
+                ok = await naver_api.set_product_status(product_no, "SUSPENSION")
+                if ok:
+                    results["suspended"] += 1
+                    print(f"[PERF] 중지 {name} | {days_old}일/{clicks}클릭", flush=True)
+            elif days_old >= 14 and clicks < 10 and orders == 0:
+                ok = await naver_api.delete_product(product_no)
+                if ok:
+                    results["deleted"] += 1
+                    print(f"[PERF] 삭제 {name} | {days_old}일/{clicks}클릭", flush=True)
+                    asyncio.create_task(_source_replacement_product())
+                    results["replaced"] += 1
+        except Exception as e:
+            results["errors"].append(str(e)[:60])
+        await asyncio.sleep(0.4)
+
+    if results["suspended"] + results["deleted"] > 0:
+        msg = (f"[스마트스토어 성과정리]\n검사:{results['checked']} "
+               f"중지:{results['suspended']} 삭제:{results['deleted']} 대체:{results['replaced']}")
+        asyncio.create_task(_tg_notify(msg))
+    print(f"[PERF-CLEANUP] 완료 — {results}", flush=True)
+    return results
+
+
+# ─── ④ 가격 경쟁 자동 조정 ──────────────────────────────────────────────────
+
+async def _run_price_competition_update(limit: int = 30) -> dict:
+    """경쟁 최저가 × 1.10 초과 시 최저가 × 1.05 로 자동 인하 (원가 × 1.15 바닥)."""
+    print("[PRICE] 가격 경쟁 자동 조정 시작", flush=True)
+    results = {"checked": 0, "adjusted": 0, "skipped": 0, "errors": []}
+
+    all_products: list[dict] = []
+    page = 1
+    while len(all_products) < limit:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 50:
+            break
+        page += 1
+    all_products = all_products[:limit]
+
+    for prod in all_products:
+        try:
+            origin    = prod.get("originProduct", {})
+            if origin.get("statusType") != "SALE":
+                continue
+            product_no = str(prod.get("originProductNo", ""))
+            name       = origin.get("name", "")
+            our_price  = int(origin.get("salePrice") or 0)
+            cost_price = int(origin.get("costPrice") or 0)
+            if our_price <= 0:
+                continue
+            results["checked"] += 1
+
+            competitors = await search_naver_shopping(name[:20], display=10)
+            prices = [c["price"] for c in (competitors or []) if c.get("price", 0) > 0]
+            if not prices:
+                results["skipped"] += 1
+                continue
+            min_price = min(prices)
+
+            if our_price <= min_price * 1.10:
+                results["skipped"] += 1
+                continue
+
+            target    = round(min_price * 1.05 / 10) * 10
+            floor     = round(cost_price * 1.15 / 10) * 10 if cost_price > 0 else 0
+            new_price = max(target, floor)
+            if new_price <= 0 or new_price >= our_price:
+                results["skipped"] += 1
+                continue
+
+            full = dict(origin)
+            full["salePrice"] = new_price
+            ok, err = await naver_api.update_product(product_no, full)
+            if ok:
+                results["adjusted"] += 1
+                print(f"[PRICE] ✅ {name[:20]} {our_price:,}→{new_price:,}원 (경쟁최저:{min_price:,})", flush=True)
+            else:
+                results["errors"].append(f"{name[:15]}: {err[:40]}")
+        except Exception as e:
+            results["errors"].append(str(e)[:50])
+        await asyncio.sleep(1.2)
+
+    print(f"[PRICE] 완료 — {results}", flush=True)
+    return results
+
+
+# ─── ⑤ 리뷰·위시리스트 모니터링 ────────────────────────────────────────────
+
+_REVIEW_NEG_KW = ["불량", "파손", "오배송", "사기", "환불", "취소", "실망", "별로", "최악", "쓰레기"]
+
+
+async def _run_review_wishlist_monitor(limit: int = 20) -> dict:
+    """위시리스트 급증(전일 대비 1.5배+5개) 감지, 부정 키워드 경쟁사 리뷰 모니터링."""
+    print("[REVIEW] 리뷰·위시리스트 모니터링 시작", flush=True)
+    results = {"checked": 0, "wishlist_surges": [], "neg_alerts": [], "errors": []}
+    prev_key  = "smartstore.wishlist.prev"
+    prev_data: dict = _ctx_get(prev_key) or {}
+
+    all_products: list[dict] = []
+    page = 1
+    while len(all_products) < limit:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 50:
+            break
+        page += 1
+    all_products = all_products[:limit]
+
+    new_data: dict = {}
+    for prod in all_products:
+        try:
+            origin    = prod.get("originProduct", {})
+            if origin.get("statusType") != "SALE":
+                continue
+            product_no = str(prod.get("originProductNo", ""))
+            channel_no = str(prod.get("channelProductNo", ""))
+            name       = origin.get("name", "")[:20]
+            results["checked"] += 1
+
+            insight  = await naver_api.get_product_insight(channel_no, days=7)
+            wishlist = int((insight or {}).get("wishlistCount") or (insight or {}).get("keepCount") or 0)
+            new_data[product_no] = wishlist
+
+            prev_w = prev_data.get(product_no, 0)
+            if prev_w > 0 and wishlist >= prev_w * 1.5 and wishlist - prev_w >= 5:
+                results["wishlist_surges"].append(f"📈 {name}: {prev_w}→{wishlist}")
+
+            shopping = await search_naver_shopping(name[:15], display=5)
+            for item in (shopping or []):
+                title = item.get("title", "").lower()
+                negs  = [k for k in _REVIEW_NEG_KW if k in title]
+                if negs:
+                    results["neg_alerts"].append(f"⚠️ {name}: {negs}")
+                    break
+        except Exception as e:
+            results["errors"].append(str(e)[:50])
+        await asyncio.sleep(0.5)
+
+    _ctx_set(prev_key, new_data)
+
+    alerts = results["wishlist_surges"] + results["neg_alerts"]
+    if alerts:
+        asyncio.create_task(_tg_notify("[리뷰·위시리스트]\n" + "\n".join(alerts[:10])))
+    print(f"[REVIEW] 완료 — 급증:{len(results['wishlist_surges'])} 부정:{len(results['neg_alerts'])}", flush=True)
+    return results
+
+
+# ─── ⑥ 카테고리 다각화 분석 ─────────────────────────────────────────────────
+
+async def _run_category_diversity_check() -> dict:
+    """카테고리 분포 분석 — 30% 초과 또는 10개 미만 시 텔레그램 경고."""
+    from collections import Counter as _Counter
+    print("[CATEGORY] 카테고리 다각화 분석 시작", flush=True)
+    results = {"total": 0, "categories": {}, "warnings": []}
+
+    all_products: list[dict] = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=100, days=3650)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 100:
+            break
+        page += 1
+
+    total = len(all_products)
+    results["total"] = total
+    if total == 0:
+        return results
+
+    cats = []
+    for prod in all_products:
+        origin = prod.get("originProduct", {})
+        cat = (
+            (origin.get("detailAttribute") or {})
+            .get("naverShoppingSearchInfo", {})
+            .get("category1Name", "미분류")
+        ) or "미분류"
+        cats.append(cat)
+
+    counter  = _Counter(cats)
+    results["categories"] = dict(counter.most_common(20))
+    warnings = []
+    for cat, cnt in counter.most_common():
+        if cnt / total * 100 > 30:
+            warnings.append(f"⚠️ '{cat}' {cnt/total*100:.1f}% ({cnt}개) — 30% 초과")
+    if len(counter) < 10:
+        warnings.append(f"⚠️ 카테고리 {len(counter)}개 — 목표: 10개 이상")
+    results["warnings"] = warnings
+
+    if warnings:
+        top3 = ", ".join(f"{c}:{n}" for c, n in counter.most_common(3))
+        msg  = f"[카테고리 분석] 총{total}개/{len(counter)}카테고리\nTop3: {top3}\n" + "\n".join(warnings)
+        asyncio.create_task(_tg_notify(msg))
+    print(f"[CATEGORY] {len(counter)}카테고리, 경고:{len(warnings)}", flush=True)
+    return results
+
+
+# ─── 주간 성과 요약 (매주 월요일 09:00) ────────────────────────────────────
+
+async def _send_weekly_performance_summary() -> None:
+    """스마트스토어 주간 성과 요약 텔레그램 발송."""
+    print("[WEEKLY] 주간 성과 요약 시작", flush=True)
+    try:
+        resp     = await naver_api.list_products(page=1, size=50, days=3650)
+        total    = resp.get("totalElements", len(resp.get("contents", [])))
+        contents = resp.get("contents", [])[:10]
+
+        top_items: list[dict] = []
+        for prod in contents:
+            origin = prod.get("originProduct", {})
+            if origin.get("statusType") != "SALE":
+                continue
+            ch_no = str(prod.get("channelProductNo", ""))
+            if not ch_no:
+                continue
+            ins = await naver_api.get_product_insight(ch_no, days=7)
+            if ins:
+                top_items.append({
+                    "name":   origin.get("name", "")[:20],
+                    "clicks": int(ins.get("clickCount") or 0),
+                    "orders": int(ins.get("orderCount") or 0),
+                })
+        top_items.sort(key=lambda x: x["clicks"], reverse=True)
+
+        lines = [
+            "📊 스마트스토어 주간 리포트",
+            f"📦 총 상품: {total}개",
+            "",
+            "🏆 주간 TOP 클릭:",
+        ]
+        for i, it in enumerate(top_items[:3], 1):
+            lines.append(f"  {i}. {it['name']} — 클릭:{it['clicks']} 주문:{it['orders']}")
+        if not top_items:
+            lines.append("  (데이터 없음)")
+        asyncio.create_task(_tg_notify("\n".join(lines)))
+        print("[WEEKLY] 발송 완료", flush=True)
+    except Exception as e:
+        print(f"[WEEKLY] 실패: {e}", flush=True)

@@ -3194,6 +3194,11 @@ async def startup_event():
     from main import (
         pipeline_process_orders, pipeline_sync_inventory,
         pipeline_reply_inquiries, pipeline_auto_cleanup,
+        _run_advanced_performance_cleanup,
+        _run_price_competition_update,
+        _run_category_diversity_check,
+        _run_review_wishlist_monitor,
+        _send_weekly_performance_summary,
         ANTHROPIC_API_KEY, MARGIN_RATE,
     )
 
@@ -3356,6 +3361,53 @@ async def startup_event():
 
     # 3일마다 SEO 제목 자동 갱신
     scheduler.add_job(job_seo_title_refresh, "interval", days=3, id="seo_title_refresh")
+
+    # ── 소싱 고도화 v2 스케줄 ────────────────────────────────────────────────
+    async def job_advanced_cleanup():
+        print("[SCHED] 고도화 성과 정리", flush=True)
+        try:
+            await _run_advanced_performance_cleanup()
+        except Exception as e:
+            print(f"[SCHED] 고도화 성과 정리 오류: {e}", flush=True)
+
+    async def job_price_competition():
+        print("[SCHED] 가격 경쟁 자동 조정", flush=True)
+        try:
+            await _run_price_competition_update(limit=30)
+        except Exception as e:
+            print(f"[SCHED] 가격 조정 오류: {e}", flush=True)
+
+    async def job_category_diversity():
+        print("[SCHED] 카테고리 다각화 분석", flush=True)
+        try:
+            await _run_category_diversity_check()
+        except Exception as e:
+            print(f"[SCHED] 카테고리 분석 오류: {e}", flush=True)
+
+    async def job_review_monitor():
+        print("[SCHED] 리뷰·위시리스트 모니터링", flush=True)
+        try:
+            await _run_review_wishlist_monitor(limit=20)
+        except Exception as e:
+            print(f"[SCHED] 리뷰 모니터링 오류: {e}", flush=True)
+
+    async def job_weekly_summary():
+        print("[SCHED] 주간 성과 요약 발송", flush=True)
+        try:
+            await _send_weekly_performance_summary()
+        except Exception as e:
+            print(f"[SCHED] 주간 요약 오류: {e}", flush=True)
+
+    # 매주 수요일 02:00 — 고도화 성과 정리 (기존 월요일 00:00과 다른 날)
+    scheduler.add_job(job_advanced_cleanup,  "cron", day_of_week="wed", hour=2,  minute=0, id="advanced_cleanup")
+    # 매일 03:00 — 가격 경쟁 자동 조정
+    scheduler.add_job(job_price_competition, "cron", hour=3, minute=0, id="price_competition")
+    # 매주 목요일 01:00 — 카테고리 다각화 분석
+    scheduler.add_job(job_category_diversity, "cron", day_of_week="thu", hour=1, minute=0, id="category_diversity")
+    # 매일 02:30 — 리뷰·위시리스트 모니터링
+    scheduler.add_job(job_review_monitor,    "cron", hour=2, minute=30, id="review_monitor")
+    # 매주 월요일 09:00 — 주간 성과 요약
+    scheduler.add_job(job_weekly_summary,    "cron", day_of_week="mon", hour=9, minute=0, id="weekly_summary")
 
     try:
         scheduler.start()
