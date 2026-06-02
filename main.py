@@ -1703,8 +1703,10 @@ async def _templated_render(layers: dict) -> list[str]:
         return [p.get("render_url") or p.get("url", "") for p in pages if p.get("render_url") or p.get("url")]
 
 
-async def generate_templated_detail(product: dict, ai: dict) -> str:
+async def generate_templated_detail(product: dict, ai: dict,
+                                    public_img_url: str = "") -> str:
     """Templated.io 4페이지 렌더 → 각 페이지 네이버 CDN 업로드 → 상세 HTML 블록 반환.
+    public_img_url: Naver CDN 등 외부 서버가 접근 가능한 이미지 URL (우선 사용).
     실패 시 빈 문자열 반환 (폴백: DALL-E 또는 build_detail_html 사용)."""
     if not TEMPLATED_API_KEY or not TEMPLATED_TEMPLATE_ID:
         return ""
@@ -1715,20 +1717,27 @@ async def generate_templated_detail(product: dict, ai: dict) -> str:
         feature2 = (sp[1] if len(sp) > 1 else (rl[1] if len(rl) > 1 else ""))[:40]
         feature3 = (sp[2] if len(sp) > 2 else (rl[2] if len(rl) > 2 else ""))[:40]
         price_txt = f"₩{int(product.get('price', 0)):,}"
-        img_url   = (product.get("image") or "").strip()
+        # public_img_url(Naver CDN) 우선 — 없으면 원본 URL 사용
+        img_url   = (public_img_url or product.get("image") or "").strip()
         title_txt = (ai.get("product_name") or str(product.get("name", "")))[:50]
 
         # ② 한글 폰트 적용 + ③ 상품명 50자
         _KR_FONT = "Noto Sans KR"
+        detail_txt = (ai.get("emotional_copy") or "")[:200]
         layers_with_img = {
-            "main_image_con":  {"image_url": img_url},
-            "product_title":   {"text": title_txt,  "font_family": _KR_FONT},
-            "product_price":   {"text": price_txt},
-            "feature1_text":   {"text": feature1,   "font_family": _KR_FONT},
-            "feature2_text":   {"text": feature2,   "font_family": _KR_FONT},
-            "feature3_text":   {"text": feature3,   "font_family": _KR_FONT},
-            "detail_section_": {"text": (ai.get("emotional_copy") or "")[:100], "font_family": _KR_FONT},
-            "detail_image_s":  {"image_url": img_url},
+            # page-1: 상품 메인 이미지
+            "main_image_container": {"image_url": img_url},
+            # page-2: 타이틀/가격
+            "product_title":        {"text": title_txt, "font_family": _KR_FONT},
+            "product_price":        {"text": price_txt},
+            # page-3: 특징 + 서브이미지
+            "feature1_text":        {"text": feature1,  "font_family": _KR_FONT},
+            "feature2_text":        {"text": feature2,  "font_family": _KR_FONT},
+            "feature3_text":        {"text": feature3,  "font_family": _KR_FONT},
+            "detail_section_title": {"text": "상품 상세정보", "font_family": _KR_FONT},
+            "detail_image_sub":     {"image_url": img_url},
+            # page-4: 본문
+            "detail_body":          {"text": detail_txt, "font_family": _KR_FONT},
         }
         layers_text_only = {k: v for k, v in layers_with_img.items() if "image_url" not in v}
 
@@ -3172,8 +3181,9 @@ async def pipeline_register_from_domeggook(
             # 도매꾹 상세 설명 이미지 → Naver URL로 교체 (공급사 실제 스펙 이미지)
             dg_content_html = await _dg_content_to_naver_html(str(p.get("_dg_content", "")))
 
-            # Templated.io 4페이지 상세이미지 생성
-            templated_html = await generate_templated_detail(p, ai)
+            # Templated.io 4페이지 상세이미지 생성 (Naver CDN URL 전달 → hotlink 우회)
+            templated_html = await generate_templated_detail(p, ai,
+                                                              public_img_url=naver_img_url)
 
             # Templated 실패 + 공급사 상세 없을 때만 DALL-E detail shot 폴백
             detail_img_url = ""
