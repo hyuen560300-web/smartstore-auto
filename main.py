@@ -1715,20 +1715,25 @@ async def generate_templated_detail(product: dict, ai: dict) -> str:
         feature2 = (sp[1] if len(sp) > 1 else (rl[1] if len(rl) > 1 else ""))[:40]
         feature3 = (sp[2] if len(sp) > 2 else (rl[2] if len(rl) > 2 else ""))[:40]
         price_txt = f"₩{int(product.get('price', 0)):,}"
-        img_url   = product.get("image", "")
+        img_url   = (product.get("image") or "").strip()
+        title_txt = (ai.get("product_name") or str(product.get("name", "")))[:50]
 
-        # 이미지 포함 레이어 우선 시도 → 400이면 텍스트 전용으로 폴백
+        # ② 한글 폰트 적용 + ③ 상품명 50자
+        _KR_FONT = "Noto Sans KR"
         layers_with_img = {
             "main_image_con":  {"image_url": img_url},
-            "product_title":   {"text": (ai.get("product_name") or str(product.get("name", "")))[:40]},
+            "product_title":   {"text": title_txt,  "font_family": _KR_FONT},
             "product_price":   {"text": price_txt},
-            "feature1_text":   {"text": feature1},
-            "feature2_text":   {"text": feature2},
-            "feature3_text":   {"text": feature3},
-            "detail_section_": {"text": (ai.get("emotional_copy") or "")[:100]},
+            "feature1_text":   {"text": feature1,   "font_family": _KR_FONT},
+            "feature2_text":   {"text": feature2,   "font_family": _KR_FONT},
+            "feature3_text":   {"text": feature3,   "font_family": _KR_FONT},
+            "detail_section_": {"text": (ai.get("emotional_copy") or "")[:100], "font_family": _KR_FONT},
             "detail_image_s":  {"image_url": img_url},
         }
         layers_text_only = {k: v for k, v in layers_with_img.items() if "image_url" not in v}
+
+        # ① 요청 body 로그 (이미지 URL 정상 전달 확인)
+        print(f"[TEMPLATED] 요청 body: img_url={img_url[:80]!r} title={title_txt!r}", flush=True)
 
         render_urls = await _templated_render(layers_with_img)
         if not render_urls:
