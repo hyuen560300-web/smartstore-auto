@@ -739,8 +739,11 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
 import re as _re_img
 
 
+_SUPPLIER_FILTER_KWS = ["소싱", "무역", "견적", "운송", "공급사", "셀렉터", "DISTRIBUTION", "배송 거리"]
+
 def extract_domeggook_images(desc_html: str, main_url: str = "", max_count: int = 5) -> list[str]:
-    """도매꾹 desc.contents.item HTML에서 추가 이미지 URL 파싱. 메인 이미지 중복 제외."""
+    """도매꾹 desc.contents.item HTML에서 추가 이미지 URL 파싱.
+    공급사 홍보 문구(소싱/무역/견적 등) 주변 이미지 제외. 메인 이미지 중복 제외."""
     if not desc_html:
         return []
     seen = {main_url} if main_url else set()
@@ -748,6 +751,10 @@ def extract_domeggook_images(desc_html: str, main_url: str = "", max_count: int 
     for m in _re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', desc_html, _re.I):
         url = m.group(1).strip()
         if not url.startswith("http") or url in seen:
+            continue
+        pos = m.start()
+        ctx_text = _re.sub(r'<[^>]+>', '', desc_html[max(0, pos - 500) : pos + 500])
+        if any(kw in ctx_text for kw in _SUPPLIER_FILTER_KWS):
             continue
         seen.add(url)
         result.append(url)
@@ -1749,7 +1756,7 @@ async def generate_templated_detail(product: dict, ai: dict,
                 _tr = await _tc.messages.create(
                     model="claude-haiku-4-5-20251001", max_tokens=50,
                     messages=[{"role": "user", "content":
-                        f"상품명을 20자 이내 핵심만 남겨줘. 한 줄로만 답해:\n{_title_full}"}]
+                        f"다음 상품명을 20자 이내 임팩트 있는 한 줄 카피로 만들어줘: {_title_full}"}]
                 )
                 title_txt = (_tr.content[0].text or "").strip()[:20]
             except Exception:
