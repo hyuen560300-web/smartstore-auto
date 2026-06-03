@@ -837,7 +837,7 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
     ④ 이름 유사도 ≥ 70% (중복)  ⑤ 해상도 < 500px / 파일크기 < 50KB  ⑥ 흐릿한 이미지
     스킵 시 텔레그램 [소싱스킵] 알림."""
     from difflib import SequenceMatcher
-    BLUR_THRESHOLD  = 150   # Laplacian variance
+    BLUR_THRESHOLD  = 200   # Laplacian variance (FIND_EDGES+np.var 기준)
     MIN_FILE_KB     = 50    # 50KB
     MIN_IMG_COUNT   = 3     # 최소 이미지 장수
     SIM_THRESHOLD   = 0.70  # 이름 유사도 상한
