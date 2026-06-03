@@ -1753,41 +1753,51 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         for u in extra_imgs
     ) or f'<img src="{main_img}" style="width:100%;max-width:860px;height:auto;display:block;margin:0 auto;">'
 
-    prompt = f"""아래 상품의 완전한 쇼핑몰 HTML 상세페이지를 작성하세요.
-HTML만 출력 (마크다운·JSON·주석 없이). 인라인 CSS만 사용. 최소 5000자.
+    features_str = ", ".join(str(s) for s in selling_pts[:5]) or product_name
 
-상품명: {product_name}
-카테고리: {category}
-가격: ₩{price:,}
-히어로타이틀: {hero_title}
-부제목: {sub_title}
-감성카피: {emotional}
-특징: {", ".join(str(s) for s in selling_pts[:3])}
-차별점: {" / ".join(r for r in reasons if r)}
-메인이미지: {main_img}
-추가이미지: {json.dumps(extra_imgs, ensure_ascii=False)}
-태그: {", ".join(str(t) for t in tags[:8])}
-
-아래 19개 섹션 순서대로 모두 작성 (총 5000자 이상):
-1.[상단배너] 그라디언트 배경 + 히어로타이틀 + 부제목 + 가격뱃지
-2.[히어로] <img src="{main_img}" style="width:100%;max-width:860px;"> 필수삽입 + 특징3가지
-3.[5초후킹] 인상적 수치4개(큰 숫자 강조, 예:98%·4.8★·10만+)
-4.[메인이미지] <img src="{main_img}" style="width:100%;max-width:860px;height:auto;display:block;"> 크게
-5.[핵심수치] 그라디언트 카드4개(숫자+설명)
-6.[문제제기] 고객 Pain Point 4가지(❌ 아이콘+공감 설명)
-7.[해결책] 상품으로 해결 3가지(✅ 아이콘+구체 설명)
-8.[이미지갤러리] {gallery_html}
-9.[상세설명1] 좌이미지+우텍스트 flex 교차레이아웃
-10.[상세설명2] 우이미지+좌텍스트 flex 교차레이아웃
-11.[사용법] 4단계(숫자뱃지+아이콘+제목+설명)
-12.[비교표] 항목5개 타사vs우리상품(✅/❌)
-13.[후기] 실사용자후기3개(이름·별점★★★★★·내용)
-14.[FAQ] 4개 Q+A
-15.[스펙표] 5행 이상 스펙테이블
-16.[배송안내] 배송·교환·반품·AS 안내
-17.[신뢰배지] 무료배송·정품보장·당일발송·AS보장(아이콘포함)
-18.[연관상품] 함께구매추천3개(카드형)
-19.[CTA] 구매하기 버튼(눈에 띄는 색상) + 스토어찜 유도"""
+    prompt = (
+        "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
+        "아래 상품 정보로 스마트스토어 상세페이지 HTML을 만들어주세요.\n"
+        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n\n"
+        "[디자인 규칙 - 반드시 준수]\n"
+        "- 색상: #1a1a1a(다크) / #c8a97a(골드) / #ffffff(흰색) / #f8f5f0(베이지) 4가지만 사용\n"
+        "- 그라데이션 절대 금지\n"
+        "- 알록달록한 컬러 카드 금지\n"
+        "- 폰트: Noto Sans KR (Google Fonts)\n"
+        "- 카드/섹션 배경: 흰색 or 연베이지 + 얇은 테두리(#e8e0d0)\n"
+        "- 포인트 컬러는 골드(#c8a97a)만 사용\n"
+        "- 전체 느낌: 쿠팡/무신사 수준의 프리미엄하고 세련된 스타일\n"
+        "- 불필요한 이모지 최소화\n"
+        "- 여백 충분히 사용\n\n"
+        "[필수 섹션 19개]\n"
+        "1. 상단배너 (골드 배경, 무료배송/정품보장 문구)\n"
+        "2. 히어로 (다크 배경, 골드 포인트 텍스트)\n"
+        "3. 5초 후킹 (베이지 배경, 임팩트 문구)\n"
+        f"4. 메인이미지 <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n"
+        "5. 핵심수치 4개 (골드 배경 그리드)\n"
+        "6. 문제제기 4개 (흰 카드, 골드 왼쪽 테두리)\n"
+        "7. 해결책 3개 (다크 배경, 흰 텍스트)\n"
+        f"8. 이미지갤러리 (2열 그리드)\n{gallery_html}\n"
+        "9. 상세설명1 (좌이미지+우텍스트)\n"
+        "10. 상세설명2 (좌다크텍스트+우이미지)\n"
+        "11. 사용법 4단계 (다크 배경, STEP 번호)\n"
+        "12. 비교표 (골드 헤더)\n"
+        "13. 후기 3개 (흰 카드, 별점)\n"
+        "14. FAQ 4개 (베이지 배경)\n"
+        "15. 스펙표 (베이지 배경 라벨)\n"
+        "16. 배송/교환 안내 (2열 카드)\n"
+        "17. 신뢰배지 3개 (다크 배경)\n"
+        "18. CTA (골드 배경)\n"
+        "19. 스토어찜 유도 + 푸터 (다크 배경)\n\n"
+        "[상품 정보]\n"
+        f"- 상품명: {product_name}\n"
+        f"- 가격: ₩{price:,}\n"
+        f"- 카테고리: {category}\n"
+        f"- 이미지URL: {main_img}\n"
+        f"- 특징: {features_str}\n\n"
+        "위 규칙을 엄격히 지켜서 완성도 높은 HTML을 생성하세요.\n"
+        "width: 860px, Noto Sans KR 반드시 포함."
+    )
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
     for attempt in range(3):
