@@ -3854,6 +3854,72 @@ async def suspend_excess_products(background_tasks: BackgroundTasks, keep: int =
     })
 
 
+async def _run_restore_all_sale() -> None:
+    """판매중지(SUSPENSION) 상품 전체를 판매중(SALE)으로 복구."""
+    print("[RESTORE-SALE] 전체 복구 시작", flush=True)
+
+    all_suspended: list[dict] = []
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=100, days=3650)
+        except Exception as e:
+            print(f"[RESTORE-SALE] 목록 조회 오류(p{page}): {e}", flush=True)
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for prod in contents:
+            if prod.get("originProduct", {}).get("statusType") == "SUSPENSION":
+                all_suspended.append(prod)
+        if len(contents) < 100:
+            break
+        page += 1
+        await asyncio.sleep(0.5)
+
+    total = len(all_suspended)
+    print(f"[RESTORE-SALE] SUSPENSION 상품 {total}개 복구 시작", flush=True)
+
+    if total == 0:
+        await _tg_notify("✅ 복구 불필요 — 판매중지 상품 없음")
+        return
+
+    await _tg_notify(f"[스마트스토어] 판매중지→판매중 복구 시작: {total}개")
+
+    restored = 0
+    failed = 0
+    for i, prod in enumerate(all_suspended):
+        pid  = str(prod.get("originProductNo", ""))
+        name = prod.get("originProduct", {}).get("name", "")[:30]
+        ok   = await naver_api.set_product_status(pid, "SALE")
+        if ok:
+            restored += 1
+            print(f"[RESTORE-SALE] ✅ ({i+1}/{total}) {name}", flush=True)
+        else:
+            failed += 1
+            print(f"[RESTORE-SALE] ❌ ({i+1}/{total}) {name}", flush=True)
+        if (i + 1) % 10 == 0:
+            await _tg_notify(f"[복구] 진행 중 {i+1}/{total} — 완료:{restored} 실패:{failed}")
+        await asyncio.sleep(0.4)
+
+    msg = (
+        f"✅ 판매중 복구 완료\n"
+        f"처리: {total}개 → 복구:{restored} 실패:{failed}"
+    )
+    await _tg_notify(msg)
+    print(f"[RESTORE-SALE] 완료 — restored:{restored} failed:{failed}", flush=True)
+
+
+@app.post("/restore-all-sale")
+async def restore_all_sale(background_tasks: BackgroundTasks):
+    """판매중지 상품 전체를 판매중으로 복구."""
+    background_tasks.add_task(_run_restore_all_sale)
+    return JSONResponse({
+        "status": "processing",
+        "message": "판매중지 → 판매중 복구 시작 — 텔레그램으로 진행 상황 전송",
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
