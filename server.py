@@ -3292,7 +3292,7 @@ async def startup_event():
             print(f"[SCHED] 자동 정리 오류: {e}", flush=True)
 
     async def job_register_products():
-        """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 10개 등록 (하루 30개)"""
+        """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 11개 등록 (하루 33개)"""
         if os.getenv("AUTO_REGISTER_ENABLED", "true").lower() != "true":
             print("[SCHED] 상품 자동 등록 비활성화 (AUTO_REGISTER_ENABLED=false)", flush=True)
             return
@@ -3308,7 +3308,7 @@ async def startup_event():
         try:
             excel_path = await _next_excel_internal()
             if excel_path:
-                await pipeline_register_products(excel_path, limit=10)
+                await pipeline_register_products(excel_path, limit=11)
         except Exception as e:
             print(f"[SCHED] 상품 등록 오류: {e}", flush=True)
 
