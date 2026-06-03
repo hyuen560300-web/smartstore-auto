@@ -3344,8 +3344,8 @@ async def startup_event():
     scheduler.add_job(job_expand_platform,      "interval", weeks=1, id="expand_platform")
     # 주간 네이버 패션 트렌드 업데이트 (월간→주간 단축)
     scheduler.add_job(job_fashion_trend_update, "interval", weeks=1, id="fashion_trend_update")
-    # 08:00 / 12:00 / 20:00 상품 등록
-    scheduler.add_job(job_register_products, "cron", hour="8,12,20", minute=0, id="register_products_8")
+    # 09:00 / 13:00 / 20:00 상품 등록
+    scheduler.add_job(job_register_products, "cron", hour="9,13,20", minute=0, id="register_products_8")
     # 09:00 / 13:00 / 21:00 Pinterest 자동 핀 (상품 등록 1시간 후)
     scheduler.add_job(job_pinterest_pin, "cron", hour="9,13,21", minute=0, id="pinterest_pin")
     # 매주 월요일 00:00 저성과 상품 정리

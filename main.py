@@ -1731,6 +1731,156 @@ def build_detail_html(
     return html
 
 
+# ─── Claude HTML 상세페이지 생성 ──────────────────────────────────────────────
+async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list) -> str:
+    """Claude Haiku로 19섹션 완전한 HTML 상세페이지 생성 (최소 5000자, 3회 재시도).
+    실패 시 빈 문자열 반환 → 호출부에서 build_detail_html 폴백."""
+    if not ANTHROPIC_API_KEY:
+        return ""
+    product_name = ai.get("product_name") or str(product.get("name", ""))
+    category     = str(product.get("category", ""))
+    price        = int(product.get("price", 0))
+    main_img     = image_urls[0] if image_urls else ""
+    extra_imgs   = [u for u in image_urls[1:6] if u]
+    hero_title   = (ai.get("headline") or product_name)[:18]
+    sub_title    = ai.get("sub_headline", "")
+    emotional    = ai.get("emotional_copy", "")
+    selling_pts  = ai.get("selling_points") or ai.get("recommend_list") or []
+    reasons      = [ai.get(f"reason_{i}", "") for i in range(1, 4)]
+    tags         = ai.get("tags") or []
+    gallery_html = "\n".join(
+        f'<img src="{u}" style="width:100%;max-width:860px;height:auto;display:block;margin:8px auto;">'
+        for u in extra_imgs
+    ) or f'<img src="{main_img}" style="width:100%;max-width:860px;height:auto;display:block;margin:0 auto;">'
+
+    prompt = f"""아래 상품의 완전한 쇼핑몰 HTML 상세페이지를 작성하세요.
+HTML만 출력 (마크다운·JSON·주석 없이). 인라인 CSS만 사용. 최소 5000자.
+
+상품명: {product_name}
+카테고리: {category}
+가격: ₩{price:,}
+히어로타이틀: {hero_title}
+부제목: {sub_title}
+감성카피: {emotional}
+특징: {", ".join(str(s) for s in selling_pts[:3])}
+차별점: {" / ".join(r for r in reasons if r)}
+메인이미지: {main_img}
+추가이미지: {json.dumps(extra_imgs, ensure_ascii=False)}
+태그: {", ".join(str(t) for t in tags[:8])}
+
+아래 19개 섹션 순서대로 모두 작성 (총 5000자 이상):
+1.[상단배너] 그라디언트 배경 + 히어로타이틀 + 부제목 + 가격뱃지
+2.[히어로] <img src="{main_img}" style="width:100%;max-width:860px;"> 필수삽입 + 특징3가지
+3.[5초후킹] 인상적 수치4개(큰 숫자 강조, 예:98%·4.8★·10만+)
+4.[메인이미지] <img src="{main_img}" style="width:100%;max-width:860px;height:auto;display:block;"> 크게
+5.[핵심수치] 그라디언트 카드4개(숫자+설명)
+6.[문제제기] 고객 Pain Point 4가지(❌ 아이콘+공감 설명)
+7.[해결책] 상품으로 해결 3가지(✅ 아이콘+구체 설명)
+8.[이미지갤러리] {gallery_html}
+9.[상세설명1] 좌이미지+우텍스트 flex 교차레이아웃
+10.[상세설명2] 우이미지+좌텍스트 flex 교차레이아웃
+11.[사용법] 4단계(숫자뱃지+아이콘+제목+설명)
+12.[비교표] 항목5개 타사vs우리상품(✅/❌)
+13.[후기] 실사용자후기3개(이름·별점★★★★★·내용)
+14.[FAQ] 4개 Q+A
+15.[스펙표] 5행 이상 스펙테이블
+16.[배송안내] 배송·교환·반품·AS 안내
+17.[신뢰배지] 무료배송·정품보장·당일발송·AS보장(아이콘포함)
+18.[연관상품] 함께구매추천3개(카드형)
+19.[CTA] 구매하기 버튼(눈에 띄는 색상) + 스토어찜 유도"""
+
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    for attempt in range(3):
+        try:
+            resp = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=8000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            html = resp.content[0].text.strip()
+            html = re.sub(r'^```(?:html)?\n?', '', html)
+            html = re.sub(r'\n?```$', '', html)
+            if len(html) < 5000:
+                print(f"[CLAUDE-HTML] 시도{attempt+1}: {len(html)}자 미달, 재시도", flush=True)
+                await asyncio.sleep(1)
+                continue
+            print(f"[CLAUDE-HTML] ✅ {len(html):,}자 생성 (시도{attempt+1})", flush=True)
+            return html
+        except Exception as e:
+            print(f"[CLAUDE-HTML] 시도{attempt+1} 실패: {e}", flush=True)
+            await asyncio.sleep(2)
+    print("[CLAUDE-HTML] 3회 실패 → build_detail_html 폴백", flush=True)
+    return ""
+
+
+async def _save_to_obsidian(product_name: str, category: str, detail_html: str,
+                            ai: dict, tags: list, channels: dict) -> None:
+    """등록 완료 상품 → context_store 저장 + Obsidian Local REST API 시도."""
+    try:
+        from datetime import datetime as _dt
+        date_str  = _dt.now().strftime("%Y-%m-%d")
+        now_str   = _dt.now().strftime("%Y-%m-%d %H:%M")
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', product_name[:30])
+        path      = f"Products/{category or 'General'}/{date_str}_{safe_name}.md"
+        tag_str   = ", ".join(str(t) for t in tags[:10])
+        channel_lines = "\n".join(f"- {k}: {v}" for k, v in (channels or {}).items() if v)
+        md = (
+            f"---\ndate: {date_str}\ncategory: {category}\ntags: [{tag_str}]\n---\n\n"
+            f"# {product_name}\n\n"
+            f"## 카피\n"
+            f"- **히어로**: {ai.get('headline', ai.get('title', ''))}\n"
+            f"- **부제목**: {ai.get('sub_headline', ai.get('seo_title', ''))}\n"
+            f"- **감성**: {str(ai.get('emotional_copy', ''))[:100]}\n\n"
+            f"## 등록 채널 ({now_str})\n{channel_lines}\n\n"
+            f"## 태그\n{tag_str}\n\n"
+            f"## HTML 상세페이지 (앞 3000자)\n```html\n{detail_html[:3000]}\n```\n"
+        )
+        _cs_url = os.environ.get("CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app")
+        async with httpx.AsyncClient(timeout=10) as _c:
+            await _c.post(f"{_cs_url}/context", json={
+                "key": f"product.{date_str}.{safe_name}",
+                "value": md, "category": "product_register",
+            })
+        _obs_url = os.environ.get("OBSIDIAN_API_URL", "http://127.0.0.1:27123")
+        _obs_key = "fc0baa3f6a6363c3174155ae5a3367bda267fcef7ccfe7e05534c3465600c261"
+        try:
+            async with httpx.AsyncClient(timeout=5) as _oc:
+                r = await _oc.put(
+                    f"{_obs_url}/vault/{path}",
+                    headers={"Authorization": f"Bearer {_obs_key}", "Content-Type": "text/markdown"},
+                    content=md.encode("utf-8"),
+                )
+                if r.status_code in (200, 204):
+                    print(f"[OBSIDIAN] ✅ {path}", flush=True)
+        except Exception:
+            pass  # Railway에서는 로컬 Obsidian 미접근 → context_store로 대체
+    except Exception as e:
+        print(f"[OBSIDIAN] 오류: {e}", flush=True)
+
+
+async def _enqueue_retry(channel: str, product: dict, error: str) -> None:
+    """등록 실패 상품 → context_store 재시도 큐 저장 (3회 초과 시 텔레그램 알림)."""
+    try:
+        import time as _time
+        cnt = int(product.get("_retry_count", 0)) + 1
+        _cs_url = os.environ.get("CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app")
+        key  = f"retry_queue.{channel}.{int(_time.time())}"
+        safe = {k: v for k, v in product.items()
+                if isinstance(v, (str, int, float, bool, list, type(None))) and k != "_dg_content"}
+        data = {**safe, "_retry_count": cnt, "_retry_error": error[:100]}
+        async with httpx.AsyncClient(timeout=8) as _c:
+            await _c.post(f"{_cs_url}/context", json={
+                "key": key, "value": json.dumps(data, ensure_ascii=False), "category": "retry_queue"
+            })
+        if cnt >= 3:
+            asyncio.create_task(_tg_notify(
+                f"[재시도실패] {channel}: {str(product.get('name', ''))[:25]}\n"
+                f"사유: {error[:60]}\n3회 모두 실패 — 수동 확인 필요"))
+        else:
+            print(f"[RETRY-Q] {channel}/{str(product.get('name', ''))[:20]} 큐추가({cnt}회)", flush=True)
+    except Exception as e:
+        print(f"[RETRY-Q] 큐 추가 실패: {e}", flush=True)
+
 
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
 PEXELS_KEYWORD_MAP = {
@@ -3156,24 +3306,30 @@ async def pipeline_register_from_domeggook(
             # 도매꾹 상세 설명 이미지 → Naver URL로 교체 (공급사 실제 스펙 이미지)
             dg_content_html = await _dg_content_to_naver_html(str(p.get("_dg_content", "")))
 
-            # 공급사 상세 없을 때만 DALL-E detail shot 폴백
-            detail_img_url = ""
-            if not dg_content_html:
-                dalle_detail_raw = await generate_dalle_detail_shot(
-                    str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
-                if dalle_detail_raw:
-                    try:
-                        detail_img_url = await naver_api.upload_image(dalle_detail_raw)
-                    except Exception:
-                        pass
-
-            detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url,
-                                            product_name=str(p.get("name", "")))
-
-            # 도매꾹 상세 설명 이미지가 있으면 Templated 뒤에 추가
-            if dg_content_html:
-                detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
-                print(f"[상세페이지] 도매꾹 상세 설명 이미지 추가 ✅", flush=True)
+            # Claude HTML 상세페이지 생성 (도매꾹 원본 이미지 URL 직접 삽입)
+            _all_imgs = [naver_img_url] + (p.get("_dg_extra_naver_urls") or [])
+            claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+            if claude_html:
+                detail_html = claude_html
+                if dg_content_html:
+                    detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
+                    print(f"[상세페이지] 도매꾹 상세 이미지 추가 ✅", flush=True)
+            else:
+                # Claude 3회 실패 → DALL-E + build_detail_html 폴백
+                detail_img_url = ""
+                if not dg_content_html:
+                    dalle_detail_raw = await generate_dalle_detail_shot(
+                        str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
+                    if dalle_detail_raw:
+                        try:
+                            detail_img_url = await naver_api.upload_image(dalle_detail_raw)
+                        except Exception:
+                            pass
+                detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url,
+                                                product_name=str(p.get("name", "")))
+                if dg_content_html:
+                    detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
+                    print(f"[상세페이지] 도매꾹 상세 이미지 추가 ✅ (폴백모드)", flush=True)
 
             _, reject_kws = _get_scene_context(str(p.get("name", "")))
             qc_result = await run_qc_pipeline(
@@ -3215,18 +3371,33 @@ async def pipeline_register_from_domeggook(
             await naver_api.register_product(payload)
             if code:
                 save_registered_code(code)
-            save_registered_name(ai.get("product_name") or p.get("name", ""))
+            final_name = ai.get("product_name") or p.get("name", "")
+            save_registered_name(final_name)
             results["success"] += 1
-            print(f"[도매꾹파이프라인] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원)", flush=True)
+            print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원)", flush=True)
+            # Obsidian + context_store 저장
+            asyncio.create_task(_save_to_obsidian(
+                final_name, _cat, detail_html, ai, ai.get("tags") or [],
+                {"smartstore": f"https://smartstore.naver.com/thehwmall"}))
             await asyncio.sleep(0.5)
 
         except Exception as e:
             results["fail"] += 1
-            results["errors"].append(f"{str(p.get('name','?'))[:20]}: {str(e)[:80]}")
+            err_msg = str(e)[:80]
+            results["errors"].append(f"{str(p.get('name','?'))[:20]}: {err_msg}")
             print(f"[도매꾹파이프라인] ❌ {e}", flush=True)
+            asyncio.create_task(_enqueue_retry("smartstore", p, err_msg))
 
     print(f"[도매꾹파이프라인] 완료 — 성공:{results['success']} 실패:{results['fail']} "
           f"스킵:{results['skip']} IP차단:{results['ip_blocked']}", flush=True)
+    # 일일 리포트 텔레그램 전송
+    if results["success"] or results["fail"]:
+        asyncio.create_task(_tg_notify(
+            f"[스마트스토어 일일리포트]\n"
+            f"✅ 성공: {results['success']}개\n"
+            f"❌ 실패: {results['fail']}개\n"
+            f"⊘ 스킵: {results['skip']}개\n"
+            f"🚫 IP차단: {results['ip_blocked']}개"))
     return results
 
 
