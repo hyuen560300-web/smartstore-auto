@@ -3735,7 +3735,6 @@ async def _run_fix_html_all(limit: int = 200) -> None:
 
     # ── ④ 텔레그램 ──────────────────────────────────────────────────────────
     try:
-        from telegram_notifier import send_message
         status_icon = "✅" if results["html_fail"] == 0 else "⚠️"
         msg = (
             f"{status_icon} 스마트스토어 HTML 재적용 완료\n\n"
@@ -3745,8 +3744,8 @@ async def _run_fix_html_all(limit: int = 200) -> None:
             f"🗑️ 중복 제거: {results['dup_deleted']}개"
         )
         if results["errors"]:
-            msg += f"\n\n주요 오류:\n" + "\n".join(f"• {e}" for e in results["errors"][:5])
-        send_message(msg)
+            msg += "\n\n주요 오류:\n" + "\n".join(f"• {e}" for e in results["errors"][:5])
+        await _tg_notify(msg)
     except Exception as e:
         print(f"[FIXHTML] 텔레그램 실패: {e}", flush=True)
 
