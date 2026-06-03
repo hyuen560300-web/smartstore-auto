@@ -1741,9 +1741,23 @@ async def generate_templated_detail(product: dict, ai: dict,
         price_txt = f"₩{int(product.get('price', 0)):,}"
         # public_img_url(Naver CDN) 우선 — 없으면 원본 URL 사용
         img_url   = (public_img_url or product.get("image") or "").strip()
-        title_txt = (ai.get("product_name") or str(product.get("name", "")))[:50]
+        _title_full = (ai.get("product_name") or str(product.get("name", "")))
+        # 20자 초과 시 Claude API로 핵심 키워드 추출해 배너 타이틀 압축
+        if len(_title_full) > 20 and ANTHROPIC_API_KEY:
+            try:
+                _tc = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+                _tr = await _tc.messages.create(
+                    model="claude-haiku-4-5-20251001", max_tokens=50,
+                    messages=[{"role": "user", "content":
+                        f"상품명을 20자 이내 핵심만 남겨줘. 한 줄로만 답해:\n{_title_full}"}]
+                )
+                title_txt = (_tr.content[0].text or "").strip()[:20]
+            except Exception:
+                title_txt = _title_full[:20]
+        else:
+            title_txt = _title_full[:20]
+        subtitle_txt = _title_full[:50]
 
-        # ② 한글 폰트 적용 + ③ 상품명 50자
         _KR_FONT = "Noto Sans KR"
         detail_txt = (ai.get("emotional_copy") or "")[:200]
         # detail_image_sub: 추가 이미지 첫 번째 사용 (없으면 메인 이미지 폴백)
@@ -1751,8 +1765,9 @@ async def generate_templated_detail(product: dict, ai: dict,
         layers_with_img = {
             # page-1: 상품 메인 이미지
             "main_image_container": {"image_url": img_url},
-            # page-2: 타이틀/가격
-            "product_title":        {"text": title_txt, "font_family": _KR_FONT, "autofit": "shrink"},
+            # page-2: 타이틀/가격/부제목
+            "product_title":        {"text": title_txt,    "font_family": _KR_FONT, "autofit": "shrink"},
+            "subtitle":             {"text": subtitle_txt, "font_family": _KR_FONT},
             "product_price":        {"text": price_txt},
             # page-3: 특징 + 서브이미지
             "feature1_text":        {"text": feature1,  "font_family": _KR_FONT},
