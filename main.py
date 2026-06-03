@@ -3384,17 +3384,23 @@ async def pipeline_register_from_domeggook(
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
 
-            await naver_api.register_product(payload)
+            reg_result = await naver_api.register_product(payload)
             if code:
                 save_registered_code(code)
             final_name = ai.get("product_name") or p.get("name", "")
             save_registered_name(final_name)
             results["success"] += 1
-            print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원)", flush=True)
+            _pid = (reg_result.get("originProductNo")
+                    or reg_result.get("channelProducts", [{}])[0].get("channelProductNo", "")
+                    if isinstance(reg_result, dict) else "")
+            _product_url = (f"https://smartstore.naver.com/thehwmall/products/{_pid}"
+                            if _pid else "https://smartstore.naver.com/thehwmall")
+            print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원) → {_product_url}", flush=True)
+            asyncio.create_task(_tg_notify(f"[등록완료] {final_name} - {_product_url}"))
             # Obsidian + context_store 저장
             asyncio.create_task(_save_to_obsidian(
                 final_name, _cat, detail_html, ai, ai.get("tags") or [],
-                {"smartstore": f"https://smartstore.naver.com/thehwmall"}))
+                {"smartstore": _product_url}))
             await asyncio.sleep(0.5)
 
         except Exception as e:
