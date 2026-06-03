@@ -1685,7 +1685,7 @@ def build_detail_html(
         'font-size:13px;color:#666;line-height:1.8;">'
         '<b style="color:#333;">📦 배송 안내</b><br>'
         '· 주문 후 1~3일 이내 출고 (주말·공휴일 제외)<br>'
-        '· 전국 무료배송 / 도서산간 추가비 발생 가능<br><br>'
+        '· 배송비 3,000원 / 도서산간 추가비 발생 가능<br><br>'
         '<b style="color:#333;">🔄 교환/반품 안내</b><br>'
         '· 수령 후 7일 이내 교환/반품 가능<br>'
         '· 단순 변심 반품 시 왕복 배송비 고객 부담<br>'
@@ -1770,7 +1770,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "- 불필요한 이모지 최소화\n"
         "- 여백 충분히 사용\n\n"
         "[필수 섹션 19개]\n"
-        "1. 상단배너 (골드 배경, 무료배송/정품보장 문구)\n"
+        "1. 상단배너 (골드 배경, 빠른배송/정품보장 문구)\n"
         "2. 히어로 (다크 배경, 골드 포인트 텍스트)\n"
         "3. 5초 후킹 (베이지 배경, 임팩트 문구)\n"
         f"4. 메인이미지 <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n"
@@ -1786,7 +1786,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "14. FAQ 4개 (베이지 배경)\n"
         "15. 스펙표 (베이지 배경 라벨)\n"
         "16. 배송/교환 안내 (2열 카드)\n"
-        "17. 신뢰배지 3개 (다크 배경)\n"
+        "17. 신뢰배지 3개 (다크 배경, 빠른배송/정품보장/AS보장 — 무료배송 문구 절대 금지)\n"
         "18. CTA (골드 배경)\n"
         "19. 스토어찜 유도 + 푸터 (다크 배경)\n\n"
         "[상품 정보]\n"
