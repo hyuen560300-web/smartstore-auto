@@ -1728,7 +1728,7 @@ async def generate_templated_detail(product: dict, ai: dict,
             # page-1: 상품 메인 이미지
             "main_image_container": {"image_url": img_url},
             # page-2: 타이틀/가격
-            "product_title":        {"text": title_txt, "font_family": _KR_FONT},
+            "product_title":        {"text": title_txt, "font_family": _KR_FONT, "autofit": "shrink"},
             "product_price":        {"text": price_txt},
             # page-3: 특징 + 서브이미지
             "feature1_text":        {"text": feature1,  "font_family": _KR_FONT},
@@ -1736,8 +1736,12 @@ async def generate_templated_detail(product: dict, ai: dict,
             "feature3_text":        {"text": feature3,  "font_family": _KR_FONT},
             "detail_section_title": {"text": "상품 상세정보", "font_family": _KR_FONT},
             "detail_image_sub":     {"image_url": img_url},
-            # page-4: 본문
+            # page-4: 본문 + 배지
             "detail_body":          {"text": detail_txt, "font_family": _KR_FONT},
+            "badge1_text":          {"text": "무료배송",   "font_family": _KR_FONT},
+            "badge2_text":          {"text": "정품보장",   "font_family": _KR_FONT},
+            "badge3_text":          {"text": "빠른배송",   "font_family": _KR_FONT},
+            "footer_copyright":     {"text": "© THE HW MALL", "font_family": _KR_FONT},
         }
         layers_text_only = {k: v for k, v in layers_with_img.items() if "image_url" not in v}
 
