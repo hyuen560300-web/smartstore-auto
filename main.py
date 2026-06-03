@@ -1874,6 +1874,47 @@ async def _save_to_obsidian(product_name: str, category: str, detail_html: str,
         print(f"[OBSIDIAN] 오류: {e}", flush=True)
 
 
+async def _update_obsidian_note(results: dict, limit: int = 0) -> None:
+    """등록 배치 완료 후 Projects/스마트스토어.md 통계 업데이트."""
+    try:
+        from datetime import datetime as _dt
+        now_str  = _dt.now().strftime("%Y-%m-%d %H:%M")
+        date_str = _dt.now().strftime("%Y-%m-%d")
+        note_path = "Projects/%EC%8A%A4%EB%A7%88%ED%8A%B8%EC%8A%A4%ED%86%A0%EC%96%B4.md"
+        _obs_url = os.environ.get("OBSIDIAN_API_URL", "http://127.0.0.1:27123")
+        _obs_key = os.environ.get("OBSIDIAN_API_KEY", "fc0baa3f6a6363c3174155ae5a3367bda267fcef7ccfe7e05534c3465600c261")
+        hdrs = {"Authorization": f"Bearer {_obs_key}", "ngrok-skip-browser-warning": "1"}
+        async with httpx.AsyncClient(timeout=10) as _oc:
+            _r = await _oc.get(f"{_obs_url}/vault/{note_path}", headers=hdrs)
+            if _r.status_code != 200:
+                return
+            content = _r.text
+        content = re.sub(r'updated: \S+', f'updated: {date_str}', content)
+        content = re.sub(r'last_check: .+', f'last_check: {now_str}', content)
+        skip_total = results.get('skip', 0) + results.get('duplicate', 0)
+        stats_block = (
+            f"## 최근 등록 이력\n"
+            f"- **{now_str}**: 배치 {limit}개 → "
+            f"✅{results.get('success',0)} "
+            f"❌{results.get('fail',0)} "
+            f"⊘{skip_total} "
+            f"🚫{results.get('ip_blocked',0)}\n"
+        )
+        if "## 최근 등록 이력" in content:
+            content = re.sub(r'## 최근 등록 이력\n.*?(?=\n## |\Z)', stats_block, content, flags=re.DOTALL)
+        else:
+            content += f"\n\n{stats_block}"
+        async with httpx.AsyncClient(timeout=10) as _oc:
+            _rw = await _oc.put(
+                f"{_obs_url}/vault/{note_path}",
+                headers={**hdrs, "Content-Type": "text/markdown"},
+                content=content.encode("utf-8"),
+            )
+            print(f"[OBSIDIAN] 서비스노트 {'✅' if _rw.status_code in (200,204) else '⚠️ '+str(_rw.status_code)}", flush=True)
+    except Exception as e:
+        print(f"[OBSIDIAN] _update_obsidian_note 오류: {e}", flush=True)
+
+
 async def _enqueue_retry(channel: str, product: dict, error: str) -> None:
     """등록 실패 상품 → context_store 재시도 큐 저장 (3회 초과 시 텔레그램 알림)."""
     try:
@@ -3478,6 +3519,7 @@ async def pipeline_register_from_domeggook(
         f"❌ 실패: {results['fail']}개\n"
         f"⊘ 스킵: {results['skip']}개\n"
         f"🚫 IP차단: {results['ip_blocked']}개"))
+    asyncio.create_task(_update_obsidian_note(results, limit))
     return results
 
 
