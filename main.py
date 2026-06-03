@@ -1695,7 +1695,26 @@ def build_detail_html(
     )
     sec5 = f'<div {_WRAP}>{compare_html}</div>' + delivery_html
 
-    html = sec0 + sec1 + sec2 + sec3 + sec4 + sec5
+    # ⑦ GEO FAQ — ChatGPT·Perplexity·Google AI Overview 노출용 Q&A
+    geo_faq = ai.get("geo_faq") or []
+    if geo_faq:
+        qa_html = "".join(
+            f'<div style="border-bottom:1px solid #e8eaf6;padding:14px 0;">'
+            f'<p style="font-size:14px;font-weight:700;color:#1a73e8;margin:0 0 6px;">Q. {qa.get("q","")}</p>'
+            f'<p style="font-size:14px;color:#444;line-height:1.7;margin:0;">A. {qa.get("a","")}</p>'
+            f'</div>'
+            for qa in geo_faq[:3] if qa.get("q") and qa.get("a")
+        )
+        sec6 = (
+            f'<div {_WRAP}>'
+            f'<div style="background:#f3f4ff;border-radius:12px;padding:20px 18px;margin:16px 0;">'
+            f'<h4 style="font-size:15px;color:#3949ab;margin:0 0 12px;">🤖 자주 묻는 질문 (AI 검색 최적화)</h4>'
+            f'{qa_html}</div></div>'
+        )
+    else:
+        sec6 = ""
+
+    html = sec0 + sec1 + sec2 + sec3 + sec4 + sec6 + sec5
 
     # 모든 섹션이 비어있으면 최소 폴백 HTML 강제 생성
     if not html.strip():
