@@ -716,22 +716,44 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     # 상세 설명 HTML (공급사 상세페이지 이미지 포함)
     content = str(detail.get("content", "") or "") if detail else ""
 
+    # desc.contents.item에서 추가 이미지 파싱
+    _desc_html = str((detail.get("desc", {}) or {}).get("contents", {}).get("item", "") or "") if detail else ""
+    extra_images = extract_domeggook_images(_desc_html, main_url=image, max_count=5)
+
     return {
-        "code":          f"DG_{no}",
-        "name":          name,
-        "price":         price,
-        "image":         image,
-        "category":      category,
-        "stock":         stock,
-        "source":        "domeggook",
-        "_dg_no":        no,
-        "_dg_content":   content,
-        "_dg_img_count": img_count,
-        "_dg_img_use":   img_use_ok,
+        "code":             f"DG_{no}",
+        "name":             name,
+        "price":            price,
+        "image":            image,
+        "category":         category,
+        "stock":            stock,
+        "source":           "domeggook",
+        "_dg_no":           no,
+        "_dg_content":      content,
+        "_dg_img_count":    img_count,
+        "_dg_img_use":      img_use_ok,
+        "_dg_extra_images": extra_images,
     }
 
 
 import re as _re_img
+
+
+def extract_domeggook_images(desc_html: str, main_url: str = "", max_count: int = 5) -> list[str]:
+    """도매꾹 desc.contents.item HTML에서 추가 이미지 URL 파싱. 메인 이미지 중복 제외."""
+    if not desc_html:
+        return []
+    seen = {main_url} if main_url else set()
+    result = []
+    for m in _re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', desc_html, _re.I):
+        url = m.group(1).strip()
+        if not url.startswith("http") or url in seen:
+            continue
+        seen.add(url)
+        result.append(url)
+        if len(result) >= max_count:
+            break
+    return result
 
 
 # ─── 소싱 품질 필터 ──────────────────────────────────────────────────────────
@@ -1724,6 +1746,8 @@ async def generate_templated_detail(product: dict, ai: dict,
         # ② 한글 폰트 적용 + ③ 상품명 50자
         _KR_FONT = "Noto Sans KR"
         detail_txt = (ai.get("emotional_copy") or "")[:200]
+        # detail_image_sub: 추가 이미지 첫 번째 사용 (없으면 메인 이미지 폴백)
+        _sub_url = (product.get("_dg_extra_naver_urls") or [img_url])[0]
         layers_with_img = {
             # page-1: 상품 메인 이미지
             "main_image_container": {"image_url": img_url},
@@ -1735,7 +1759,7 @@ async def generate_templated_detail(product: dict, ai: dict,
             "feature2_text":        {"text": feature2,  "font_family": _KR_FONT},
             "feature3_text":        {"text": feature3,  "font_family": _KR_FONT},
             "detail_section_title": {"text": "상품 상세정보", "font_family": _KR_FONT},
-            "detail_image_sub":     {"image_url": img_url},
+            "detail_image_sub":     {"image_url": _sub_url},
             # page-4: 본문 + 배지
             "detail_body":          {"text": detail_txt, "font_family": _KR_FONT},
             "badge1_text":          {"text": "무료배송",   "font_family": _KR_FONT},
@@ -3173,6 +3197,28 @@ async def pipeline_register_from_domeggook(
                 results["skip"] += 1
                 continue
 
+            # 추가 이미지 네이버 CDN 업로드 (500px+, 50KB+ 필터)
+            _extra_naver_urls: list[str] = []
+            _extra_raw = p.get("_dg_extra_images") or []
+            if _extra_raw:
+                async with httpx.AsyncClient(timeout=15, follow_redirects=True) as _ec:
+                    for _eu in _extra_raw[:9]:
+                        try:
+                            _er = await _ec.get(_eu)
+                            if _er.status_code != 200 or len(_er.content) < 50 * 1024:
+                                continue
+                            from PIL import Image as _PIM
+                            _im = _PIM.open(_io.BytesIO(_er.content))
+                            if min(_im.size) < 500:
+                                continue
+                            _eu_naver = await naver_api.upload_detail_image(_er.content)
+                            _extra_naver_urls.append(_eu_naver)
+                        except Exception:
+                            pass
+                p["_dg_extra_naver_urls"] = _extra_naver_urls
+                asyncio.create_task(_tg_notify(
+                    f"[이미지파싱] {p.get('name','')[:30]} - {len(_extra_naver_urls)}장 추출"))
+
             headline_txt = ai.get("headline") or ai.get("banner_text") or p.get("name", "")[:18]
             dalle_banner_raw = await generate_dalle_banner(str(p.get("name", "")), headline_txt, _cat)
             if dalle_banner_raw:
@@ -3245,6 +3291,8 @@ async def pipeline_register_from_domeggook(
 
             payload = build_product_payload(p, ai, price, tags=ai.get("tags"), hot_trends=fashion_trends)
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
+            if _extra_naver_urls:
+                payload["originProduct"]["images"]["optionalImages"] = [{"url": u} for u in _extra_naver_urls[:9]]
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
 
