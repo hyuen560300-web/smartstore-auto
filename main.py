@@ -159,8 +159,6 @@ AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
 DOMEGGOOK_API_KEY          = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
 NAVER_DATALAB_CLIENT_ID    = os.environ.get("NAVER_DATALAB_CLIENT_ID", "")
 NAVER_DATALAB_CLIENT_SECRET = os.environ.get("NAVER_DATALAB_CLIENT_SECRET", "")
-TEMPLATED_API_KEY          = _clean_key(os.environ.get("TEMPLATED_API_KEY", ""))
-TEMPLATED_TEMPLATE_ID      = os.environ.get("TEMPLATED_TEMPLATE_ID", "")
 
 DOMEGGOOK_API_URL  = "https://domeggook.com/ssl/api/"
 DOMEGGOOK_IMG_BASE = "https://img.domeggook.com/"
@@ -1733,120 +1731,6 @@ def build_detail_html(
     return html
 
 
-# ─── Templated.io 상세페이지 이미지 생성 ─────────────────────────────────────
-async def _templated_render(layers: dict) -> list[str]:
-    """Templated API 공통 호출. render_url 리스트 반환 (실패 시 [])."""
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.post(
-            "https://api.templated.io/v1/render",
-            headers={"Authorization": f"Bearer {TEMPLATED_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={"template": TEMPLATED_TEMPLATE_ID, "layers": layers},
-        )
-        if r.status_code != 200:
-            print(f"[TEMPLATED] HTTP {r.status_code}: {r.text[:200]}", flush=True)
-            return []
-        data = r.json()
-        pages = data if isinstance(data, list) else [data]
-        return [p.get("render_url") or p.get("url", "") for p in pages if p.get("render_url") or p.get("url")]
-
-
-async def generate_templated_detail(product: dict, ai: dict,
-                                    public_img_url: str = "") -> str:
-    """Templated.io 4페이지 렌더 → 각 페이지 네이버 CDN 업로드 → 상세 HTML 블록 반환.
-    public_img_url: Naver CDN 등 외부 서버가 접근 가능한 이미지 URL (우선 사용).
-    실패 시 빈 문자열 반환 (폴백: DALL-E 또는 build_detail_html 사용)."""
-    if not TEMPLATED_API_KEY or not TEMPLATED_TEMPLATE_ID:
-        return ""
-    try:
-        sp = ai.get("selling_points") or []
-        rl = ai.get("recommend_list") or []
-        feature1 = (sp[0] if sp else (rl[0] if rl else ""))[:40]
-        feature2 = (sp[1] if len(sp) > 1 else (rl[1] if len(rl) > 1 else ""))[:40]
-        feature3 = (sp[2] if len(sp) > 2 else (rl[2] if len(rl) > 2 else ""))[:40]
-        price_txt = f"₩{int(product.get('price', 0)):,}"
-        # public_img_url(Naver CDN) 우선 — 없으면 원본 URL 사용
-        img_url   = (public_img_url or product.get("image") or "").strip()
-        _title_full = (ai.get("product_name") or str(product.get("name", "")))
-        # 20자 초과 시 Claude API로 핵심 키워드 추출해 배너 타이틀 압축
-        if len(_title_full) > 20 and ANTHROPIC_API_KEY:
-            try:
-                _tc = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-                _tr = await _tc.messages.create(
-                    model="claude-haiku-4-5-20251001", max_tokens=50,
-                    messages=[{"role": "user", "content":
-                        f"다음 상품명을 20자 이내 임팩트 있는 한 줄 카피로 만들어줘: {_title_full}"}]
-                )
-                title_txt = (_tr.content[0].text or "").strip()[:20]
-            except Exception:
-                title_txt = _title_full[:20]
-        else:
-            title_txt = _title_full[:20]
-        subtitle_txt = _title_full[:50]
-
-        _KR_FONT = "Noto Sans KR"
-        detail_txt = (ai.get("emotional_copy") or "")[:200]
-        # detail_image_sub: 추가 이미지 첫 번째 사용 (없으면 메인 이미지 폴백)
-        _sub_url = (product.get("_dg_extra_naver_urls") or [img_url])[0]
-        layers_with_img = {
-            # page-1: 상품 메인 이미지
-            "main_image_container": {"image_url": img_url},
-            # page-2: 타이틀/가격/부제목
-            "product_title":        {"text": title_txt,    "font_family": _KR_FONT, "autofit": "shrink"},
-            "subtitle":             {"text": subtitle_txt, "font_family": _KR_FONT},
-            "product_price":        {"text": price_txt},
-            # page-3: 특징 + 서브이미지
-            "feature1_text":        {"text": feature1,  "font_family": _KR_FONT},
-            "feature2_text":        {"text": feature2,  "font_family": _KR_FONT},
-            "feature3_text":        {"text": feature3,  "font_family": _KR_FONT},
-            "detail_section_title": {"text": "상품 상세정보", "font_family": _KR_FONT},
-            "detail_image_sub":     {"image_url": _sub_url},
-            # page-4: 본문 + 배지
-            "detail_body":          {"text": detail_txt, "font_family": _KR_FONT},
-            "badge1_text":          {"text": "무료배송",   "font_family": _KR_FONT},
-            "badge2_text":          {"text": "정품보장",   "font_family": _KR_FONT},
-            "badge3_text":          {"text": "빠른배송",   "font_family": _KR_FONT},
-            "footer_copyright":     {"text": "© THE HW MALL", "font_family": _KR_FONT},
-        }
-        layers_text_only = {k: v for k, v in layers_with_img.items() if "image_url" not in v}
-
-        # ① 요청 body 로그 (이미지 URL 정상 전달 확인)
-        print(f"[TEMPLATED] 요청 body: img_url={img_url[:80]!r} title={title_txt!r}", flush=True)
-
-        render_urls = await _templated_render(layers_with_img)
-        if not render_urls:
-            print("[TEMPLATED] 이미지 레이어 실패 → 텍스트 전용 재시도", flush=True)
-            render_urls = await _templated_render(layers_text_only)
-        if not render_urls:
-            return ""
-
-        # 4페이지 각각 네이버 CDN 업로드
-        naver_urls = []
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-            for url in render_urls:
-                try:
-                    img_resp = await c.get(url)
-                    img_resp.raise_for_status()
-                    naver_url = await naver_api.upload_detail_image(img_resp.content)
-                    naver_urls.append(naver_url)
-                except Exception as e:
-                    print(f"[TEMPLATED] 페이지 업로드 실패: {e}", flush=True)
-
-        if not naver_urls:
-            return ""
-
-        # 4페이지 → 상세 HTML 블록 (각 이미지 860px 고정)
-        imgs_html = "\n".join(
-            f'<img src="{u}" style="width:860px;max-width:100%;height:auto;display:block;margin:0 auto;">'
-            for u in naver_urls
-        )
-        html_block = f'<div style="margin:24px 0;">{imgs_html}</div>'
-        print(f"[TEMPLATED] ✅ {len(naver_urls)}페이지 상세이미지 완료", flush=True)
-        return html_block
-    except Exception as e:
-        print(f"[TEMPLATED] 실패 → 폴백: {e}", flush=True)
-        return ""
-
 
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
 PEXELS_KEYWORD_MAP = {
@@ -3272,13 +3156,9 @@ async def pipeline_register_from_domeggook(
             # 도매꾹 상세 설명 이미지 → Naver URL로 교체 (공급사 실제 스펙 이미지)
             dg_content_html = await _dg_content_to_naver_html(str(p.get("_dg_content", "")))
 
-            # Templated.io 4페이지 상세이미지 생성 (Naver CDN URL 전달 → hotlink 우회)
-            templated_html = await generate_templated_detail(p, ai,
-                                                              public_img_url=naver_img_url)
-
-            # Templated 실패 + 공급사 상세 없을 때만 DALL-E detail shot 폴백
+            # 공급사 상세 없을 때만 DALL-E detail shot 폴백
             detail_img_url = ""
-            if not templated_html and not dg_content_html:
+            if not dg_content_html:
                 dalle_detail_raw = await generate_dalle_detail_shot(
                     str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
                 if dalle_detail_raw:
@@ -3289,11 +3169,6 @@ async def pipeline_register_from_domeggook(
 
             detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url,
                                             product_name=str(p.get("name", "")))
-
-            # Templated 이미지 (4페이지) → build_detail_html 뒤에 추가
-            if templated_html:
-                detail_html += f'\n{templated_html}'
-                print(f"[상세페이지] Templated 이미지 추가 ✅", flush=True)
 
             # 도매꾹 상세 설명 이미지가 있으면 Templated 뒤에 추가
             if dg_content_html:
