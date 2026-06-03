@@ -1898,6 +1898,30 @@ async def _enqueue_retry(channel: str, product: dict, error: str) -> None:
         print(f"[RETRY-Q] 큐 추가 실패: {e}", flush=True)
 
 
+def _validate_copy_fields(ai: dict) -> tuple[bool, str, dict]:
+    corrected = dict(ai)
+    name = corrected.get("product_name", "")
+    if len(name) > 50:
+        corrected["product_name"] = name[:47] + "..."
+    headline = corrected.get("headline", "")
+    if len(headline) > 20:
+        corrected["headline"] = headline[:18] + "…"
+    tags = corrected.get("tags") or []
+    return len(tags) >= 10, f"태그 {len(tags)}개", corrected
+
+
+_HTML_SECTION_KEYS = [
+    "배너", "히어로", "후킹", "수치", "문제", "해결",
+    "갤러리", "상세", "사용법", "비교", "후기", "faq",
+    "스펙", "배송", "신뢰", "cta", "푸터",
+]
+
+
+def _count_html_sections(html: str) -> int:
+    h = html.lower()
+    return sum(1 for kw in _HTML_SECTION_KEYS if kw in h)
+
+
 # ─── 이미지 처리 ─────────────────────────────────────────────────────────────
 PEXELS_KEYWORD_MAP = {
     "티셔츠": "t-shirt", "바지": "pants", "아우터": "jacket outer",
@@ -3243,13 +3267,18 @@ async def pipeline_register_from_domeggook(
     registered_codes = load_registered_codes()
     registered_names = load_registered_names()
     print(f"[도매꾹파이프라인] 기등록: {len(registered_codes)}개(코드) / {len(registered_names)}개(이름) 제외", flush=True)
+    _proc_total = len(products[:limit])
+    _proc_n = 0
     results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0,
                "ip_blocked": 0, "errors": [], "source": "domeggook"}
 
     for p in products[:limit]:
         try:
+            _proc_n += 1
             code = str(p.get("code", ""))
             name_norm = _normalize_name(str(p.get("name", "")))
+            print(f"\n[STEP1] ({_proc_n}/{_proc_total}) 소싱검증: {str(p.get('name',''))[:30]}", flush=True)
+            # ─── STEP 1: 소싱 검증 ───
             if (code and code in registered_codes) or (name_norm and name_norm in registered_names):
                 results["duplicate"] += 1
                 continue
@@ -3258,6 +3287,7 @@ async def pipeline_register_from_domeggook(
             if not safe:
                 print(f"[IP감시관] 차단: {p.get('name','')} — {danger_kw}", flush=True)
                 results["ip_blocked"] += 1
+                asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - IP차단({str(danger_kw)[:20]})"))
                 continue
 
             review = await employee_review_analyst(str(p.get("name", "")), ANTHROPIC_API_KEY)
@@ -3268,11 +3298,27 @@ async def pipeline_register_from_domeggook(
                 "pain_points": review.get("pain_points", []),
                 "selling_points": review.get("selling_points", []),
             }
-            ai = await generate_product_copy(p, context)
-
-            ai["tags"] = await employee_tag_generator(
-                str(p.get("name", "")), str(p.get("category", "")),
-                review.get("selling_points", []), ANTHROPIC_API_KEY)
+            # ─── STEP 2: 카피/SEO 검증 (3회 재시도) ───
+            print(f"[STEP2] ({_proc_n}/{_proc_total}) 카피/SEO 검증", flush=True)
+            _copy_ok = False
+            ai = {}
+            for _copy_attempt in range(3):
+                ai = await generate_product_copy(p, context)
+                ai["tags"] = await employee_tag_generator(
+                    str(p.get("name", "")), str(p.get("category", "")),
+                    review.get("selling_points", []), ANTHROPIC_API_KEY)
+                _copy_ok, _copy_msg, ai = _validate_copy_fields(ai)
+                if _copy_ok:
+                    break
+                print(f"[STEP2] 재시도 {_copy_attempt+1}/3 — {_copy_msg}", flush=True)
+            if not _copy_ok:
+                _tags = ai.get("tags") or []
+                _base_tags = ["좋은상품", "추천상품", "베스트상품", "인기상품",
+                              "가성비", "프리미엄", "고품질", "특가", "한정수량", "당일배송"]
+                while len(_tags) < 10:
+                    _tags.append(_base_tags[len(_tags) % len(_base_tags)])
+                ai["tags"] = _tags[:10]
+                print(f"[STEP2] 태그 기본값 보완 → {len(ai['tags'])}개", flush=True)
 
             competitor_prices = await search_naver_shopping(str(p.get("name", "")))
             price_result = await employee_price_optimizer(
@@ -3286,6 +3332,7 @@ async def pipeline_register_from_domeggook(
             if not naver_img_url:
                 print(f"[이미지] SKIP: {p.get('name','')}", flush=True)
                 results["skip"] += 1
+                asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - 대표이미지없음"))
                 continue
 
             # 추가 이미지 네이버 CDN 업로드 (500px+, 50KB+ 필터)
@@ -3322,16 +3369,24 @@ async def pipeline_register_from_domeggook(
             # 도매꾹 상세 설명 이미지 → Naver URL로 교체 (공급사 실제 스펙 이미지)
             dg_content_html = await _dg_content_to_naver_html(str(p.get("_dg_content", "")))
 
-            # Claude HTML 상세페이지 생성 (도매꾹 원본 이미지 URL 직접 삽입)
+            # ─── STEP 3: HTML 생성 및 검증 ───
+            print(f"[STEP3] ({_proc_n}/{_proc_total}) HTML 생성 및 검증", flush=True)
             _all_imgs = [naver_img_url] + (p.get("_dg_extra_naver_urls") or [])
             claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
-            if claude_html:
+            _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 12
+            if not _html_ok and claude_html:
+                _sec_cnt = _count_html_sections(claude_html)
+                print(f"[STEP3] HTML 재생성 시도 (길이:{len(claude_html)}, 섹션:{_sec_cnt}/17)", flush=True)
+                _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+                if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 12:
+                    claude_html = _claude_html2
+                    _html_ok = True
+            if _html_ok:
                 detail_html = claude_html
                 if dg_content_html:
                     detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
                     print(f"[상세페이지] 도매꾹 상세 이미지 추가 ✅", flush=True)
             else:
-                # Claude 3회 실패 → DALL-E + build_detail_html 폴백
                 detail_img_url = ""
                 if not dg_content_html:
                     dalle_detail_raw = await generate_dalle_detail_shot(
@@ -3346,6 +3401,7 @@ async def pipeline_register_from_domeggook(
                 if dg_content_html:
                     detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
                     print(f"[상세페이지] 도매꾹 상세 이미지 추가 ✅ (폴백모드)", flush=True)
+                print(f"[STEP3] HTML 폴백 사용 (길이:{len(detail_html)})", flush=True)
 
             _, reject_kws = _get_scene_context(str(p.get("name", "")))
             qc_result = await run_qc_pipeline(
@@ -3367,14 +3423,17 @@ async def pipeline_register_from_domeggook(
                         else:
                             results["fail"] += 1
                             results["errors"].append(f"{p.get('name','?')[:20]}: QC재시도실패")
+                            asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - QC재시도실패"))
                             continue
                     else:
                         results["fail"] += 1
                         results["errors"].append(f"{p.get('name','?')[:20]}: DALLE재생성실패")
+                        asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - DALLE재생성실패"))
                         continue
                 else:
                     results["fail"] += 1
                     results["errors"].append(f"{p.get('name','?')[:20]}: QC{qc_result['stage']}단계실패")
+                    asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - QC{qc_result['stage']}단계실패"))
                     continue
 
             payload = build_product_payload(p, ai, price, tags=ai.get("tags"), hot_trends=fashion_trends)
@@ -3384,6 +3443,8 @@ async def pipeline_register_from_domeggook(
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
 
+            # ─── STEP 4: 등록 + Obsidian 저장 + 진행률 알림 ───
+            print(f"[STEP4] ({_proc_n}/{_proc_total}) 등록 시작", flush=True)
             reg_result = await naver_api.register_product(payload)
             if code:
                 save_registered_code(code)
@@ -3396,8 +3457,7 @@ async def pipeline_register_from_domeggook(
             _product_url = (f"https://smartstore.naver.com/thehwmall/products/{_pid}"
                             if _pid else "https://smartstore.naver.com/thehwmall")
             print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원) → {_product_url}", flush=True)
-            asyncio.create_task(_tg_notify(f"[등록완료] {final_name} - {_product_url}"))
-            # Obsidian + context_store 저장
+            asyncio.create_task(_tg_notify(f"[{_proc_n}/{_proc_total}] {final_name} ✅\n{_product_url}"))
             asyncio.create_task(_save_to_obsidian(
                 final_name, _cat, detail_html, ai, ai.get("tags") or [],
                 {"smartstore": _product_url}))
@@ -3412,14 +3472,12 @@ async def pipeline_register_from_domeggook(
 
     print(f"[도매꾹파이프라인] 완료 — 성공:{results['success']} 실패:{results['fail']} "
           f"스킵:{results['skip']} IP차단:{results['ip_blocked']}", flush=True)
-    # 일일 리포트 텔레그램 전송
-    if results["success"] or results["fail"]:
-        asyncio.create_task(_tg_notify(
-            f"[스마트스토어 일일리포트]\n"
-            f"✅ 성공: {results['success']}개\n"
-            f"❌ 실패: {results['fail']}개\n"
-            f"⊘ 스킵: {results['skip']}개\n"
-            f"🚫 IP차단: {results['ip_blocked']}개"))
+    asyncio.create_task(_tg_notify(
+        f"[스마트스토어 등록완료]\n"
+        f"✅ 성공: {results['success']}개\n"
+        f"❌ 실패: {results['fail']}개\n"
+        f"⊘ 스킵: {results['skip']}개\n"
+        f"🚫 IP차단: {results['ip_blocked']}개"))
     return results
 
 
