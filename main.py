@@ -3491,6 +3491,7 @@ async def pipeline_register_from_domeggook(
                 save_registered_code(code)
             final_name = ai.get("product_name") or p.get("name", "")
             save_registered_name(final_name)
+            save_registered_name(p.get("name", ""))  # 도매꾹 원본명도 저장 — STEP1 name dedup 키와 일치 (memory: domeggook-dedup-broken)
             results["success"] += 1
             _pid = (reg_result.get("originProductNo")
                     or reg_result.get("channelProducts", [{}])[0].get("channelProductNo", "")
