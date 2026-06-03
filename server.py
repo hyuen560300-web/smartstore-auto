@@ -61,6 +61,9 @@ from main import (
     pipeline_fix_products,
     NAVER_BASE,
     update_existing_products_seo,
+    generate_claude_html_detail,
+    _count_html_sections,
+    _validate_copy_fields,
 )
 from employees import (
     employee_season_planner,
@@ -3604,6 +3607,160 @@ async def command_endpoint(request: Request, background_tasks: BackgroundTasks):
 
     print(f"[CMD] {_COMMAND_MAP_SS[cmd]} 실행 시작 ({detail})", flush=True)
     return JSONResponse({"status": "accepted", "command": cmd, "label": _COMMAND_MAP_SS[cmd], "params": params})
+
+
+_HTML_MARKERS = ("hero", "Noto Sans KR")
+_READONLY_KEYS = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                  "statusFrom", "totalSalesQuantity"}
+_FALLBACK_TAGS = ["좋은상품", "추천상품", "베스트상품", "인기상품", "가성비",
+                  "프리미엄", "고품질", "특가", "한정수량", "당일배송"]
+
+
+async def _run_fix_html_all(limit: int = 200) -> None:
+    """① 전체 스캔 → ② Claude HTML 재적용 → ③ 중복 제거 → ④ 텔레그램"""
+    results = {"scanned": 0, "html_fixed": 0, "html_fail": 0, "dup_deleted": 0, "errors": []}
+
+    # ── ① 전체 상품 수집 (50개씩 페이지) ────────────────────────────────────
+    all_items: list[dict] = []
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=50, days=365)
+            chunk = resp.get("contents", [])
+            if not chunk:
+                break
+            all_items.extend(chunk)
+            total = resp.get("totalElements", len(chunk))
+            print(f"[FIXHTML] 페이지 {page}: {len(chunk)}개 (누적 {len(all_items)}/{total})", flush=True)
+            if len(all_items) >= total or len(chunk) < 50:
+                break
+            page += 1
+            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"[FIXHTML] 페이지 {page} 조회 실패: {e}", flush=True)
+            break
+
+    results["scanned"] = len(all_items)
+    print(f"[FIXHTML] 총 {len(all_items)}개 스캔 완료", flush=True)
+
+    # ── ③ 중복 감지 및 제거 (sellerManagementCode 기준) ─────────────────────
+    code_map: dict[str, list[dict]] = {}
+    for item in all_items:
+        origin = item.get("originProduct", {})
+        prod_no = str(item.get("originProductNo", ""))
+        seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+        if seller_code:
+            code_map.setdefault(seller_code, []).append({"no": prod_no, "item": item})
+
+    for code, entries in code_map.items():
+        if len(entries) <= 1:
+            continue
+        entries.sort(key=lambda x: int(x["no"]) if x["no"].isdigit() else 0)
+        for to_del in entries[:-1]:
+            try:
+                ok = await naver_api.delete_product(to_del["no"])
+                if ok:
+                    results["dup_deleted"] += 1
+                    print(f"[FIXHTML] 중복 삭제 ✅ {to_del['no']} ({code})", flush=True)
+                else:
+                    print(f"[FIXHTML] 중복 삭제 실패 {to_del['no']}", flush=True)
+            except Exception as e:
+                print(f"[FIXHTML] 중복 삭제 오류 {to_del['no']}: {e}", flush=True)
+            await asyncio.sleep(0.5)
+
+    # ── ② HTML 미적용 상품 추출 → Claude HTML 재생성 ─────────────────────────
+    fix_targets = [
+        item for item in all_items
+        if not any(m in (item.get("originProduct", {}).get("detailContent", "") or "")
+                   for m in _HTML_MARKERS)
+    ]
+    print(f"[FIXHTML] HTML 미적용: {len(fix_targets)}개 → 재적용 시작", flush=True)
+
+    for idx, item in enumerate(fix_targets[:limit], 1):
+        origin = item.get("originProduct", {})
+        prod_no = str(item.get("originProductNo", ""))
+        name = origin.get("name", "")
+        cat = str(origin.get("leafCategoryId") or origin.get("wholeCategoryId") or "")
+        price = origin.get("salePrice", 0)
+        rep_img = (origin.get("images") or {}).get("representativeImage") or {}
+        img_url = rep_img.get("url", "") if isinstance(rep_img, dict) else ""
+
+        print(f"[FIXHTML] ({idx}/{len(fix_targets)}) {name[:35]}", flush=True)
+        try:
+            p_dict = {"name": name, "category": cat, "price": price, "code": prod_no}
+            context = {"season": "", "trends": [], "pain_points": [], "selling_points": []}
+
+            # STEP A: 카피 + 태그
+            ai = await generate_product_copy(p_dict, context)
+            ai["tags"] = await employee_tag_generator(name, cat, [])
+            _, _, ai = _validate_copy_fields(ai)
+            tags = list(ai.get("tags") or [])
+            while len(tags) < 10:
+                tags.append(_FALLBACK_TAGS[len(tags) % len(_FALLBACK_TAGS)])
+            ai["tags"] = tags[:10]
+
+            # STEP B: Claude HTML (최대 2회)
+            img_urls = [img_url] if img_url else []
+            html = await generate_claude_html_detail(p_dict, ai, img_urls)
+            ok_html = bool(html) and len(html) >= 5000 and _count_html_sections(html) >= 12
+            if not ok_html:
+                html2 = await generate_claude_html_detail(p_dict, ai, img_urls)
+                if html2 and len(html2) >= 5000 and _count_html_sections(html2) >= 12:
+                    html = html2
+                    ok_html = True
+
+            if not html:
+                results["html_fail"] += 1
+                results["errors"].append(f"{name[:25]}: HTML 생성 실패")
+                continue
+
+            # STEP C: Naver API 업데이트 (전체 origin merge)
+            full_payload = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+            full_payload["detailContent"] = html
+            ok, err = await naver_api.update_product(prod_no, full_payload)
+            if ok:
+                results["html_fixed"] += 1
+                print(f"[FIXHTML] ✅ {name[:35]}", flush=True)
+            else:
+                results["html_fail"] += 1
+                results["errors"].append(f"{name[:25]}: {err[:80]}")
+                print(f"[FIXHTML] ❌ {name[:35]}: {err[:80]}", flush=True)
+
+        except Exception as e:
+            results["html_fail"] += 1
+            results["errors"].append(f"{name[:25]}: {str(e)[:80]}")
+            print(f"[FIXHTML] 오류 {name[:35]}: {e}", flush=True)
+
+        await asyncio.sleep(1.5)
+
+    # ── ④ 텔레그램 ──────────────────────────────────────────────────────────
+    try:
+        from telegram_notifier import send_message
+        status_icon = "✅" if results["html_fail"] == 0 else "⚠️"
+        msg = (
+            f"{status_icon} 스마트스토어 HTML 재적용 완료\n\n"
+            f"📦 전체 스캔: {results['scanned']}개\n"
+            f"🔧 HTML 재적용: {results['html_fixed']}개\n"
+            f"❌ 실패: {results['html_fail']}개\n"
+            f"🗑️ 중복 제거: {results['dup_deleted']}개"
+        )
+        if results["errors"]:
+            msg += f"\n\n주요 오류:\n" + "\n".join(f"• {e}" for e in results["errors"][:5])
+        send_message(msg)
+    except Exception as e:
+        print(f"[FIXHTML] 텔레그램 실패: {e}", flush=True)
+
+    print(f"[FIXHTML] 전체 완료 → {results}", flush=True)
+
+
+@app.post("/fix-html-all")
+async def fix_html_all(background_tasks: BackgroundTasks, limit: int = 200):
+    """① 전체 스캔 ② Claude HTML 미적용 상품 재생성 ③ 중복 제거 ④ 텔레그램"""
+    background_tasks.add_task(_run_fix_html_all, limit)
+    return JSONResponse({
+        "status": "accepted",
+        "message": f"HTML 재적용 + 중복 제거 시작 (최대 {limit}개)",
+    })
 
 
 if __name__ == "__main__":
