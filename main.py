@@ -1842,18 +1842,24 @@ async def _save_to_obsidian(product_name: str, category: str, detail_html: str,
                 "value": md, "category": "product_register",
             })
         _obs_url = os.environ.get("OBSIDIAN_API_URL", "http://127.0.0.1:27123")
-        _obs_key = "fc0baa3f6a6363c3174155ae5a3367bda267fcef7ccfe7e05534c3465600c261"
+        _obs_key = os.environ.get("OBSIDIAN_API_KEY", "fc0baa3f6a6363c3174155ae5a3367bda267fcef7ccfe7e05534c3465600c261")
         try:
-            async with httpx.AsyncClient(timeout=5) as _oc:
+            async with httpx.AsyncClient(timeout=10) as _oc:
                 r = await _oc.put(
                     f"{_obs_url}/vault/{path}",
-                    headers={"Authorization": f"Bearer {_obs_key}", "Content-Type": "text/markdown"},
+                    headers={
+                        "Authorization": f"Bearer {_obs_key}",
+                        "Content-Type": "text/markdown",
+                        "ngrok-skip-browser-warning": "1",
+                    },
                     content=md.encode("utf-8"),
                 )
                 if r.status_code in (200, 204):
                     print(f"[OBSIDIAN] ✅ {path}", flush=True)
-        except Exception:
-            pass  # Railway에서는 로컬 Obsidian 미접근 → context_store로 대체
+                else:
+                    print(f"[OBSIDIAN] ⚠️ {r.status_code} {path}", flush=True)
+        except Exception as _oe:
+            print(f"[OBSIDIAN] 연결 실패: {_oe}", flush=True)
     except Exception as e:
         print(f"[OBSIDIAN] 오류: {e}", flush=True)
 
