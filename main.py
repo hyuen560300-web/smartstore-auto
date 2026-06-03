@@ -551,6 +551,28 @@ class NaverCommerceAPI:
             )
             return r.status_code == 200
 
+    async def count_sale_products(self) -> int:
+        """현재 판매중(SALE) 상품 수만 조회."""
+        try:
+            now = datetime.now(timezone.utc)
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=await self._headers(),
+                    json={
+                        "productStatusTypes": ["SALE"],
+                        "page": 1,
+                        "size": 1,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": "2020-01-01",
+                        "toDate": now.strftime("%Y-%m-%d"),
+                    },
+                )
+                return int(r.json().get("totalElements", 0)) if r.ok else 0
+        except Exception:
+            return 0
+
     async def delete_product(self, product_id: str) -> bool:
         """상품 삭제"""
         async with httpx.AsyncClient(timeout=15) as c:
@@ -3274,6 +3296,15 @@ async def pipeline_register_from_domeggook(
         employee_price_optimizer, employee_tag_generator,
     )
     print(f"[도매꾹파이프라인] 시작 — limit={limit}", flush=True)
+
+    # ── 99개 한도 체크 ──
+    _cur_sale = await naver_api.count_sale_products()
+    if _cur_sale >= 99:
+        msg = f"[도매꾹파이프라인] 등록 한도 도달({_cur_sale}/99) — 등록 건너뜀"
+        print(msg, flush=True)
+        return {"status": "limit_reached", "current": _cur_sale, "limit": 99, "message": msg}
+    limit = min(limit, 99 - _cur_sale)
+    print(f"[도매꾹파이프라인] 현재 {_cur_sale}개, 이번 최대 {limit}개 등록", flush=True)
 
     # ① 도매꾹 API 상품 수집 (pool = limit * 3 으로 sourcing manager 선별 여유)
     products = await fetch_domeggook_products(

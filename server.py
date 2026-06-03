@@ -64,6 +64,7 @@ from main import (
     generate_claude_html_detail,
     _count_html_sections,
     _validate_copy_fields,
+    _tg_notify,
 )
 from employees import (
     employee_season_planner,
@@ -3295,7 +3296,7 @@ async def startup_event():
             print(f"[SCHED] 자동 정리 오류: {e}", flush=True)
 
     async def job_register_products():
-        """매일 08:00 / 12:00 / 20:00 — next-excel 다운로드 후 상품 11개 등록 (하루 33개)"""
+        """매일 09:00 / 13:00 / 20:00 — next-excel 다운로드 후 상품 등록 (99개 한도)"""
         if os.getenv("AUTO_REGISTER_ENABLED", "true").lower() != "true":
             print("[SCHED] 상품 자동 등록 비활성화 (AUTO_REGISTER_ENABLED=false)", flush=True)
             return
@@ -3307,11 +3308,17 @@ async def startup_event():
         if len(_codes_now) == 0 and len(_names_now) == 0:
             print("[SCHED] 상품 등록 건너뜀 — 동기화 후에도 codes·names 모두 0개 (비정상 상태, 중복 방지)", flush=True)
             return
-        print("[SCHED] 상품 자동 등록 시작", flush=True)
+        # ── 99개 한도 체크 ──
+        _cur = await naver_api.count_sale_products()
+        if _cur >= 99:
+            print(f"[SCHED] 상품 한도 도달({_cur}/99) — 등록 건너뜀", flush=True)
+            return
+        _slots = min(11, 99 - _cur)
+        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/99, 이번:{_slots}개)", flush=True)
         try:
             excel_path = await _next_excel_internal()
             if excel_path:
-                await pipeline_register_products(excel_path, limit=11)
+                await pipeline_register_products(excel_path, limit=_slots)
         except Exception as e:
             print(f"[SCHED] 상품 등록 오류: {e}", flush=True)
 
@@ -3759,6 +3766,91 @@ async def fix_html_all(background_tasks: BackgroundTasks, limit: int = 200):
     return JSONResponse({
         "status": "accepted",
         "message": f"HTML 재적용 + 중복 제거 시작 (최대 {limit}개)",
+    })
+
+
+async def _run_suspend_excess(keep: int = 99) -> None:
+    """판매중 상품 중 최신 keep개만 남기고 나머지 판매중지.
+    originProductNo 내림차순(최신순) 정렬 → keep+1번째부터 SUSPENSION."""
+    print(f"[SUSPEND-EXCESS] 판매중지 시작 — 최신 {keep}개 유지", flush=True)
+
+    # 1. 전체 SALE 상품 수집
+    all_sale: list[dict] = []
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=100, days=3650)
+        except Exception as e:
+            print(f"[SUSPEND-EXCESS] 목록 조회 오류(p{page}): {e}", flush=True)
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for prod in contents:
+            if prod.get("originProduct", {}).get("statusType") == "SALE":
+                all_sale.append(prod)
+        if len(contents) < 100:
+            break
+        page += 1
+        await asyncio.sleep(0.5)
+
+    total_sale = len(all_sale)
+    excess = total_sale - keep
+    print(f"[SUSPEND-EXCESS] SALE 상품 {total_sale}개, 초과 {max(0,excess)}개 판매중지 예정", flush=True)
+
+    if excess <= 0:
+        await _tg_notify(f"✅ 판매중지 불필요 — 현재 SALE {total_sale}개 (한도 {keep}개 이하)")
+        return
+
+    # 2. originProductNo 내림차순(최신순) 정렬 → 오래된 것이 뒤로
+    all_sale.sort(key=lambda x: int(x.get("originProductNo", 0)), reverse=True)
+    to_suspend = all_sale[keep:]
+
+    # 대상 목록 텔레그램 발송
+    names_preview = "\n".join(
+        f"  {i+1}. {p.get('originProduct',{}).get('name','')[:25]} (#{p.get('originProductNo','')})"
+        for i, p in enumerate(to_suspend[:20])
+    )
+    if len(to_suspend) > 20:
+        names_preview += f"\n  ... 외 {len(to_suspend)-20}개"
+    await _tg_notify(f"[스마트스토어] 판매중지 대상 {len(to_suspend)}개:\n{names_preview}")
+
+    # 3. 1개씩 판매중지
+    suspended = 0
+    failed = 0
+    for i, prod in enumerate(to_suspend):
+        pid  = str(prod.get("originProductNo", ""))
+        name = prod.get("originProduct", {}).get("name", "")[:30]
+        ok   = await naver_api.set_product_status(pid, "SUSPENSION")
+        if ok:
+            suspended += 1
+            print(f"[SUSPEND-EXCESS] ✅ ({i+1}/{len(to_suspend)}) {name}", flush=True)
+        else:
+            failed += 1
+            print(f"[SUSPEND-EXCESS] ❌ ({i+1}/{len(to_suspend)}) {name}", flush=True)
+        # 10개마다 중간 보고
+        if (i + 1) % 10 == 0:
+            await _tg_notify(f"[판매중지] 진행 중 {i+1}/{len(to_suspend)} — 완료:{suspended} 실패:{failed}")
+        await asyncio.sleep(0.4)
+
+    # 4. 최종 요약
+    final_sale = total_sale - suspended
+    msg = (
+        f"✅ 판매중지 완료\n"
+        f"처리: {len(to_suspend)}개 → 완료:{suspended} 실패:{failed}\n"
+        f"현재 SALE 상품: {final_sale}개 (목표 {keep}개)"
+    )
+    await _tg_notify(msg)
+    print(f"[SUSPEND-EXCESS] 완료 — suspended:{suspended} failed:{failed}", flush=True)
+
+
+@app.post("/suspend-excess")
+async def suspend_excess_products(background_tasks: BackgroundTasks, keep: int = 99):
+    """판매중 상품 keep개 초과분 판매중지 (최신 keep개 유지, 기본 99개)."""
+    background_tasks.add_task(_run_suspend_excess, keep)
+    return JSONResponse({
+        "status": "processing",
+        "message": f"판매중지 작업 시작 — 최신 {keep}개 유지, 초과분 SUSPENSION 처리 중",
     })
 
 
