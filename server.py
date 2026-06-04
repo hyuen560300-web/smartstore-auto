@@ -3954,29 +3954,54 @@ async def debug_restore_one():
     import httpx as _hx
     from main import NAVER_BASE
 
-    # 1) SUSPENSION 상품 1개 조회
-    resp = await naver_api.list_products(page=1, size=10, days=3650)
-    contents = resp.get("contents", [])
-    target = next((p for p in contents if p.get("originProduct", {}).get("statusType") == "SUSPENSION"), None)
-    if not target:
-        return JSONResponse({"error": "SUSPENSION 상품 없음"})
-
-    pid = str(target.get("originProductNo", ""))
-    origin = target.get("originProduct", {})
-    name = origin.get("name", "")[:30]
-
-    # 2) 방법 A: 전체 페이로드 + statusType=SALE
-    payload_a = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
-    payload_a["statusType"] = "SALE"
-
     headers = await naver_api._headers()
     async with _hx.AsyncClient(timeout=30) as c:
+        # 1) 원시 검색 API — SUSPENSION 상품 ID 직접 조회
+        r_search = await c.post(
+            f"{NAVER_BASE}/v1/products/search",
+            headers=headers,
+            json={
+                "productStatusTypes": ["SUSPENSION"],
+                "page": 1, "size": 3,
+                "orderType": "NO",
+                "periodType": "PROD_REG_DAY",
+                "fromDate": "2020-01-01",
+                "toDate": "2030-12-31",
+            },
+        )
+        search_data = r_search.json() if r_search.status_code == 200 else {}
+        contents = search_data.get("contents", [])
+        total = search_data.get("totalElements", 0)
+
+        if not contents:
+            return JSONResponse({
+                "search_status": r_search.status_code,
+                "search_body": r_search.text[:800],
+                "total_suspension": total,
+                "error": "검색 결과 없음",
+            })
+
+        pid = str(contents[0].get("originProductNo", ""))
+
+        # 2) 상세 조회
+        r_detail = await c.get(
+            f"{NAVER_BASE}/v2/products/origin-products/{pid}",
+            headers=headers,
+        )
+        origin = {}
+        if r_detail.status_code == 200:
+            origin = r_detail.json().get("originProduct", {})
+
+        # 3) 방법 A: 전체 페이로드 + statusType=SALE
+        payload_a = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+        payload_a["statusType"] = "SALE"
         r_a = await c.put(
             f"{NAVER_BASE}/v2/products/origin-products/{pid}",
             headers=headers,
             json={"originProduct": payload_a},
         )
-        # 방법 B: 최소 페이로드
+
+        # 4) 방법 B: 최소 페이로드
         r_b = await c.put(
             f"{NAVER_BASE}/v2/products/origin-products/{pid}",
             headers=headers,
@@ -3984,13 +4009,14 @@ async def debug_restore_one():
         )
 
     return JSONResponse({
+        "total_suspension": total,
         "product_id": pid,
-        "name": name,
-        "origin_status": origin.get("statusType"),
+        "detail_status": r_detail.status_code,
+        "origin_statusType": origin.get("statusType"),
         "origin_keys": list(origin.keys()),
         "payload_a_keys": list(payload_a.keys()),
-        "method_a": {"status": r_a.status_code, "body": r_a.text[:800]},
-        "method_b": {"status": r_b.status_code, "body": r_b.text[:800]},
+        "method_a": {"http": r_a.status_code, "body": r_a.text[:600]},
+        "method_b": {"http": r_b.status_code, "body": r_b.text[:600]},
     })
 
 
