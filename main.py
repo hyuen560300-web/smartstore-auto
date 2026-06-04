@@ -3304,13 +3304,13 @@ async def pipeline_register_from_domeggook(
     )
     print(f"[도매꾹파이프라인] 시작 — limit={limit}", flush=True)
 
-    # ── 99개 한도 체크 ──
+    # ── 1000개 한도 체크 ──
     _cur_sale = await naver_api.count_sale_products()
-    if _cur_sale >= 99:
-        msg = f"[도매꾹파이프라인] 등록 한도 도달({_cur_sale}/99) — 등록 건너뜀"
+    if _cur_sale >= 1000:
+        msg = f"[도매꾹파이프라인] 등록 한도 도달({_cur_sale}/1000) — 등록 건너뜀"
         print(msg, flush=True)
-        return {"status": "limit_reached", "current": _cur_sale, "limit": 99, "message": msg}
-    limit = min(limit, 99 - _cur_sale)
+        return {"status": "limit_reached", "current": _cur_sale, "limit": 1000, "message": msg}
+    limit = min(limit, 1000 - _cur_sale)
     print(f"[도매꾹파이프라인] 현재 {_cur_sale}개, 이번 최대 {limit}개 등록", flush=True)
 
     # ① 도매꾹 API 상품 수집 (pool = limit * 3 으로 sourcing manager 선별 여유)

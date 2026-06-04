@@ -3296,7 +3296,7 @@ async def startup_event():
             print(f"[SCHED] 자동 정리 오류: {e}", flush=True)
 
     async def job_register_products():
-        """매일 09:00 / 13:00 / 20:00 — next-excel 다운로드 후 상품 등록 (99개 한도)"""
+        """매일 09:00 / 13:00 / 20:00 — next-excel 다운로드 후 상품 등록 (1000개 한도)"""
         if os.getenv("AUTO_REGISTER_ENABLED", "true").lower() != "true":
             print("[SCHED] 상품 자동 등록 비활성화 (AUTO_REGISTER_ENABLED=false)", flush=True)
             return
@@ -3308,13 +3308,15 @@ async def startup_event():
         if len(_codes_now) == 0 and len(_names_now) == 0:
             print("[SCHED] 상품 등록 건너뜀 — 동기화 후에도 codes·names 모두 0개 (비정상 상태, 중복 방지)", flush=True)
             return
-        # ── 99개 한도 체크 ──
+        # ── 1000개 한도 체크 ──
         _cur = await naver_api.count_sale_products()
-        if _cur >= 99:
-            print(f"[SCHED] 상품 한도 도달({_cur}/99) — 등록 건너뜀", flush=True)
+        if _cur >= 1000:
+            msg = f"[스마트스토어] 상품 등록 한도 도달 ({_cur}/1000) — 자동 등록 중단"
+            print(msg, flush=True)
+            await _tg_notify(msg)
             return
-        _slots = min(11, 99 - _cur)
-        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/99, 이번:{_slots}개)", flush=True)
+        _slots = min(11, 1000 - _cur)
+        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/1000, 이번:{_slots}개)", flush=True)
         try:
             excel_path = await _next_excel_internal()
             if excel_path:
