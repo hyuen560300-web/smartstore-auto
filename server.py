@@ -3920,6 +3920,23 @@ async def restore_all_sale(background_tasks: BackgroundTasks):
     })
 
 
+@app.get("/product-count")
+async def product_count():
+    """네이버 API 기준 실제 SALE / SUSPENSION 수 조회."""
+    sale_count = await naver_api.count_sale_products()
+    # SUSPENSION 수: list_products totalElements - sale_count
+    try:
+        resp = await naver_api.list_products(page=1, size=1, days=3650)
+        total = resp.get("totalElements", 0)
+    except Exception:
+        total = sale_count
+    return JSONResponse({
+        "sale": sale_count,
+        "suspension": max(0, total - sale_count),
+        "total": total,
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
