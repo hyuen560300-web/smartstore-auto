@@ -3948,6 +3948,52 @@ async def product_count():
     })
 
 
+@app.get("/debug-restore-one")
+async def debug_restore_one():
+    """SUSPENSION 상품 1개를 SALE로 복구 시도 — API 오류 응답 전체 반환 (디버그용)."""
+    import httpx as _hx
+    from main import NAVER_BASE
+
+    # 1) SUSPENSION 상품 1개 조회
+    resp = await naver_api.list_products(page=1, size=10, days=3650)
+    contents = resp.get("contents", [])
+    target = next((p for p in contents if p.get("originProduct", {}).get("statusType") == "SUSPENSION"), None)
+    if not target:
+        return JSONResponse({"error": "SUSPENSION 상품 없음"})
+
+    pid = str(target.get("originProductNo", ""))
+    origin = target.get("originProduct", {})
+    name = origin.get("name", "")[:30]
+
+    # 2) 방법 A: 전체 페이로드 + statusType=SALE
+    payload_a = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+    payload_a["statusType"] = "SALE"
+
+    headers = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=30) as c:
+        r_a = await c.put(
+            f"{NAVER_BASE}/v2/products/origin-products/{pid}",
+            headers=headers,
+            json={"originProduct": payload_a},
+        )
+        # 방법 B: 최소 페이로드
+        r_b = await c.put(
+            f"{NAVER_BASE}/v2/products/origin-products/{pid}",
+            headers=headers,
+            json={"originProduct": {"statusType": "SALE"}},
+        )
+
+    return JSONResponse({
+        "product_id": pid,
+        "name": name,
+        "origin_status": origin.get("statusType"),
+        "origin_keys": list(origin.keys()),
+        "payload_a_keys": list(payload_a.keys()),
+        "method_a": {"status": r_a.status_code, "body": r_a.text[:800]},
+        "method_b": {"status": r_b.status_code, "body": r_b.text[:800]},
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
