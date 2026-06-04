@@ -552,24 +552,32 @@ class NaverCommerceAPI:
             return r.status_code == 200
 
     async def count_sale_products(self) -> int:
-        """현재 판매중(SALE) 상품 수만 조회."""
+        """현재 판매중(SALE) 상품 수 조회.
+        Naver 검색 API는 단일 상태 필터([\"SALE\"])에서 0을 반환하는 버그가 있어
+        전체 수(SALE+SUSPENSION) - SUSPENSION 수로 계산한다."""
         try:
             now = datetime.now(timezone.utc)
+            base_params = {
+                "page": 1, "size": 1,
+                "orderType": "NO",
+                "periodType": "PROD_REG_DAY",
+                "fromDate": "2020-01-01",
+                "toDate": now.strftime("%Y-%m-%d"),
+            }
             async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.post(
+                r_all = await c.post(
                     f"{NAVER_BASE}/v1/products/search",
                     headers=await self._headers(),
-                    json={
-                        "productStatusTypes": ["SALE"],
-                        "page": 1,
-                        "size": 1,
-                        "orderType": "NO",
-                        "periodType": "PROD_REG_DAY",
-                        "fromDate": "2020-01-01",
-                        "toDate": now.strftime("%Y-%m-%d"),
-                    },
+                    json={**base_params, "productStatusTypes": ["SALE", "SUSPENSION"]},
                 )
-                return int(r.json().get("totalElements", 0)) if r.ok else 0
+                r_sus = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=await self._headers(),
+                    json={**base_params, "productStatusTypes": ["SUSPENSION"]},
+                )
+            total = int(r_all.json().get("totalElements", 0)) if r_all.ok else 0
+            suspension = int(r_sus.json().get("totalElements", 0)) if r_sus.ok else 0
+            return max(0, total - suspension)
         except Exception:
             return 0
 
