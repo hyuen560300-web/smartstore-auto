@@ -4020,6 +4020,66 @@ async def debug_restore_one():
     })
 
 
+@app.get("/debug-status-scan")
+async def debug_status_scan():
+    """모든 상태 유형별 상품 수 조회 — 실제 상태 파악용."""
+    import httpx as _hx
+    from main import NAVER_BASE
+
+    all_statuses = ["SALE", "SUSPENSION", "OUTOFSTOCK", "CLOSE", "WAIT"]
+    headers = await naver_api._headers()
+    results = {}
+
+    async with _hx.AsyncClient(timeout=30) as c:
+        for st in all_statuses:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/products/search",
+                headers=headers,
+                json={
+                    "productStatusTypes": [st],
+                    "page": 1, "size": 1,
+                    "orderType": "NO",
+                    "periodType": "PROD_REG_DAY",
+                    "fromDate": "2020-01-01",
+                    "toDate": "2030-12-31",
+                },
+            )
+            results[st] = r.json().get("totalElements", f"err:{r.status_code}")
+
+        # ALL 상태 조합
+        r_all = await c.post(
+            f"{NAVER_BASE}/v1/products/search",
+            headers=headers,
+            json={
+                "productStatusTypes": ["SALE", "SUSPENSION", "OUTOFSTOCK", "CLOSE", "WAIT"],
+                "page": 1, "size": 5,
+                "orderType": "NO",
+                "periodType": "PROD_REG_DAY",
+                "fromDate": "2020-01-01",
+                "toDate": "2030-12-31",
+            },
+        )
+        all_data = r_all.json()
+        sample_products = []
+        for p in all_data.get("contents", []):
+            prod_no = p.get("originProductNo")
+            if prod_no:
+                rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{prod_no}", headers=headers)
+                if rd.status_code == 200:
+                    orig = rd.json().get("originProduct", {})
+                    sample_products.append({
+                        "id": prod_no,
+                        "name": orig.get("name", "")[:20],
+                        "status": orig.get("statusType"),
+                    })
+
+    return JSONResponse({
+        "by_status": results,
+        "all_total": all_data.get("totalElements", 0),
+        "sample_products": sample_products,
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
