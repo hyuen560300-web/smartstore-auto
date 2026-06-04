@@ -553,16 +553,15 @@ class NaverCommerceAPI:
 
     async def count_sale_products(self) -> int:
         """현재 판매중(SALE) 상품 수 조회.
-        Naver 검색 API는 단일 상태 필터([\"SALE\"])에서 0을 반환하는 버그가 있어
-        전체 수(SALE+SUSPENSION) - SUSPENSION 수로 계산한다."""
+        Naver 검색 API는 toDate=오늘 + 단일 SALE 필터 조합에서 0을 반환하는 버그가 있음.
+        toDate를 먼 미래로 설정해 우회."""
         try:
-            now = datetime.now(timezone.utc)
             base_params = {
                 "page": 1, "size": 1,
                 "orderType": "NO",
                 "periodType": "PROD_REG_DAY",
                 "fromDate": "2020-01-01",
-                "toDate": now.strftime("%Y-%m-%d"),
+                "toDate": "2099-12-31",
             }
             async with httpx.AsyncClient(timeout=15) as c:
                 r_all = await c.post(
