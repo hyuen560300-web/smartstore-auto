@@ -3934,14 +3934,25 @@ async def restore_all_sale(background_tasks: BackgroundTasks):
 @app.get("/product-count")
 async def product_count():
     """네이버 API 기준 실제 SALE / SUSPENSION 수 조회.
-    count_sale_products = 전체 - SUSPENSION (단일 SALE 필터 버그 우회)."""
-    sale_count = await naver_api.count_sale_products()
-    suspension_count = max(0, (await naver_api.list_products(page=1, size=1, days=3650)).get("totalElements", 0) - sale_count)
-    return JSONResponse({
-        "sale": sale_count,
-        "suspension": suspension_count,
-        "total": sale_count + suspension_count,
-    })
+    toDate=오늘 + 단일 상태 필터 버그로 인해 SALE/SUSPENSION 각각 직접 조회."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    _params = {
+        "page": 1, "size": 1,
+        "orderType": "NO",
+        "periodType": "PROD_REG_DAY",
+        "fromDate": "2020-01-01",
+        "toDate": "2099-12-31",
+    }
+    headers = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=15) as c:
+        r_sale = await c.post(f"{NAVER_BASE}/v1/products/search", headers=headers,
+                              json={**_params, "productStatusTypes": ["SALE"]})
+        r_sus  = await c.post(f"{NAVER_BASE}/v1/products/search", headers=headers,
+                              json={**_params, "productStatusTypes": ["SUSPENSION"]})
+    sale  = int(r_sale.json().get("totalElements", 0)) if r_sale.status_code == 200 else -1
+    sus   = int(r_sus.json().get("totalElements",  0)) if r_sus.status_code == 200 else -1
+    return JSONResponse({"sale": sale, "suspension": sus, "total": max(0, sale) + max(0, sus)})
 
 
 @app.get("/debug-restore-one")
