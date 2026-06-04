@@ -3889,15 +3889,26 @@ async def _run_restore_all_sale() -> None:
     restored = 0
     failed = 0
     for i, prod in enumerate(all_suspended):
-        pid  = str(prod.get("originProductNo", ""))
-        name = prod.get("originProduct", {}).get("name", "")[:30]
-        ok   = await naver_api.set_product_status(pid, "SALE")
+        pid    = str(prod.get("originProductNo", ""))
+        origin = prod.get("originProduct", {})
+        name   = origin.get("name", "")[:30]
+
+        # 전체 페이로드로 SALE 복구 (statusType만 변경 시 Naver API가 거부할 수 있음)
+        payload = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+        payload["statusType"] = "SALE"
+        ok, err = await naver_api.update_product(pid, payload)
         if ok:
             restored += 1
             print(f"[RESTORE-SALE] ✅ ({i+1}/{total}) {name}", flush=True)
         else:
-            failed += 1
-            print(f"[RESTORE-SALE] ❌ ({i+1}/{total}) {name}", flush=True)
+            # 전체 페이로드 실패 시 단순 status 변경 시도
+            ok2 = await naver_api.set_product_status(pid, "SALE")
+            if ok2:
+                restored += 1
+                print(f"[RESTORE-SALE] ✅(fallback) ({i+1}/{total}) {name}", flush=True)
+            else:
+                failed += 1
+                print(f"[RESTORE-SALE] ❌ ({i+1}/{total}) {name} | {err[:60]}", flush=True)
         if (i + 1) % 10 == 0:
             await _tg_notify(f"[복구] 진행 중 {i+1}/{total} — 완료:{restored} 실패:{failed}")
         await asyncio.sleep(0.4)
