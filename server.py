@@ -3296,7 +3296,7 @@ async def startup_event():
             print(f"[SCHED] 자동 정리 오류: {e}", flush=True)
 
     async def job_register_products():
-        """매일 09:00 / 13:00 / 20:00 — next-excel 다운로드 후 상품 등록 (1000개 한도)"""
+        """매일 09:00 / 13:00 / 20:00 — 도매꾹 API 소싱 후 상품 등록 (1000개 한도)"""
         if os.getenv("AUTO_REGISTER_ENABLED", "true").lower() != "true":
             print("[SCHED] 상품 자동 등록 비활성화 (AUTO_REGISTER_ENABLED=false)", flush=True)
             return
@@ -3318,9 +3318,7 @@ async def startup_event():
         _slots = min(11, 1000 - _cur)
         print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/1000, 이번:{_slots}개)", flush=True)
         try:
-            excel_path = await _next_excel_internal()
-            if excel_path:
-                await pipeline_register_products(excel_path, limit=_slots)
+            await pipeline_register_from_domeggook(limit=_slots)
         except Exception as e:
             print(f"[SCHED] 상품 등록 오류: {e}", flush=True)
 
