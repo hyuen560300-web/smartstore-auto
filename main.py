@@ -649,6 +649,13 @@ class NaverCommerceAPI:
 
 # ─── 도매꾹 API 소싱 ─────────────────────────────────────────────────────────
 
+def _dg_str(val) -> str:
+    """XML→JSON 응답에서 문자열 값 추출. dict이면 #text 또는 text 키 사용."""
+    if isinstance(val, dict):
+        return str(val.get("#text", "") or val.get("text", "") or val.get("@text", "") or "")
+    return str(val or "")
+
+
 def _dg_img_url(thumb: str) -> str:
     """도매꾹 thumb 값 → 이미지 풀 URL 변환 (해시 또는 이미 URL인 경우 모두 처리)"""
     if not thumb:
@@ -712,11 +719,12 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
         return None
 
     # 이미지 우선순위: 상세 original > 상세 large > 목록 thumb
+    # _dg_str() 사용: XML→JSON 변환 시 dict으로 올 수 있음
     thumb_obj = detail.get("thumb", {}) if detail else {}
     image = (
-        _dg_stt_to_original(thumb_obj.get("original") or "") or
-        _dg_stt_to_original(thumb_obj.get("large") or "") or
-        _dg_stt_to_original(item.get("thumb") or "")
+        _dg_stt_to_original(_dg_str(thumb_obj.get("original"))) or
+        _dg_stt_to_original(_dg_str(thumb_obj.get("large"))) or
+        _dg_stt_to_original(_dg_str(item.get("thumb")))
     )
 
     # 이미지 장수: thumb.list 또는 개별 필드 카운트
@@ -731,10 +739,12 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
         else:
             thumb_list = []
     if isinstance(thumb_list, list) and thumb_list:
-        img_count = len(thumb_list)
+        # 각 item에서 실제 URL 추출 (dict인 경우 _dg_str 사용)
+        valid_imgs = [_dg_str(i) if isinstance(i, dict) else str(i or "") for i in thumb_list]
+        img_count = sum(1 for u in valid_imgs if u.strip())
     else:
         # list 없으면 개별 필드(original/large/medium/small) 개수로 근사
-        img_count = sum(1 for k in ("original", "large", "medium", "small") if thumb_obj.get(k))
+        img_count = sum(1 for k in ("original", "large", "medium", "small") if _dg_str(thumb_obj.get(k)))
         img_count = max(img_count, 1 if image else 0)
 
     # 카테고리: 상세 basis.section (예: "생활/주방 > 수납/정리")
