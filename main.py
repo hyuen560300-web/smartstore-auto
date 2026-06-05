@@ -721,6 +721,15 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
 
     # 이미지 장수: thumb.list 또는 개별 필드 카운트
     thumb_list = thumb_obj.get("list", [])
+    if isinstance(thumb_list, dict):
+        # XML→JSON 패턴: thumb.list.item (단일 dict 또는 배열)
+        _items = thumb_list.get("item", [])
+        if isinstance(_items, dict):
+            thumb_list = [_items]
+        elif isinstance(_items, list):
+            thumb_list = _items
+        else:
+            thumb_list = []
     if isinstance(thumb_list, list) and thumb_list:
         img_count = len(thumb_list)
     else:
@@ -824,19 +833,8 @@ def _is_fake_product(p: dict) -> bool:
 
 
 async def _tg_sourcing_skip(name: str, reason: str):
-    """소싱 스킵 텔레그램 알림 — 비동기, 실패 무시."""
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not bot_token or not chat_id:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=8) as c:
-            await c.post(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                json={"chat_id": chat_id, "text": f"[소싱스킵] {name[:30]} - {reason}"},
-            )
-    except Exception:
-        pass
+    """소싱 스킵 텔레그램 알림 — 건수 요약으로 대체, 개별 알림 비활성화."""
+    pass
 
 
 async def _check_image_sharpness(url: str) -> tuple[float, int]:
@@ -868,7 +866,7 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
     from difflib import SequenceMatcher
     BLUR_THRESHOLD  = 200   # Laplacian variance (FIND_EDGES+np.var 기준)
     MIN_FILE_KB     = 50    # 50KB
-    MIN_IMG_COUNT   = 3     # 최소 이미지 장수
+    MIN_IMG_COUNT   = 1     # 최소 이미지 장수 (thumb 구조 다양성으로 1로 조정)
     SIM_THRESHOLD   = 0.70  # 이름 유사도 상한
 
     before = len(products)
@@ -876,7 +874,6 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
 
     async def _notify_skip(p: dict, reason: str):
         print(f"[품질필터] ❌ {reason}: {p.get('name','')[:40]}", flush=True)
-        asyncio.create_task(_tg_sourcing_skip(p.get("name", ""), reason))
 
     # ① 가짜/위험 상품
     valid, fake_removed = [], 0
@@ -3366,7 +3363,6 @@ async def pipeline_register_from_domeggook(
             if not safe:
                 print(f"[IP감시관] 차단: {p.get('name','')} — {danger_kw}", flush=True)
                 results["ip_blocked"] += 1
-                asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - IP차단({str(danger_kw)[:20]})"))
                 continue
 
             review = await employee_review_analyst(str(p.get("name", "")), ANTHROPIC_API_KEY)
@@ -3411,7 +3407,6 @@ async def pipeline_register_from_domeggook(
             if not naver_img_url:
                 print(f"[이미지] SKIP: {p.get('name','')}", flush=True)
                 results["skip"] += 1
-                asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - 대표이미지없음"))
                 continue
 
             # 추가 이미지 네이버 CDN 업로드 (500px+, 50KB+ 필터)
@@ -3502,17 +3497,14 @@ async def pipeline_register_from_domeggook(
                         else:
                             results["fail"] += 1
                             results["errors"].append(f"{p.get('name','?')[:20]}: QC재시도실패")
-                            asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - QC재시도실패"))
                             continue
                     else:
                         results["fail"] += 1
                         results["errors"].append(f"{p.get('name','?')[:20]}: DALLE재생성실패")
-                        asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - DALLE재생성실패"))
                         continue
                 else:
                     results["fail"] += 1
                     results["errors"].append(f"{p.get('name','?')[:20]}: QC{qc_result['stage']}단계실패")
-                    asyncio.create_task(_tg_notify(f"[소싱스킵] {str(p.get('name',''))[:30]} - QC{qc_result['stage']}단계실패"))
                     continue
 
             payload = build_product_payload(p, ai, price, tags=ai.get("tags"), hot_trends=fashion_trends)
