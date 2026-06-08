@@ -1768,9 +1768,33 @@ def build_detail_html(
 
 
 # ─── Claude HTML 상세페이지 생성 ──────────────────────────────────────────────
+async def _prepare_image_for_claude(url: str) -> dict | None:
+    """이미지 URL → base64 Vision dict. 실패 시 None (전체 중단 금지)."""
+    try:
+        from PIL import Image
+        import io as _io, base64 as _b64
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as _c:
+            resp = await _c.get(url)
+            if resp.status_code != 200:
+                return None
+        img = Image.open(_io.BytesIO(resp.content))
+        max_size = 1568
+        if max(img.size) > max_size:
+            ratio = max_size / max(img.size)
+            img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        b64 = _b64.b64encode(buf.getvalue()).decode()
+        return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}}
+    except Exception as _e:
+        print(f"[VISION-IMG] 이미지 준비 실패: {_e}", flush=True)
+        return None
+
+
 async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list) -> str:
-    """Claude Haiku로 19섹션 완전한 HTML 상세페이지 생성 (최소 5000자, 3회 재시도).
-    실패 시 빈 문자열 반환 → 호출부에서 build_detail_html 폴백."""
+    """Claude Haiku Vision으로 19섹션 HTML 생성. Vision 실패 시 텍스트 모드 폴백."""
     if not ANTHROPIC_API_KEY:
         return ""
     product_name = ai.get("product_name") or str(product.get("name", ""))
@@ -1778,82 +1802,115 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     price        = int(product.get("price", 0))
     main_img     = image_urls[0] if image_urls else ""
     extra_imgs   = [u for u in image_urls[1:6] if u]
-    hero_title   = (ai.get("headline") or product_name)[:18]
-    sub_title    = ai.get("sub_headline", "")
-    emotional    = ai.get("emotional_copy", "")
     selling_pts  = ai.get("selling_points") or ai.get("recommend_list") or []
-    reasons      = [ai.get(f"reason_{i}", "") for i in range(1, 4)]
-    tags         = ai.get("tags") or []
     gallery_html = "\n".join(
         f'<img src="{u}" style="width:100%;max-width:860px;height:auto;display:block;margin:8px auto;">'
         for u in extra_imgs
     ) or f'<img src="{main_img}" style="width:100%;max-width:860px;height:auto;display:block;margin:0 auto;">'
-
     features_str = ", ".join(str(s) for s in selling_pts[:5]) or product_name
 
-    prompt = (
+    _sections = (
+        "[필수 섹션 19개]\n"
+        "1. 상단배너 (빠른배송/정품보장 문구)\n"
+        "2. 히어로 (포인트 텍스트)\n"
+        "3. 5초 후킹 (임팩트 문구)\n"
+        f"4. 메인이미지 <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n"
+        "5. 핵심수치 4개 (그리드)\n6. 문제제기 4개 (카드)\n7. 해결책 3개\n"
+        f"8. 이미지갤러리\n{gallery_html}\n"
+        "9. 상세설명1 (좌이미지+우텍스트)\n10. 상세설명2 (좌텍스트+우이미지)\n"
+        "11. 사용법 4단계 (STEP 번호)\n12. 비교표\n13. 후기 3개 (별점)\n14. FAQ 4개\n"
+        "15. 스펙표\n16. 배송/교환 안내\n"
+        "17. 신뢰배지 3개 (빠른배송/정품보장/AS보장 — 무료배송 문구 절대 금지)\n"
+        "18. CTA\n19. 스토어찜 유도 + 푸터\n"
+    )
+    _product_info = (
+        f"[상품 정보]\n- 상품명: {product_name}\n- 가격: ₩{price:,}\n"
+        f"- 카테고리: {category}\n- 특징: {features_str}\n"
+    )
+
+    # Vision 프롬프트 (이미지 보고 맞춤 디자인)
+    vision_text = (
+        "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
+        "첨부된 상품 이미지를 직접 보고, 이미지의 색상·분위기에 맞는 맞춤 HTML 상세페이지를 만들어주세요.\n"
+        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n\n"
+        "[디자인 규칙]\n"
+        "- 이미지 색상/분위기 분석 후 맞춤 컬러 팔레트 선택\n"
+        "  (밝은 상품 → 밝은 배경 / 어두운 상품 → 다크 배경 / 파스텔 상품 → 파스텔 톤)\n"
+        "- 골드(#c8a97a) 포인트 컬러 항상 유지\n"
+        "- 그라데이션 절대 금지 / 알록달록 금지\n"
+        "- 폰트: Noto Sans KR (Google Fonts)\n"
+        "- 전체 느낌: 쿠팡/무신사 수준 프리미엄 스타일\n"
+        "- 이모지 최소화, 여백 충분히\n\n"
+        + _sections + "\n" + _product_info
+        + "이미지를 실제로 분석해서 맞춤 디자인을 적용하세요.\n"
+        "width: 860px, Noto Sans KR 반드시 포함."
+    )
+
+    # 텍스트 전용 폴백 프롬프트
+    text_prompt = (
         "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
         "아래 상품 정보로 스마트스토어 상세페이지 HTML을 만들어주세요.\n"
         "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n\n"
-        "[디자인 규칙 - 반드시 준수]\n"
-        "- 색상: #1a1a1a(다크) / #c8a97a(골드) / #ffffff(흰색) / #f8f5f0(베이지) 4가지만 사용\n"
-        "- 그라데이션 절대 금지\n"
-        "- 알록달록한 컬러 카드 금지\n"
+        "[디자인 규칙]\n"
+        "- 색상: #1a1a1a(다크) / #c8a97a(골드) / #ffffff(흰색) / #f8f5f0(베이지)\n"
+        "- 그라데이션 절대 금지 / 알록달록 금지\n"
         "- 폰트: Noto Sans KR (Google Fonts)\n"
         "- 카드/섹션 배경: 흰색 or 연베이지 + 얇은 테두리(#e8e0d0)\n"
-        "- 포인트 컬러는 골드(#c8a97a)만 사용\n"
-        "- 전체 느낌: 쿠팡/무신사 수준의 프리미엄하고 세련된 스타일\n"
-        "- 불필요한 이모지 최소화\n"
-        "- 여백 충분히 사용\n\n"
-        "[필수 섹션 19개]\n"
-        "1. 상단배너 (골드 배경, 빠른배송/정품보장 문구)\n"
-        "2. 히어로 (다크 배경, 골드 포인트 텍스트)\n"
-        "3. 5초 후킹 (베이지 배경, 임팩트 문구)\n"
-        f"4. 메인이미지 <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n"
-        "5. 핵심수치 4개 (골드 배경 그리드)\n"
-        "6. 문제제기 4개 (흰 카드, 골드 왼쪽 테두리)\n"
-        "7. 해결책 3개 (다크 배경, 흰 텍스트)\n"
-        f"8. 이미지갤러리 (2열 그리드)\n{gallery_html}\n"
-        "9. 상세설명1 (좌이미지+우텍스트)\n"
-        "10. 상세설명2 (좌다크텍스트+우이미지)\n"
-        "11. 사용법 4단계 (다크 배경, STEP 번호)\n"
-        "12. 비교표 (골드 헤더)\n"
-        "13. 후기 3개 (흰 카드, 별점)\n"
-        "14. FAQ 4개 (베이지 배경)\n"
-        "15. 스펙표 (베이지 배경 라벨)\n"
-        "16. 배송/교환 안내 (2열 카드)\n"
-        "17. 신뢰배지 3개 (다크 배경, 빠른배송/정품보장/AS보장 — 무료배송 문구 절대 금지)\n"
-        "18. CTA (골드 배경)\n"
-        "19. 스토어찜 유도 + 푸터 (다크 배경)\n\n"
-        "[상품 정보]\n"
-        f"- 상품명: {product_name}\n"
-        f"- 가격: ₩{price:,}\n"
-        f"- 카테고리: {category}\n"
-        f"- 이미지URL: {main_img}\n"
-        f"- 특징: {features_str}\n\n"
-        "위 규칙을 엄격히 지켜서 완성도 높은 HTML을 생성하세요.\n"
+        "- 전체 느낌: 쿠팡/무신사 수준 프리미엄 스타일\n\n"
+        + _sections + "\n"
+        f"[상품 정보]\n- 상품명: {product_name}\n- 가격: ₩{price:,}\n"
+        f"- 카테고리: {category}\n- 이미지URL: {main_img}\n- 특징: {features_str}\n\n"
         "width: 860px, Noto Sans KR 반드시 포함."
     )
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+
+    # ── Vision 모드 시도 ──────────────────────────────────────────────────────
+    vision_imgs = []
+    for _url in image_urls[:3]:
+        _img = await _prepare_image_for_claude(_url)
+        if _img:
+            vision_imgs.append(_img)
+
+    if vision_imgs:
+        print(f"[CLAUDE-HTML] Vision 방식으로 HTML 생성 (이미지 {len(vision_imgs)}장)", flush=True)
+        for attempt in range(3):
+            try:
+                content = vision_imgs + [{"type": "text", "text": vision_text}]
+                resp = await client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=8000,
+                    messages=[{"role": "user", "content": content}],
+                )
+                html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
+                html = re.sub(r'\n?```$', '', html)
+                if len(html) >= 5000:
+                    print(f"[CLAUDE-HTML] ✅ Vision {len(html):,}자 생성", flush=True)
+                    return html
+                print(f"[CLAUDE-HTML] Vision 시도{attempt+1}: {len(html)}자 미달", flush=True)
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"[CLAUDE-HTML] Vision 시도{attempt+1} 실패: {e}", flush=True)
+                await asyncio.sleep(2)
+        print("[CLAUDE-HTML] Vision 3회 실패 → 텍스트 폴백", flush=True)
+
+    # ── 텍스트 전용 폴백 ──────────────────────────────────────────────────────
     for attempt in range(3):
         try:
             resp = await client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=8000,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": text_prompt}],
             )
-            html = resp.content[0].text.strip()
-            html = re.sub(r'^```(?:html)?\n?', '', html)
+            html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
             html = re.sub(r'\n?```$', '', html)
-            if len(html) < 5000:
-                print(f"[CLAUDE-HTML] 시도{attempt+1}: {len(html)}자 미달, 재시도", flush=True)
-                await asyncio.sleep(1)
-                continue
-            print(f"[CLAUDE-HTML] ✅ {len(html):,}자 생성 (시도{attempt+1})", flush=True)
-            return html
+            if len(html) >= 5000:
+                print(f"[CLAUDE-HTML] ✅ 텍스트 {len(html):,}자 생성", flush=True)
+                return html
+            print(f"[CLAUDE-HTML] 텍스트 시도{attempt+1}: {len(html)}자 미달", flush=True)
+            await asyncio.sleep(1)
         except Exception as e:
-            print(f"[CLAUDE-HTML] 시도{attempt+1} 실패: {e}", flush=True)
+            print(f"[CLAUDE-HTML] 텍스트 시도{attempt+1} 실패: {e}", flush=True)
             await asyncio.sleep(2)
     print("[CLAUDE-HTML] 3회 실패 → build_detail_html 폴백", flush=True)
     return ""
