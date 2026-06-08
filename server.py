@@ -688,6 +688,72 @@ async def find_duplicate_products_naver():
     }
 
 
+@app.get("/html-coverage")
+async def html_coverage_scan():
+    """전체 상품 중 Claude HTML 19섹션 적용 여부 스캔 (Noto Sans KR 포함 여부 판별)."""
+    import asyncio as _ai
+    applied, not_applied = [], []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        total_count = resp.get("totalCount", 0)
+        if not contents:
+            break
+        for item in contents:
+            origin = item.get("originProduct", {})
+            name = (origin.get("name") or item.get("name") or "").strip()
+            detail = origin.get("detailContent") or ""
+            channel_products = origin.get("channelProducts", [])
+            channel_no = (channel_products[0].get("channelProductNo", "") if channel_products else "")
+            url = (f"https://smartstore.naver.com/thehwmall/products/{channel_no}"
+                   if channel_no else "https://smartstore.naver.com/thehwmall")
+            if "Noto Sans KR" in detail:
+                applied.append({"name": name, "url": url})
+            else:
+                not_applied.append({"name": name, "url": url})
+        if page * 50 >= total_count:
+            break
+        page += 1
+        await _ai.sleep(0.5)
+
+    total = len(applied) + len(not_applied)
+    pct = round(len(applied) / total * 100, 1) if total else 0
+
+    # 텔레그램 전송
+    import os as _os
+    _tg_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("TELEGRAM_TOKEN", "")
+    _tg_chat = _os.environ.get("TELEGRAM_CHAT_ID", "5506801011")
+    if _tg_token and not_applied:
+        lines = [f"• {p['name'][:40]}" for p in not_applied[:40]]
+        if len(not_applied) > 40:
+            lines.append(f"... 외 {len(not_applied) - 40}개")
+        msg = (
+            f"[스마트스토어 HTML 적용 현황]\n\n"
+            f"✅ 새 HTML 적용 (Noto Sans KR): {len(applied)}개\n"
+            f"❌ 미적용 (도매꾹 원본): {len(not_applied)}개\n"
+            f"📊 총 스캔: {total}개 | 적용률 {pct}%\n\n"
+            f"❌ 미적용 상품 목록:\n" + "\n".join(lines)
+        )
+        try:
+            import httpx as _hx
+            async with _hx.AsyncClient(timeout=8) as _c:
+                await _c.post(
+                    f"https://api.telegram.org/bot{_tg_token}/sendMessage",
+                    json={"chat_id": _tg_chat, "text": msg},
+                )
+        except Exception:
+            pass
+
+    return {
+        "total": total,
+        "applied": len(applied),
+        "not_applied": len(not_applied),
+        "applied_pct": pct,
+        "not_applied_list": not_applied,
+    }
+
+
 @app.post("/find-similar-products")
 async def find_similar_products_bg(background_tasks: BackgroundTasks, prefix_len: int = 12):
     """유사 상품 탐지 — 백그라운드 실행, 결과는 context_store[smartstore.similar_products_report]에 저장."""
