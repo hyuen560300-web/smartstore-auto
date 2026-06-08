@@ -65,6 +65,7 @@ from main import (
     _count_html_sections,
     _validate_copy_fields,
     _tg_notify,
+    pipeline_reapply_claude_html,
 )
 from employees import (
     employee_season_planner,
@@ -767,6 +768,14 @@ async def html_coverage_scan():
         "debug": debug_first,
         "not_applied_list": not_applied,
     }
+
+
+@app.post("/reapply-html")
+async def reapply_html_endpoint(background_tasks: BackgroundTasks):
+    """Noto Sans KR 미적용 상품 전체에 Claude HTML 19섹션 재적용 (백그라운드).
+    1개씩 순차 처리, 매 완료 후 텔레그램 전송, 실패 시 즉시 중단."""
+    background_tasks.add_task(pipeline_reapply_claude_html)
+    return {"message": "HTML 재적용 백그라운드 시작", "info": "텔레그램으로 진행 상황 전송됩니다."}
 
 
 @app.post("/find-similar-products")

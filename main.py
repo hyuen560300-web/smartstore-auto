@@ -3827,6 +3827,147 @@ async def pipeline_fix_products(
     return results
 
 
+async def pipeline_reapply_claude_html() -> dict:
+    """Noto Sans KR 미적용 상품 전체에 Claude HTML 19섹션 재적용.
+    1개씩 순차 처리, 매 처리 후 텔레그램, 실패 시 즉시 중단."""
+    results = {"success": 0, "failed": 0, "skipped": 0, "total": 0, "stopped_at": ""}
+
+    # 1. 전체 상품 수집
+    all_products: list[dict] = []
+    page = 1
+    while True:
+        try:
+            resp = await _retry(
+                lambda p=page: naver_api.list_products(page=p, size=50, days=1000),
+                retries=3, delay=5.0, label=f"reapply list(p{page})"
+            )
+        except Exception as e:
+            print(f"[REAPPLY] 목록 조회 실패(p{page}): {e}", flush=True)
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        print(f"[REAPPLY] p{page} 로드 — 누적 {len(all_products)}개", flush=True)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(1.0)
+
+    # 2. 미적용 상품 필터 (이름 있고 Noto Sans KR 없는 것)
+    not_applied: list[dict] = []
+    for item in all_products:
+        origin = item.get("originProduct", {})
+        detail = origin.get("detailContent") or ""
+        name = (origin.get("name") or "").strip()
+        if not name or "Noto Sans KR" in detail:
+            continue
+        not_applied.append(item)
+
+    results["total"] = len(not_applied)
+    print(f"[REAPPLY] 미적용 {len(not_applied)}개 확인 — 재적용 시작", flush=True)
+    await _tg_notify(
+        f"[HTML 재적용 시작]\n\n미적용 상품: {len(not_applied)}개\n"
+        "Claude HTML 19섹션 순차 적용 시작합니다."
+    )
+
+    _READONLY = {"originProductNo", "channelProductNo", "regDate",
+                 "modDate", "statusFrom", "totalSalesQuantity"}
+
+    # 3. 1개씩 순차 처리
+    for idx, item in enumerate(not_applied, 1):
+        origin = item.get("originProduct", {})
+        product_id = str(item.get("originProductNo", ""))
+        name = (origin.get("name") or "").strip()
+        price = int(origin.get("salePrice", 0))
+        category = ((origin.get("detailAttribute") or {})
+                    .get("naverShoppingSearchInfo", {})
+                    .get("categoryName", ""))
+        channel_products = origin.get("channelProducts", [])
+        channel_no = (channel_products[0].get("channelProductNo", "")
+                      if channel_products else "")
+        product_url = (f"https://smartstore.naver.com/thehwmall/products/{channel_no}"
+                       if channel_no else "https://smartstore.naver.com/thehwmall")
+
+        # 이미지 URL 수집
+        raw_img = (origin.get("images") or {}).get("representativeImage") or {}
+        main_img = raw_img.get("url", "") if isinstance(raw_img, dict) else ""
+        optional_imgs = (origin.get("images") or {}).get("optionalImages") or []
+        extra_imgs = [
+            (oi.get("url", "") if isinstance(oi, dict) else "")
+            for oi in optional_imgs
+        ]
+        image_urls = [u for u in [main_img] + extra_imgs if u]
+
+        product_dict = {"name": name, "category": category, "price": price}
+
+        print(f"[REAPPLY] [{idx}/{len(not_applied)}] {name[:40]}", flush=True)
+
+        # AI copy 생성
+        try:
+            ai_copy = await generate_product_copy(product_dict, {})
+        except Exception as e:
+            msg = f"[재적용 실패] [{idx}/{len(not_applied)}] {name[:30]}\n오류: AI 카피 생성 실패\n{str(e)[:120]}\n\n작업 중단."
+            print(f"[REAPPLY] {msg}", flush=True)
+            await _tg_notify(msg)
+            results["failed"] += 1
+            results["stopped_at"] = f"{idx}/{len(not_applied)} — {name[:30]}"
+            break
+
+        # Claude HTML 19섹션 생성
+        html = await generate_claude_html_detail(product_dict, ai_copy, image_urls)
+        if not html or "Noto Sans KR" not in html:
+            msg = (f"[재적용 실패] [{idx}/{len(not_applied)}] {name[:30]}\n"
+                   f"오류: HTML 생성 실패 (Noto Sans KR 미포함)\n\n작업 중단.")
+            print(f"[REAPPLY] {msg}", flush=True)
+            await _tg_notify(msg)
+            results["failed"] += 1
+            results["stopped_at"] = f"{idx}/{len(not_applied)} — {name[:30]}"
+            break
+
+        # Naver API 업데이트 (full payload merge)
+        full_payload = {k: v for k, v in origin.items() if k not in _READONLY}
+        full_payload["detailContent"] = html
+
+        try:
+            ok, err_msg = await naver_api.update_product(product_id, full_payload)
+        except Exception as e:
+            ok, err_msg = False, str(e)[:120]
+
+        if not ok:
+            msg = (f"[재적용 실패] [{idx}/{len(not_applied)}] {name[:30]}\n"
+                   f"오류: Naver API 업데이트 실패\n{err_msg}\n\n작업 중단.")
+            print(f"[REAPPLY] {msg}", flush=True)
+            await _tg_notify(msg)
+            results["failed"] += 1
+            results["stopped_at"] = f"{idx}/{len(not_applied)} — {name[:30]}"
+            break
+
+        results["success"] += 1
+        print(f"[REAPPLY] [{idx}/{len(not_applied)}] ✅ {name[:40]}", flush=True)
+        await _tg_notify(f"[재적용 {idx}/{len(not_applied)}] {name[:40]} ✅")
+        await asyncio.sleep(2.5)
+
+    # 4. 최종 요약
+    if not results["stopped_at"]:
+        summary = (
+            f"[HTML 재적용 완료]\n\n"
+            f"✅ 성공: {results['success']}개\n"
+            f"❌ 실패: {results['failed']}개\n"
+            f"📊 전체 목표: {results['total']}개"
+        )
+    else:
+        summary = (
+            f"[HTML 재적용 중단]\n\n"
+            f"✅ 성공: {results['success']}개\n"
+            f"❌ 실패: {results['failed']}개\n"
+            f"🛑 중단 위치: {results['stopped_at']}"
+        )
+    print(f"[REAPPLY] {summary}", flush=True)
+    await _tg_notify(summary)
+    return results
+
+
 async def pipeline_auto_cleanup(
     min_age_days: int = 30,
     max_views: int = 100,
