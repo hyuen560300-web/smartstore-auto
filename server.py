@@ -694,12 +694,25 @@ async def html_coverage_scan():
     import asyncio as _ai
     applied, not_applied = [], []
     page = 1
+    debug_first = {}
     while True:
-        resp = await naver_api.list_products(page=page, size=50)
+        resp = await naver_api.list_products(page=page, size=50, days=1000)
         contents = resp.get("contents", [])
         total_count = resp.get("totalCount", 0)
         if not contents:
             break
+        if page == 1 and contents:
+            first = contents[0]
+            op = first.get("originProduct", {})
+            debug_first = {
+                "totalCount": total_count,
+                "keys_in_item": list(first.keys()),
+                "keys_in_origin": list(op.keys()),
+                "has_detail": bool(op.get("detailContent")),
+                "detail_snippet": (op.get("detailContent") or "")[:100],
+                "name_in_origin": op.get("name", ""),
+                "name_in_item": first.get("name", ""),
+            }
         for item in contents:
             origin = item.get("originProduct", {})
             name = (origin.get("name") or item.get("name") or "").strip()
@@ -712,7 +725,8 @@ async def html_coverage_scan():
                 applied.append({"name": name, "url": url})
             else:
                 not_applied.append({"name": name, "url": url})
-        if page * 50 >= total_count:
+        # 마지막 페이지 체크: 반환 수 < 요청 size
+        if len(contents) < 50:
             break
         page += 1
         await _ai.sleep(0.5)
@@ -750,6 +764,7 @@ async def html_coverage_scan():
         "applied": len(applied),
         "not_applied": len(not_applied),
         "applied_pct": pct,
+        "debug": debug_first,
         "not_applied_list": not_applied,
     }
 
