@@ -134,15 +134,43 @@ load_dotenv()
 NAVER_CLIENT_ID     = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 NAVER_SELLER_ID     = os.environ.get("NAVER_SELLER_ID", "")
-# 네이버 Open API (쇼핑검색) — Commerce API 키와 별도
-NAVER_SEARCH_CLIENT_ID     = os.environ.get("NAVER_SEARCH_CLIENT_ID") or NAVER_CLIENT_ID
-NAVER_SEARCH_CLIENT_SECRET = os.environ.get("NAVER_SEARCH_CLIENT_SECRET") or NAVER_CLIENT_SECRET
 if not NAVER_CLIENT_ID:
     raise ValueError("환경변수 미설정: NAVER_CLIENT_ID")
 if not NAVER_CLIENT_SECRET:
     raise ValueError("환경변수 미설정: NAVER_CLIENT_SECRET")
 if not NAVER_SELLER_ID:
     raise ValueError("환경변수 미설정: NAVER_SELLER_ID")
+
+# 네이버 Open API (쇼핑검색) — 기본키 401 시 ORK 백업키 자동 전환
+def _resolve_naver_search_keys() -> tuple[str, str]:
+    import urllib.request as _ur, urllib.error as _ue
+    _base_id  = os.environ.get("NAVER_SEARCH_CLIENT_ID") or NAVER_CLIENT_ID
+    _base_sec = os.environ.get("NAVER_SEARCH_CLIENT_SECRET") or NAVER_CLIENT_SECRET
+    _ork_id   = os.environ.get("NAVER_CLIENT_ID_ORK", "")
+    _ork_sec  = os.environ.get("NAVER_CLIENT_SECRET_ORK", "")
+    def _probe(cid: str, csec: str) -> bool:
+        if not cid or not csec:
+            return False
+        try:
+            req = _ur.Request(
+                "https://openapi.naver.com/v1/search/shop.json?query=test&display=1",
+                headers={"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": csec},
+            )
+            with _ur.urlopen(req, timeout=5):
+                return True
+        except _ue.HTTPError as e:
+            return e.code != 401
+        except Exception:
+            return False
+    if _probe(_base_id, _base_sec):
+        return _base_id, _base_sec
+    if _ork_id and _probe(_ork_id, _ork_sec):
+        import logging as _lg
+        _lg.getLogger(__name__).warning("NAVER_CLIENT_ID 401 → ORK 키로 폴백")
+        return _ork_id, _ork_sec
+    return _base_id, _base_sec
+
+NAVER_SEARCH_CLIENT_ID, NAVER_SEARCH_CLIENT_SECRET = _resolve_naver_search_keys()
 import re as _re_keys
 def _clean_key(k: str) -> str:
     return _re_keys.sub(r'[^\x21-\x7E]', '', k or "")
