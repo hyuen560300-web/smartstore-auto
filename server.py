@@ -203,6 +203,51 @@ async def status():
     })
 
 
+@app.get("/products/random")
+async def products_random(exclude: str = "귀마개,풍선,가랜드,실리콘,장갑"):
+    """등록 상품 중 랜덤 1개 반환 (Higgsfield 영상 테스트용).
+    exclude: 쉼표 구분 키워드 (기본: 오늘 등록된 상품들)
+    """
+    import random as _rand
+    excl = [k.strip() for k in exclude.split(",") if k.strip()]
+    data = await naver_api.list_products(page=1, size=100)
+    items = data.get("contents", [])
+    filtered = []
+    for p in items:
+        name = (p.get("name") or p.get("originProduct", {}).get("name") or "")
+        status = p.get("statusType") or p.get("originProduct", {}).get("statusType") or ""
+        if status not in ("SALE", "OUTOFSTOCK", ""):
+            continue
+        if any(k in name for k in excl):
+            continue
+        filtered.append(p)
+    if not filtered:
+        return JSONResponse({"error": "조건에 맞는 상품 없음", "total": len(items)}, status_code=404)
+    pick = _rand.choice(filtered)
+    name = pick.get("name") or pick.get("originProduct", {}).get("name", "?")
+    pid  = pick.get("channelProductNo") or pick.get("originProductNo") or ""
+    price = (pick.get("salePrice") or
+             pick.get("originProduct", {}).get("salePrice") or
+             pick.get("originProduct", {}).get("wholeSalePrice") or "?")
+    img = (pick.get("representativeImageUrl") or
+           (pick.get("originProduct", {}).get("detailImages") or [""])[0] or
+           pick.get("originProduct", {}).get("images", {}).get("representativeImage", {}).get("url") or "")
+    store_url = f"https://smartstore.naver.com/khww/products/{pid}" if pid else ""
+    tags = pick.get("originProduct", {}).get("productTags") or []
+    tag_names = [t.get("text", "") for t in tags[:5] if t.get("text")]
+    detail_content = (pick.get("originProduct", {}).get("detailContent") or "")[:200]
+    return JSONResponse({
+        "name": name,
+        "price": price,
+        "product_no": str(pid),
+        "image_url": img,
+        "store_url": store_url,
+        "tags": tag_names,
+        "detail_preview": detail_content,
+        "total_pool": len(filtered),
+    })
+
+
 @app.get("/check-env")
 def check_env():
     """API 키 설정 여부 확인"""
