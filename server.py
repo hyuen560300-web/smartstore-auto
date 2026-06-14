@@ -1247,21 +1247,23 @@ async def dg_item_detail(item_no: str):
     try:
         async with _httpx.AsyncClient(timeout=15) as c:
             r = await c.get("https://domeggook.com/ssl/api/", params={
-                "ver": "4.1", "mode": "getItem", "aid": key,
+                "ver": "4.5", "mode": "getItemView", "aid": key,
                 "no": item_no, "om": "json",
             })
-        data = r.json()
-        item = data.get("domeggook", {}).get("item", {})
-        thumb = item.get("thumb", {})
-        imgs = thumb.get("list", {}).get("image", [])
-        if isinstance(imgs, dict):
-            imgs = [imgs]
-        img_url = imgs[0].get("#text", "") if imgs else thumb.get("original", "")
+        data = r.json().get("domeggook", {})
+        thumb = data.get("thumb", {})
+        def _dg_s(v):
+            return str(v.get("#text","") or v.get("text","") or "") if isinstance(v, dict) else str(v or "")
+        def _to_full(url):
+            s = _dg_s(url)
+            if not s: return ""
+            return s if s.startswith("http") else f"https://cdn1.domeggook.com/{s}"
+        img_url = _to_full(thumb.get("original")) or _to_full(thumb.get("large", ""))
+        basis = data.get("basis", {})
         return JSONResponse({
             "item_no": item_no,
-            "name": item.get("title", ""),
+            "name": _dg_s(basis.get("title", "")),
             "img": img_url,
-            "price": item.get("price", ""),
         })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
