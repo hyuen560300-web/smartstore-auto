@@ -1237,6 +1237,36 @@ async def domeggook_debug():
     })
 
 
+@app.get("/dg-item/{item_no}")
+async def dg_item_detail(item_no: str):
+    """도매꾹 단일 상품 이미지 URL 조회 (item_no 직접 입력)."""
+    import httpx as _httpx
+    key = DOMEGGOOK_API_KEY
+    if not key:
+        return JSONResponse({"error": "DOMEGGOOK_API_KEY 없음"}, status_code=400)
+    try:
+        async with _httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://domeggook.com/ssl/api/", params={
+                "ver": "4.1", "mode": "getItem", "aid": key,
+                "no": item_no, "om": "json",
+            })
+        data = r.json()
+        item = data.get("domeggook", {}).get("item", {})
+        thumb = item.get("thumb", {})
+        imgs = thumb.get("list", {}).get("image", [])
+        if isinstance(imgs, dict):
+            imgs = [imgs]
+        img_url = imgs[0].get("#text", "") if imgs else thumb.get("original", "")
+        return JSONResponse({
+            "item_no": item_no,
+            "name": item.get("title", ""),
+            "img": img_url,
+            "price": item.get("price", ""),
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/update-products-seo")
 async def update_products_seo_smartstore(request: Request, background_tasks: BackgroundTasks):
     """스마트스토어 기존 상품 GEO/SEO/HS코드 일괄 업데이트 (백그라운드)."""
