@@ -85,6 +85,8 @@ import employees as _employees_module
 
 app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0")
 
+_AUDIT_CACHE: dict = {"status": "idle", "scanned": 0, "products": []}
+
 
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
@@ -2157,6 +2159,53 @@ async def products_delete_by_nos(request: Request):
         "failed_count": len(failed),
         "deleted": deleted,
         "failed": failed,
+    })
+
+
+async def _run_audit():
+    global _AUDIT_CACHE
+    _AUDIT_CACHE = {"status": "running", "scanned": 0, "products": []}
+    all_prods = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            product_no = str(p.get("originProductNo", ""))
+            origin = p.get("originProduct", {})
+            name = (origin.get("name") or "").strip()
+            price = int(origin.get("salePrice") or origin.get("price") or 0)
+            if product_no and name:
+                all_prods.append({"product_no": product_no, "name": name, "price": price})
+        _AUDIT_CACHE["scanned"] = len(all_prods)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.3)
+    _AUDIT_CACHE["status"] = "done"
+    _AUDIT_CACHE["products"] = all_prods
+    print(f"[AUDIT] 완료 — 전체 {len(all_prods)}개 수집", flush=True)
+
+
+@app.post("/products/audit-start")
+async def products_audit_start(background_tasks: BackgroundTasks):
+    """전체 상품 이름+가격 백그라운드 스캔 시작. /products/audit-result 로 결과 조회."""
+    if _AUDIT_CACHE.get("status") == "running":
+        return JSONResponse({"status": "already_running", "scanned": _AUDIT_CACHE.get("scanned", 0)})
+    background_tasks.add_task(_run_audit)
+    return JSONResponse({"status": "started"})
+
+
+@app.get("/products/audit-result")
+async def products_audit_result():
+    """audit-start 로 시작한 스캔 결과 반환. status=done 되면 products 배열 포함."""
+    return JSONResponse({
+        "status": _AUDIT_CACHE.get("status"),
+        "scanned": _AUDIT_CACHE.get("scanned", 0),
+        "count": len(_AUDIT_CACHE.get("products", [])),
+        "products": _AUDIT_CACHE.get("products", []),
     })
 
 
