@@ -87,6 +87,88 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 
 _AUDIT_CACHE: dict = {"status": "idle", "scanned": 0, "products": []}
 
+_PURGE_CACHE: dict = {"status": "idle", "scanned": 0, "deleted": 0, "failed": 0, "log": []}
+
+_PURGE_KEEP = [
+    "에펠탑", "이중유리 커피", "커피 추출기", "통풍시트커버", "통풍 시트커버",
+    "레인부츠", "미스트 분사기", "미스트분사기", "나노 미스트",
+    "텃밭 재배키트", "텃밭재배키트", "미니텃밭 재배",
+    "실외기 커버", "실외기커버", "에어컨 실외기",
+    "아크릴 매니큐어 정리대", "매니큐어 정리대",
+    "베란다 텃밭 부직포 화분",
+]
+_PURGE_OFFSEASON = {"13563365983", "13563364477", "13563153288", "13562886644"}
+
+
+async def _run_purge_low_price():
+    global _PURGE_CACHE
+    _PURGE_CACHE = {"status": "running", "scanned": 0, "deleted": 0, "failed": 0, "log": []}
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            product_no = str(p.get("originProductNo", ""))
+            origin = p.get("originProduct", {})
+            name = (origin.get("name") or "").strip()
+            price = int(origin.get("salePrice") or origin.get("price") or 0)
+            _PURGE_CACHE["scanned"] += 1
+
+            should_delete = False
+            reason = ""
+            if product_no in _PURGE_OFFSEASON:
+                should_delete = True
+                reason = "비시즌"
+            elif price > 0 and price < 10000 and not any(k in name for k in _PURGE_KEEP):
+                should_delete = True
+                reason = f"가격미만 ₩{price}"
+
+            if should_delete and product_no:
+                try:
+                    ok = await naver_api.delete_product(product_no)
+                    if ok:
+                        _PURGE_CACHE["deleted"] += 1
+                        _PURGE_CACHE["log"].append({"no": product_no, "name": name, "reason": reason, "ok": True})
+                    else:
+                        _PURGE_CACHE["failed"] += 1
+                        _PURGE_CACHE["log"].append({"no": product_no, "name": name, "reason": "삭제 실패", "ok": False})
+                except Exception as e:
+                    _PURGE_CACHE["failed"] += 1
+                    _PURGE_CACHE["log"].append({"no": product_no, "name": name, "reason": str(e), "ok": False})
+                await asyncio.sleep(0.3)
+
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.3)
+
+    _PURGE_CACHE["status"] = "done"
+    print(f"[PURGE] 완료 — 스캔:{_PURGE_CACHE['scanned']} 삭제:{_PURGE_CACHE['deleted']} 실패:{_PURGE_CACHE['failed']}", flush=True)
+
+
+@app.post("/products/purge-low-price")
+async def products_purge_low_price(background_tasks: BackgroundTasks):
+    """전체 상품 순회 → 1만원 미만 + 비시즌 백그라운드 삭제. 결과: /products/purge-result"""
+    if _PURGE_CACHE.get("status") == "running":
+        return JSONResponse({"status": "already_running", "scanned": _PURGE_CACHE.get("scanned", 0)})
+    background_tasks.add_task(_run_purge_low_price)
+    return JSONResponse({"status": "started"})
+
+
+@app.get("/products/purge-result")
+async def products_purge_result():
+    """purge-low-price 진행 상황 및 결과 반환."""
+    c = _PURGE_CACHE
+    return JSONResponse({
+        "status": c.get("status"),
+        "scanned": c.get("scanned", 0),
+        "deleted": c.get("deleted", 0),
+        "failed": c.get("failed", 0),
+        "log": c.get("log", []),
+    })
+
 
 # ─── 기본 ────────────────────────────────────────────────────────────────────
 @app.get("/health")
