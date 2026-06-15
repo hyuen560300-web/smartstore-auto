@@ -219,12 +219,65 @@ _DG_KEYWORDS_ALL: list[str] = [
     ).split(",") if kw.strip()
 ]
 
+# ─── 계절/이벤트 소싱 필터 ───────────────────────────────────────────────────
+def _get_season_info() -> dict:
+    """현재 날짜 기준 계절 + 2주 이내 이벤트 키워드 반환."""
+    import datetime as _dt2
+    today = _dt2.date.today()
+    m = today.month
+    if 3 <= m <= 5:
+        season, allowed, blocked = "봄", \
+            ["봄나들이","청소","수납","원예","씨앗","화분","텃밭"], \
+            ["방한","내복","발열","핫팩","난방","두꺼운","보온","기모","털"]
+    elif 6 <= m <= 8:
+        season, allowed, blocked = "여름", \
+            ["냉감","쿨링","캠핑","물놀이","주방","뷰티","선풍기","보냉","여름","에어컨","자외선"], \
+            ["방한","내복","발열","핫팩","난방","두꺼운","보온","기모","털","방한복"]
+    elif 9 <= m <= 11:
+        season, allowed, blocked = "가을", \
+            ["캠핑","수납","홈인테리어","건강","가을","단풍","아웃도어"], \
+            ["냉감","쿨링","물놀이","선풍기","수영","수영복","래쉬가드"]
+    else:
+        season, allowed, blocked = "겨울", \
+            ["보온","난방","발열","방한","크리스마스","연말","핫팩","기모","내복"], \
+            ["냉감","쿨링","물놀이","선풍기","수영","수영복","래쉬가드","여름"]
+    _EVENTS = [
+        ((1,1),["다이어리","계획","새출발"]),((2,14),["초콜릿","선물"]),
+        ((3,14),["사탕","선물"]),((4,5),["원예","화분","씨앗"]),
+        ((5,5),["완구","교육","장난감"]),((5,8),["카네이션","선물"]),
+        ((5,15),["감사선물"]),((6,6),["애국심"]),
+        ((7,15),["여행","캠핑","물놀이"]),((10,31),["코스튬","파티용품"]),
+        ((11,11),["과자","선물"]),((12,25),["선물","트리","장식"]),
+    ]
+    import datetime as _dt3
+    event_kws: list[str] = []
+    for (em, ed), kws in _EVENTS:
+        try:
+            ev = _dt3.date(today.year, em, ed)
+            if 0 <= (ev - today).days <= 14:
+                event_kws.extend(kws)
+        except Exception:
+            pass
+    return {"season": season, "allowed": allowed, "blocked": blocked, "events": event_kws}
+
+_SEASON_INFO: dict = _get_season_info()
+
+def _is_season_excluded(name: str) -> bool:
+    """상품명에 현재 계절과 맞지 않는 키워드 포함 시 True."""
+    return any(kw in name for kw in _SEASON_INFO["blocked"])
+
 def _get_rotating_keywords(n: int = 15) -> list[str]:
-    """날짜 시드 기반으로 매일 다른 키워드 n개 선택."""
+    """날짜 시드 기반으로 매일 다른 키워드 n개 선택. 계절/이벤트 키워드 우선 포함."""
     import random as _r, datetime as _dt
     seed = int(_dt.date.today().strftime("%Y%m%d"))
     rng = _r.Random(seed)
-    return rng.sample(_DG_KEYWORDS_ALL, min(n, len(_DG_KEYWORDS_ALL)))
+    priority = _SEASON_INFO["allowed"] + _SEASON_INFO["events"]
+    matched = [kw for kw in _DG_KEYWORDS_ALL if any(p in kw for p in priority)]
+    others  = [kw for kw in _DG_KEYWORDS_ALL if kw not in matched]
+    p_n = min(7, len(matched), n)
+    p_sample = rng.sample(matched, p_n) if matched else []
+    o_sample = rng.sample(others, min(n - len(p_sample), len(others))) if others else []
+    return (p_sample + o_sample)[:n]
 
 _DG_KEYWORDS = _get_rotating_keywords(15)
 
@@ -3233,6 +3286,12 @@ async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
                 results["duplicate"] += 1
                 continue
 
+            # ③-b 계절 필터: 현재 계절과 맞지 않는 상품 제외
+            if _is_season_excluded(p.get("name", "")):
+                print(f"[계절필터] 스킵: {p.get('name','')[:30]} — {_SEASON_INFO['season']} 시즌 부적합", flush=True)
+                results["skip"] += 1
+                continue
+
             # ④ IP 감시관: 상표권 위험 체크
             safe, danger_kw = employee_ip_guardian(p)
             if not safe:
@@ -3452,6 +3511,12 @@ async def pipeline_register_from_domeggook(
             # ─── STEP 1: 소싱 검증 ───
             if (code and code in registered_codes) or (name_norm and name_norm in registered_names):
                 results["duplicate"] += 1
+                continue
+
+            # 계절 필터: 현재 계절과 맞지 않는 상품 제외
+            if _is_season_excluded(p.get("name", "")):
+                print(f"[계절필터] 스킵: {p.get('name','')[:30]} — {_SEASON_INFO['season']} 시즌 부적합", flush=True)
+                results["skip"] += 1
                 continue
 
             safe, danger_kw = employee_ip_guardian(p)
