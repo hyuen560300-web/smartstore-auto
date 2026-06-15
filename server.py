@@ -2101,6 +2101,65 @@ async def delete_all_products(background_tasks: BackgroundTasks):
     return JSONResponse({"status": "started", "message": "전체 상품 삭제 시작. Railway 로그에서 [DELETE-ALL] 태그 확인."})
 
 
+@app.get("/products/keyword-scan")
+async def products_keyword_scan(keywords: str = "방한,내복,발열,핫팩,난방,겨울,두꺼운,보온,히터,전기장판,온수매트,목도리,장갑,패딩,방풍,방설,스키,방한복,귀마개,워머"):
+    """키워드 포함 상품 목록 조회 (삭제 없음). keywords=쉼표구분 쿼리파라미터."""
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    all_prods = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            product_no = str(p.get("originProductNo", ""))
+            origin = p.get("originProduct", {})
+            name = (origin.get("name") or "").strip()
+            if product_no and name:
+                all_prods.append({"product_no": product_no, "name": name})
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.3)
+
+    matched = [p for p in all_prods if any(kw in p["name"] for kw in kw_list)]
+    return JSONResponse({
+        "total_scanned": len(all_prods),
+        "matched_count": len(matched),
+        "keywords": kw_list,
+        "products": matched,
+    })
+
+
+@app.post("/products/delete-by-nos")
+async def products_delete_by_nos(request: Request):
+    """지정된 product_nos 목록 순차 삭제. body: {"product_nos": ["123","456",...]}"""
+    body = await request.json()
+    product_nos = body.get("product_nos", [])
+    if not product_nos:
+        return JSONResponse({"error": "product_nos 필드가 비어있습니다."}, status_code=400)
+
+    deleted, failed = [], []
+    for no in product_nos:
+        try:
+            result = await naver_api.delete_product(str(no))
+            if result:
+                deleted.append(no)
+            else:
+                failed.append({"no": no, "reason": "delete_product returned falsy"})
+        except Exception as e:
+            failed.append({"no": no, "reason": str(e)})
+        await asyncio.sleep(0.3)
+
+    return JSONResponse({
+        "deleted_count": len(deleted),
+        "failed_count": len(failed),
+        "deleted": deleted,
+        "failed": failed,
+    })
+
+
 @app.post("/delete-blurry-products")
 async def delete_blurry_products(background_tasks: BackgroundTasks):
     """흐릿/소형 대표이미지 상품 전체 삭제 (백그라운드).
