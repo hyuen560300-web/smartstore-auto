@@ -3214,7 +3214,7 @@ async def get_product_image(p: dict) -> str | None:
 naver_api = NaverCommerceAPI()
 
 
-async def pipeline_register_products(excel_path: str, limit: int = 50) -> dict:
+async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
     """파이프라인 1: 전 직원 협업 — 소싱→IP→시즌→트렌드→리뷰→설명→이미지→등록"""
     from employees import (
         employee_sourcing_manager, employee_ip_guardian,

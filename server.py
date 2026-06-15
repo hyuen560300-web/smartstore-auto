@@ -749,7 +749,7 @@ async def register_products(request: Request, background_tasks: BackgroundTasks)
         if not files:
             return JSONResponse({"status": "error", "message": "업로드된 Excel 파일 없음"}, status_code=400)
         excel_path = str(files[0])
-    limit = int(body.get("limit", 50))
+    limit = int(body.get("limit", 33))
     background_tasks.add_task(pipeline_register_products, excel_path, limit)
     return JSONResponse({"status": "processing", "excel": excel_path, "limit": limit})
 
