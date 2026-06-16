@@ -546,9 +546,10 @@ class NaverCommerceAPI:
             )
             return r.status_code == 200
 
-    async def list_products(self, page: int = 1, size: int = 50) -> dict:
+    async def list_products(self, page: int = 1, size: int = 50, days: int | None = None) -> dict:
         """등록된 상품 목록 조회 (상품명/가격/상태 포함).
-        search API는 ID만 반환하므로 개별 상세 조회를 asyncio.gather로 병렬 처리."""
+        search API는 ID만 반환하므로 개별 상세 조회를 asyncio.gather로 병렬 처리.
+        days: 하위 호환용 — 무시됨. fromDate=2020-01-01 고정으로 전체 기간 조회 (commit 19d0975)."""
         now = datetime.now(timezone.utc)
         headers = await self._headers()
         async with httpx.AsyncClient(timeout=30) as c:
