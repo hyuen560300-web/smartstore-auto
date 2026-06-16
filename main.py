@@ -4347,8 +4347,26 @@ async def update_existing_products_seo(limit: int = 100, skip_has_geo: bool = Tr
 # 소싱 고도화 v2 — ①블루오션 ②SEO ③성과정리 ④가격경쟁 ⑤리뷰모니터 ⑥카테고리
 # ══════════════════════════════════════════════════════════════════════════════
 
+import re as _re_tg_noise
+_TG_NOISE_RE = _re_tg_noise.compile(r"^\s*\[(?:재적용 )?\d+\s*/\s*\d+\]")
+_TG_NOISE_PATTERNS = (
+    "[이미지파싱]", "[HTML 재적용 시작]", "[리뷰·위시리스트]", "[카테고리 분석]",
+    "판매중지 대상", "[판매중지] 진행 중", "판매중지 불필요",
+    "복구 불필요", "복구 시작", "[복구] 진행 중", "적용률",
+)
+def _tg_is_noise(msg: str) -> bool:
+    """진행·소싱·상태성 알림 차단. 주문/오류/완료요약/주간리포트는 통과 (2026-06-16)."""
+    if not msg:
+        return False
+    if _TG_NOISE_RE.match(msg):
+        return True
+    return any(p in msg for p in _TG_NOISE_PATTERNS)
+
+
 async def _tg_notify(msg: str) -> None:
-    """텔레그램 범용 알림 (실패 무시)."""
+    """텔레그램 범용 알림 (실패 무시). 노이즈성 메시지는 자동 차단."""
+    if _tg_is_noise(msg):
+        return
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not bot_token or not chat_id:
