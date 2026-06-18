@@ -91,38 +91,63 @@ def employee_ip_guardian(product: dict) -> tuple:
 # ─── 직원 3: 시즌 기획자 ─────────────────────────────────────────────────────
 SEASON_CALENDAR = [
     (1, 1,  "신정",        ["새해선물", "달력", "플래너"]),
-    (1, 25, "설날",        ["명절선물", "한과", "전통차"]),
     (2, 14, "발렌타인",    ["초콜릿", "커플선물"]),
     (3, 14, "화이트데이",  ["사탕", "커플선물"]),
+    (4, 5,  "식목일",      ["원예", "화분", "씨앗"]),
     (5, 5,  "어린이날",    ["장난감", "어린이선물", "완구"]),
     (5, 8,  "어버이날",    ["카네이션", "부모님선물", "건강식품"]),
-    (6, 20, "여름",        ["수영복", "선크림", "냉감의류", "모자"]),
+    (5, 15, "스승의날",    ["감사선물"]),
+    (6, 6,  "현충일",      ["추모", "국화"]),
+    (6, 20, "여름준비",    ["수영복", "선크림", "냉감의류", "모자"]),
     (7, 15, "장마",        ["우산", "방수용품", "제습제"]),
-    (9, 15, "추석",        ["명절선물세트", "한과", "홍삼"]),
+    (8, 15, "광복절",      ["기념일", "애국"]),
+    (8, 26, "개학",        ["학용품", "새학기", "책가방"]),
     (10,31, "핼러윈",      ["코스튬", "파티용품"]),
     (11,11, "빼빼로데이",  ["빼빼로", "선물세트"]),
-    (12, 1, "크리스마스",  ["크리스마스선물", "트리", "파티용품"]),
+    (12,25, "크리스마스",  ["크리스마스선물", "트리", "파티용품"]),
 ]
 
+# 음력 명절(설날·추석) — 양력 환산 다년 테이블 (매년 갱신 필요). 시스템 A(main.py)와 동일 기준.
+_LUNAR_HOLIDAYS = {
+    "설날": {2025:(1,29),2026:(2,17),2027:(2,6),2028:(1,26),2029:(2,13),2030:(2,3),2031:(1,23),2032:(2,11)},
+    "추석": {2025:(10,6),2026:(9,25),2027:(9,15),2028:(10,3),2029:(9,22),2030:(9,12),2031:(10,1),2032:(9,19)},
+}
+_LUNAR_KEYWORDS = {
+    "설날": ["명절선물세트", "한과", "전통차", "한복"],
+    "추석": ["명절선물세트", "한과", "홍삼", "벌초"],
+}
+
 def employee_season_planner() -> dict:
-    """현재 날짜 기준 60일 내 시즌 이벤트 분석"""
+    """현재 날짜 기준 60일 내 시즌 이벤트 분석 (음력 명절 양력 환산 + 연도 롤오버)."""
     today = date.today()
     upcoming = []
+    def _push(event, ev_date, keywords):
+        days_left = (ev_date - today).days
+        if 0 <= days_left <= 60:
+            upcoming.append({
+                "event": event, "date": str(ev_date), "days_left": days_left,
+                "keywords": keywords,
+                "urgency": "🚨긴급" if days_left <= 14 else "📅준비중",
+            })
+    # 고정 양력 이벤트
     for month, day, event, keywords in SEASON_CALENDAR:
         try:
-            event_date = date(today.year, month, day)
-            if event_date < today:
-                event_date = date(today.year + 1, month, day)
-            days_left = (event_date - today).days
-            if 0 <= days_left <= 60:
-                upcoming.append({
-                    "event": event,
-                    "date": str(event_date),
-                    "days_left": days_left,
-                    "keywords": keywords,
-                    "urgency": "🚨긴급" if days_left <= 14 else "📅준비중"
-                })
+            ev = date(today.year, month, day)
+            if ev < today:
+                ev = date(today.year + 1, month, day)
+            _push(event, ev, keywords)
         except ValueError:
+            pass
+    # 음력 명절 (다가오는 1회만)
+    for name, tbl in _LUNAR_HOLIDAYS.items():
+        try:
+            for yr in (today.year, today.year + 1):
+                if yr in tbl:
+                    ev = date(yr, *tbl[yr])
+                    if ev >= today:
+                        _push(name, ev, _LUNAR_KEYWORDS[name])
+                        break
+        except Exception:
             pass
     upcoming.sort(key=lambda x: x["days_left"])
     return {"today": str(today), "upcoming": upcoming}

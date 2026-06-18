@@ -220,6 +220,54 @@ _DG_KEYWORDS_ALL: list[str] = [
 ]
 
 # ─── 계절/이벤트 소싱 필터 ───────────────────────────────────────────────────
+def _resolve_event_keywords(today, window: int = 14):
+    """이벤트별 정확 날짜로 키워드 활성화. 음력 명절(설날·추석)·블랙프라이데이 자동계산 + 연도 롤오버.
+    window일(기본 14일) 이내 다가오는 이벤트의 키워드만 반환."""
+    import datetime as _d
+    _SEOL = {2025:(1,29),2026:(2,17),2027:(2,6),2028:(1,26),2029:(2,13),2030:(2,3),2031:(1,23),2032:(2,11)}
+    _CHU  = {2025:(10,6),2026:(9,25),2027:(9,15),2028:(10,3),2029:(9,22),2030:(9,12),2031:(10,1),2032:(9,19)}
+    def _nth(yr, mo, wd, n):
+        d = _d.date(yr, mo, 1); off = (wd - d.weekday()) % 7
+        return d + _d.timedelta(days=off + (n - 1) * 7)
+    def _seollal(yr):
+        return _d.date(yr, *_SEOL.get(yr, (2, 1)))
+    def _chuseok(yr):
+        return _d.date(yr, *_CHU.get(yr, (9, 15)))
+    def _blackfri(yr):
+        return _nth(yr, 11, 3, 4) + _d.timedelta(days=1)   # 추수감사절(11월 4째 목) 다음날
+    specs = [
+        (lambda yr: _d.date(yr, 1, 1),  ["다이어리", "계획", "새출발", "신년"]),
+        (_seollal,                       ["설날", "명절선물", "선물세트", "한복"]),
+        (lambda yr: _d.date(yr, 2, 14), ["초콜릿", "발렌타인", "선물"]),
+        (lambda yr: _d.date(yr, 3, 14), ["사탕", "화이트데이", "선물"]),
+        (lambda yr: _d.date(yr, 4, 5),  ["원예", "화분", "씨앗", "봄나들이"]),
+        (lambda yr: _d.date(yr, 5, 5),  ["완구", "교육", "장난감", "어린이날"]),
+        (lambda yr: _d.date(yr, 5, 8),  ["카네이션", "선물", "어버이날"]),
+        (lambda yr: _d.date(yr, 5, 15), ["감사선물", "스승의날"]),
+        (lambda yr: _d.date(yr, 6, 6),  ["현충일"]),
+        (lambda yr: _d.date(yr, 7, 15), ["여행", "캠핑", "물놀이", "바캉스"]),
+        (lambda yr: _d.date(yr, 8, 15), ["광복절"]),
+        (lambda yr: _d.date(yr, 8, 26), ["개학", "학용품", "새학기"]),
+        (_chuseok,                       ["추석", "명절선물", "선물세트", "벌초"]),
+        (lambda yr: _d.date(yr, 10, 31),["코스튬", "파티용품", "할로윈"]),
+        (lambda yr: _d.date(yr, 11, 11),["과자", "빼빼로", "선물"]),
+        (_blackfri,                      ["블랙프라이데이", "특가", "할인", "세일"]),
+        (lambda yr: _d.date(yr, 12, 25),["선물", "트리", "장식", "크리스마스"]),
+    ]
+    y = today.year
+    kws: list[str] = []
+    for fn, kw in specs:
+        try:
+            ev = fn(y)
+            if ev < today:
+                ev = fn(y + 1)   # 지난 이벤트는 내년으로 (연말 신년 누락 방지)
+            if 0 <= (ev - today).days <= window:
+                kws.extend(kw)
+        except Exception:
+            pass
+    return kws
+
+
 def _get_season_info() -> dict:
     """현재 날짜 기준 계절 + 2주 이내 이벤트 키워드 반환."""
     import datetime as _dt2
@@ -241,26 +289,27 @@ def _get_season_info() -> dict:
         season, allowed, blocked = "겨울", \
             ["보온","난방","발열","방한","크리스마스","연말","핫팩","기모","내복"], \
             ["냉감","쿨링","물놀이","선풍기","수영","수영복","래쉬가드","여름"]
-    _EVENTS = [
-        ((1,1),["다이어리","계획","새출발"]),((2,14),["초콜릿","선물"]),
-        ((3,14),["사탕","선물"]),((4,5),["원예","화분","씨앗"]),
-        ((5,5),["완구","교육","장난감"]),((5,8),["카네이션","선물"]),
-        ((5,15),["감사선물"]),((6,6),["애국심"]),
-        ((7,15),["여행","캠핑","물놀이"]),((10,31),["코스튬","파티용품"]),
-        ((11,11),["과자","선물"]),((12,25),["선물","트리","장식"]),
-    ]
-    import datetime as _dt3
-    event_kws: list[str] = []
-    for (em, ed), kws in _EVENTS:
-        try:
-            ev = _dt3.date(today.year, em, ed)
-            if 0 <= (ev - today).days <= 14:
-                event_kws.extend(kws)
-        except Exception:
-            pass
+    event_kws = _resolve_event_keywords(today)
     return {"season": season, "allowed": allowed, "blocked": blocked, "events": event_kws}
 
-_SEASON_INFO: dict = _get_season_info()
+
+class _SeasonInfoProxy:
+    """import 시점 고정 방지 — 매 접근 시 당일 기준으로 계산(같은 날 내 캐시)."""
+    _c = {"date": None, "info": None}
+    def _live(self):
+        import datetime as _d
+        td = _d.date.today()
+        if self._c["date"] != td:
+            self._c["date"] = td
+            self._c["info"] = _get_season_info()
+        return self._c["info"]
+    def __getitem__(self, k):
+        return self._live()[k]
+    def get(self, k, default=None):
+        return self._live().get(k, default)
+
+
+_SEASON_INFO = _SeasonInfoProxy()
 
 def _is_season_excluded(name: str) -> bool:
     """상품명에 현재 계절과 맞지 않는 키워드 포함 시 True."""
