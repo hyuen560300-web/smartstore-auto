@@ -1451,6 +1451,7 @@ async def register_single_product(request: Request):
         "price": raw_price,
         "image": image_url,
         "code": body.get("code", ""),
+        "category_id": body.get("category_id", ""),   # 유효 리프 카테고리ID 직접 지정 (없으면 키워드맵 폴백)
     }
 
     registered_codes = load_registered_codes()
