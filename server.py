@@ -826,6 +826,30 @@ async def find_duplicate_products_naver():
     }
 
 
+@app.get("/product-detail/{origin_no}")
+async def product_detail_one(origin_no: str):
+    """단일 상품 상세 — channel_no(URL용) + dg_code(도매꾹코드) + price + image."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                            headers=await naver_api._headers())
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:200]}, status_code=502)
+        d = r.json()
+        origin = d.get("originProduct", {}) or {}
+        chans = d.get("channelProducts", []) or []
+        channel_no = str(chans[0].get("channelProductNo", "")) if chans else ""
+        dg_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+        img = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
+        return {"origin_no": origin_no, "name": origin.get("name", ""),
+                "price": origin.get("salePrice", 0), "channel_no": channel_no,
+                "dg_code": dg_code, "image": img}
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
 @app.get("/products/catalog")
 async def products_catalog():
     """전체 등록 상품 목록(블루오션 선정용): name, price, channel_no, dg_code, image, status."""
