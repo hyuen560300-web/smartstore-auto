@@ -828,11 +828,11 @@ async def find_duplicate_products_naver():
 
 @app.get("/product-detail/{origin_no}")
 async def product_detail_one(origin_no: str):
-    """단일 상품 상세 — channel_no(URL용) + dg_code(도매꾹코드) + price + image."""
-    import httpx as _hx
+    """단일 상품 상세 — channel_no + dg_code + price + 상세HTML에서 cdn1.domeggook 이미지 추출."""
+    import httpx as _hx, re as _re
     from main import NAVER_BASE
     try:
-        async with _hx.AsyncClient(timeout=20) as c:
+        async with _hx.AsyncClient(timeout=25) as c:
             r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
                             headers=await naver_api._headers())
         if r.status_code != 200:
@@ -842,10 +842,12 @@ async def product_detail_one(origin_no: str):
         chans = d.get("channelProducts", []) or []
         channel_no = str(chans[0].get("channelProductNo", "")) if chans else ""
         dg_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
-        img = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
+        rep = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
+        detail = origin.get("detailContent", "") or ""
+        cdn = list(dict.fromkeys(_re.findall(r'https?://cdn[0-9]?\.domeggook\.com/[^\s"\'<>\\)]+', detail)))
         return {"origin_no": origin_no, "name": origin.get("name", ""),
                 "price": origin.get("salePrice", 0), "channel_no": channel_no,
-                "dg_code": dg_code, "image": img}
+                "dg_code": dg_code, "rep_image": rep, "cdn1_imgs": cdn[:6]}
     except Exception as e:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
