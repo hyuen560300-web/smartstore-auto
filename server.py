@@ -826,6 +826,35 @@ async def find_duplicate_products_naver():
     }
 
 
+@app.get("/products/catalog")
+async def products_catalog():
+    """전체 등록 상품 목록(블루오션 선정용): name, price, channel_no, dg_code, image, status."""
+    import asyncio as _ai
+    out = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            origin = p.get("originProduct", {}) or {}
+            name = (origin.get("name") or p.get("name") or "").strip()
+            price = p.get("salePrice") or origin.get("salePrice") or 0
+            channel_no = str(p.get("channelProductNo") or "")
+            origin_no = str(p.get("originProductNo") or "")
+            dg_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+            status = p.get("statusType") or origin.get("statusType") or ""
+            img = p.get("representativeImageUrl") or ""
+            out.append({"name": name, "price": price, "channel_no": channel_no,
+                        "origin_no": origin_no, "dg_code": dg_code, "status": status, "image": img})
+        if len(contents) < 50:
+            break
+        page += 1
+        await _ai.sleep(0.3)
+    return {"total": len(out), "products": out}
+
+
 @app.get("/html-coverage")
 async def html_coverage_scan():
     """전체 상품 중 Claude HTML 19섹션 적용 여부 스캔 (Noto Sans KR 포함 여부 판별)."""
