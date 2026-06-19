@@ -1553,7 +1553,15 @@ async def register_single_product(request: Request):
         result = await naver_api.register_product(payload)
         save_registered_code(p["code"])
         save_registered_name(safe_name)
-        return JSONResponse({"status": "success", "product_name": safe_name, "price": price})
+        _res = result or {}
+        origin_no = str(_res.get("originProductNo", "") or "")
+        chans = _res.get("channelProducts", []) or []
+        channel_no = str(_res.get("smartstoreChannelProductNo", "")
+                         or (chans[0].get("channelProductNo", "") if chans else "") or "")
+        store_url = (f"https://smartstore.naver.com/khww/products/{channel_no}"
+                     if channel_no else (f"https://smartstore.naver.com/khww/products/{origin_no}" if origin_no else ""))
+        return JSONResponse({"status": "success", "product_name": safe_name, "price": price,
+                             "origin_no": origin_no, "channel_no": channel_no, "store_url": store_url})
 
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
