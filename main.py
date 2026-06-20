@@ -2011,7 +2011,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
                 content = vision_imgs + [{"type": "text", "text": vision_text}]
                 resp = await client.messages.create(
                     model="claude-haiku-4-5-20251001",
-                    max_tokens=8000,
+                    max_tokens=4000,
                     messages=[{"role": "user", "content": content}],
                 )
                 html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
@@ -2031,7 +2031,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         try:
             resp = await client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=8000,
+                max_tokens=4000,
                 messages=[{"role": "user", "content": text_prompt}],
             )
             html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
