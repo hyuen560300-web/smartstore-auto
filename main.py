@@ -779,6 +779,42 @@ class NaverCommerceAPI:
 
 
 # ─── 도매꾹 API 소싱 ─────────────────────────────────────────────────────────
+#
+# ⚠️ KC 인증 주의 (2026-06-21) — 아래 카테고리는 네이버 스마트스토어 등록 시
+#    KC 안전인증이 필수라, 인증번호 없이는 등록이 차단된다(BAD_REQUEST: productCertificationInfos).
+#    → 소싱 단계에서 자동 제외한다 (_is_kc_required + 품질필터 ⓪단계).
+#
+#    [KC 필요 → 소싱 제외]  전기/전자제품(LED·충전기·가전·포충기 등) /
+#                          물놀이용품 일부(수영용품 카테고리) / 어린이·유아용품 / 가스용품
+#    [KC 불필요 → 소싱 OK]  패션잡화 / 생활잡화 / 주방용품 / 휴대폰액세서리 /
+#                          캠핑 / 뷰티 / 펫용품 / 스포츠
+#    ※ 등록 카테고리(leaf) 선택 시에도 동일 기준 적용 — 가전·수영용품 leaf는 회피.
+
+# KC 인증 필요 추정 키워드 (상품명/카테고리에 포함 시 소싱 제외)
+_KC_EXCLUDE_KEYWORDS: tuple[str, ...] = (
+    # 전기/전자제품
+    "LED", "led", "충전", "충전식", "전기", "전자", "가전", "포충", "모기퇴치기",
+    "해충퇴치기", "건전지", "배터리", "USB", "usb", "어댑터", "전원", "플러그",
+    "전동", "무선", "블루투스", "스피커", "이어폰", "마사지기", "안마",
+    "가습기", "제습기", "선풍기", "히터", "온열기", "전기장판",
+    # 물놀이용품(수영용품 — 안전인증 대상)
+    "수영", "물놀이", "튜브", "구명", "스노클", "수경", "물안경",
+    # 어린이·유아용품
+    "어린이", "유아", "아동", "키즈", "완구", "장난감", "유아용",
+    # 가스용품
+    "가스", "부탄", "토치", "버너",
+)
+
+
+def _is_kc_required(name: str, category: str = "") -> bool:
+    """상품명/카테고리가 KC 인증 필요 군에 해당하면 True (소싱 제외 대상).
+
+    네이버 등록 시 KC 인증번호가 없으면 전기전자/수영용품/어린이/가스 카테고리는
+    BAD_REQUEST로 차단되므로, 소싱 단계에서 미리 걸러 등록 실패를 방지한다.
+    """
+    text = f"{name or ''} {category or ''}"
+    return any(kw in text for kw in _KC_EXCLUDE_KEYWORDS)
+
 
 def _dg_str(val) -> str:
     """XML→JSON 응답에서 문자열 값 추출. dict이면 #text 또는 text 키 사용."""
@@ -1000,10 +1036,11 @@ async def _check_image_sharpness(url: str) -> tuple[float, int]:
 
 
 async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
-    """도매꾹 소싱 품질 필터 (6단계).
+    """도매꾹 소싱 품질 필터 (7단계).
+    ⓪ KC 인증 필요군 제외 (전기전자/수영용품/어린이/가스 — _is_kc_required, 2026-06-21)
     ① 가짜/위험 상품  ② 이미지사용 미허용  ③ 이미지 장수 < 3
     ④ 이름 유사도 ≥ 70% (중복)  ⑤ 해상도 < 500px / 파일크기 < 50KB  ⑥ 흐릿한 이미지
-    스킵 시 텔레그램 [소싱스킵] 알림."""
+    스킵 시 로그 기록."""
     from difflib import SequenceMatcher
     BLUR_THRESHOLD  = 200   # Laplacian variance (FIND_EDGES+np.var 기준)
     MIN_FILE_KB     = 50    # 50KB
@@ -1015,6 +1052,19 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
 
     async def _notify_skip(p: dict, reason: str):
         print(f"[품질필터] ❌ {reason}: {p.get('name','')[:40]}", flush=True)
+
+    # ⓪ KC 인증 필요군 제외 (네이버 등록 시 인증번호 없으면 차단 — 2026-06-21)
+    #    전기/전자·수영용품·어린이·가스 카테고리는 KC 안전인증 필수 → 소싱 단계에서 선제 제외
+    kc_filtered, kc_removed = [], 0
+    for p in products:
+        if _is_kc_required(p.get("name", ""), p.get("category", "")):
+            kc_removed += 1
+            await _notify_skip(p, "KC 인증 필요(전기전자/수영/어린이/가스)")
+        else:
+            kc_filtered.append(p)
+    if kc_removed:
+        print(f"[품질필터] KC 인증 필요 제외 {kc_removed}개", flush=True)
+    products = kc_filtered
 
     # ① 가짜/위험 상품
     valid, fake_removed = [], 0
