@@ -838,6 +838,34 @@ async def update_category(request: Request):
         return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
 
 
+@app.get("/debug-update-test")
+async def debug_update_test(no: str):
+    """reapply 스타일 merge-PUT 재현 — 전체 Naver 에러(invalidInputs) 반환(필드 진단용).
+    GET origin-product → readonly 제거 → 기존 payload 그대로 re-PUT → 400 원인 필드 확인."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=30) as c:
+            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+            if rd.status_code != 200:
+                return JSONResponse({"step": "get", "http": rd.status_code, "body": rd.text[:500]}, status_code=400)
+            origin = rd.json().get("originProduct", {})
+            payload = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+            rp = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                             headers=headers, json={"originProduct": payload})
+        return JSONResponse({
+            "no": no,
+            "origin_keys": list(origin.keys()),
+            "leafCategoryId": origin.get("leafCategoryId"),
+            "put_http": rp.status_code,
+            "put_body": rp.text[:1500],
+        })
+    except Exception as e:
+        import traceback
+        return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
+
+
 # ─── Pinterest ───────────────────────────────────────────────────────────────
 @app.get("/pinterest/boards")
 async def pinterest_boards_list():

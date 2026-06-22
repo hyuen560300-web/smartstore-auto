@@ -4201,7 +4201,7 @@ async def pipeline_reapply_claude_html(limit: int = 0) -> dict:
         if not ok:
             results["failed"] += 1
             consecutive_fail += 1
-            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ❌ 업데이트 실패(건너뜀): {name[:30]} — {str(err_msg)[:90]}", flush=True)
+            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ❌ 업데이트 실패(건너뜀): {name[:30]} — {str(err_msg)[:400]}", flush=True)
             if consecutive_fail >= 5:
                 results["stopped_at"] = f"{idx}/{len(not_applied)} — 연속 {consecutive_fail}회 실패(시스템 이상 추정)"
                 await _tg_notify(f"[HTML 재적용 중단] 연속 {consecutive_fail}회 실패 — {name[:30]}")
