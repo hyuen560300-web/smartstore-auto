@@ -767,6 +767,14 @@ async def register_simple(request: Request):
 
         payload = build_product_payload(raw, ai, price_krw, tags=tags)
 
+        # leaf_category_id 명시 지정 시 자동분류(get_category_id) 대신 그 값 사용
+        _leaf = data.get("leaf_category_id")
+        if _leaf:
+            try:
+                payload["originProduct"]["leafCategoryId"] = int(_leaf)
+            except (ValueError, TypeError):
+                pass
+
         # 가격표시제(단위가격) 대상 카테고리(타월 등) 필수 필드 — 미표시(false)로 충족
         # (Naver unitPriceYn 는 Boolean: true/false)
         payload["originProduct"].setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
@@ -794,6 +802,22 @@ async def register_simple(request: Request):
             {"status": "error", "error": str(e), "trace": traceback.format_exc()[-400:]},
             status_code=500,
         )
+
+
+@app.post("/update-category")
+async def update_category(request: Request):
+    """등록 상품의 카테고리(leafCategoryId) 변경. body: {product_no, leaf_category_id}."""
+    data = await request.json()
+    no = str(data.get("product_no", "")).strip()
+    try:
+        leaf = int(data.get("leaf_category_id", 0))
+    except (ValueError, TypeError):
+        leaf = 0
+    if not no or not leaf:
+        return JSONResponse({"status": "error", "error": "product_no, leaf_category_id 필수"}, status_code=400)
+    ok, msg = await naver_api.update_product(no, {"leafCategoryId": leaf})
+    return JSONResponse({"status": "ok" if ok else "error", "product_no": no,
+                         "leaf_category_id": leaf, "error": msg})
 
 
 # ─── Pinterest ───────────────────────────────────────────────────────────────
