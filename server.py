@@ -717,6 +717,81 @@ async def register_pod_product(request: Request):
         )
 
 
+@app.post("/register-simple")
+async def register_simple(request: Request):
+    """특정 상품 단건 간편 등록 (register_product 직호출).
+    AI 파이프라인(카피/HTML/태그/가격 생성) 없이 입력값 그대로 등록.
+    SEO·상세페이지는 추후 /reapply-html 로 보완.
+    body: {name, price_krw, image_url(cdn1), category, description?, tags?,
+           origin?, manufacturer?, brand?, delivery_fee?, stock?}
+    """
+    data = await request.json()
+    name: str = str(data.get("name", "")).strip()
+    image_url: str = str(data.get("image_url", "")).strip()
+    try:
+        price_krw: int = round(int(data.get("price_krw", 0)) / 10) * 10  # Naver 10원 단위
+    except (ValueError, TypeError):
+        price_krw = 0
+
+    if not name:
+        return JSONResponse({"status": "error", "error": "name 필수"}, status_code=400)
+    if price_krw <= 0:
+        return JSONResponse({"status": "error", "error": "price_krw > 0 필수"}, status_code=400)
+    if not image_url.startswith("http"):
+        return JSONResponse({"status": "error", "error": "image_url(http) 필수"}, status_code=400)
+
+    try:
+        # 1) cdn1 이미지 → 네이버 CDN 업로드
+        naver_image = await naver_api.upload_image(image_url)
+
+        # 2) raw/ai 구성 (build_product_payload 가 get_category_id 로 카테고리 자동 해석)
+        desc_html = data.get("description") or (
+            f"<div style=\"font-family:sans-serif;max-width:900px;margin:0 auto;line-height:1.7\">"
+            f"<h2>{name[:60]}</h2>"
+            f"<p>상세 설명/상품 이미지는 순차적으로 업데이트됩니다.</p>"
+            f"<p>문의는 스토어 문의하기를 이용해 주세요.</p></div>"
+        )
+        raw = {
+            "image": naver_image,
+            "name": name,
+            "category": str(data.get("category", "")),
+            "delivery_type": "유료",
+            "delivery_fee": int(data.get("delivery_fee", 3000)),
+            "origin": str(data.get("origin", "중국")),
+            "stock": int(data.get("stock", 100)),
+            "manufacturer": str(data.get("manufacturer", "상세페이지 참조")),
+            "brand": str(data.get("brand", "")),
+        }
+        ai = {"product_name": name, "description": desc_html, "emotional_copy": desc_html}
+        tags = data.get("tags") or []
+
+        payload = build_product_payload(raw, ai, price_krw, tags=tags)
+
+        # 3) 등록
+        result = await naver_api.register_product(payload)
+        product_id = result.get("originProductNo") or result.get("id") or result.get("smartstoreChannelProductNo", "")
+        channel_no = str(result.get("smartstoreChannelProductNo") or result.get("channelProductNo") or product_id or "")
+        save_registered_code(str(product_id))
+
+        leaf = payload.get("originProduct", {}).get("leafCategoryId")
+        return JSONResponse({
+            "status": "ok",
+            "product_id": str(product_id),
+            "channel_no": channel_no,
+            "leaf_category_id": leaf,
+            "url": build_smartstore_url(channel_no),
+            "name": payload.get("originProduct", {}).get("name", name),
+            "price": price_krw,
+        })
+
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            {"status": "error", "error": str(e), "trace": traceback.format_exc()[-400:]},
+            status_code=500,
+        )
+
+
 # ─── Pinterest ───────────────────────────────────────────────────────────────
 @app.get("/pinterest/boards")
 async def pinterest_boards_list():
