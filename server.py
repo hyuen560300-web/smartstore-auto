@@ -767,8 +767,9 @@ async def register_simple(request: Request):
 
         payload = build_product_payload(raw, ai, price_krw, tags=tags)
 
-        # 가격표시제(단위가격) 대상 카테고리(타월 등) 필수 필드 — 미표시(N)로 충족
-        payload["originProduct"].setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": "N"}
+        # 가격표시제(단위가격) 대상 카테고리(타월 등) 필수 필드 — 미표시(false)로 충족
+        # (Naver unitPriceYn 는 Boolean: true/false)
+        payload["originProduct"].setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
 
         # 3) 등록
         result = await naver_api.register_product(payload)
