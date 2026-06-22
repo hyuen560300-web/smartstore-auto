@@ -4078,9 +4078,10 @@ async def pipeline_fix_products(
     return results
 
 
-async def pipeline_reapply_claude_html() -> dict:
-    """Noto Sans KR 미적용 상품 전체에 Claude HTML 19섹션 재적용.
-    1개씩 순차 처리, 매 처리 후 텔레그램, 실패 시 즉시 중단."""
+async def pipeline_reapply_claude_html(limit: int = 0) -> dict:
+    """Noto Sans KR 미적용 상품에 Claude HTML 19섹션 재적용.
+    limit>0 이면 미적용 상품 중 앞에서 limit개만 처리(배치). 이미 적용된 건 다음 실행 시 자동 제외.
+    1개씩 순차 처리, 실패 시 즉시 중단."""
     results = {"success": 0, "failed": 0, "skipped": 0, "total": 0, "stopped_at": ""}
 
     # 1. 전체 상품 수집
@@ -4115,8 +4116,10 @@ async def pipeline_reapply_claude_html() -> dict:
             continue
         not_applied.append(item)
 
+    if limit and limit > 0:
+        not_applied = not_applied[:limit]
     results["total"] = len(not_applied)
-    print(f"[REAPPLY] 미적용 {len(not_applied)}개 확인 — 재적용 시작", flush=True)
+    print(f"[REAPPLY] 미적용 {len(not_applied)}개 처리 예정 (limit={limit or '전체'}) — 재적용 시작", flush=True)
     await _tg_notify(
         f"[HTML 재적용 시작]\n\n미적용 상품: {len(not_applied)}개\n"
         "Claude HTML 19섹션 순차 적용 시작합니다."
