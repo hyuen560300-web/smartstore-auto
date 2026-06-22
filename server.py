@@ -839,26 +839,49 @@ async def update_category(request: Request):
 
 
 @app.get("/debug-update-test")
-async def debug_update_test(no: str):
+async def debug_update_test(no: str, settest: int = 1):
     """reapply 스타일 merge-PUT 재현 — 전체 Naver 에러(invalidInputs) 반환(필드 진단용).
-    GET origin-product → readonly 제거 → 기존 payload 그대로 re-PUT → 400 원인 필드 확인."""
-    import httpx as _hx
+    settest=1(기본): detailContent 를 새 테스트 Vision HTML 로 바꿔 PUT (배치와 동일 조건으로 400 재현).
+    settest=0: 기존 payload 그대로 re-PUT. GET 429 시 1회 백오프."""
+    import httpx as _hx, asyncio as _aio
     from main import NAVER_BASE
+    _TEST_HTML = ('<div style="font-family:\'Noto Sans KR\',sans-serif;max-width:900px;margin:0 auto">'
+                  '<h1>상품 상세</h1><p>테스트 Vision 19섹션 재적용 진단용 HTML 본문입니다. Noto Sans KR.</p></div>')
     try:
         headers = await naver_api._headers()
+        origin = {}
         async with _hx.AsyncClient(timeout=30) as c:
-            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
-            if rd.status_code != 200:
+            for _att in range(2):
+                rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+                if rd.status_code == 200:
+                    origin = rd.json().get("originProduct", {})
+                    break
+                if "429" in rd.text or rd.status_code == 429:
+                    await _aio.sleep(15); continue
                 return JSONResponse({"step": "get", "http": rd.status_code, "body": rd.text[:500]}, status_code=400)
-            origin = rd.json().get("originProduct", {})
+            if not origin:
+                return JSONResponse({"step": "get", "error": "429 재시도 실패"}, status_code=429)
             payload = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+            orig_detail = origin.get("detailContent") or ""
+            if settest:
+                payload["detailContent"] = _TEST_HTML
             rp = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{no}",
                              headers=headers, json={"originProduct": payload})
+            restored = False
+            # 비파괴: 테스트 PUT이 성공해 junk로 덮인 경우 원본 detailContent 복원
+            if settest and rp.status_code == 200 and orig_detail:
+                payload["detailContent"] = orig_detail
+                rr = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                 headers=headers, json={"originProduct": payload})
+                restored = (rr.status_code == 200)
         return JSONResponse({
             "no": no,
-            "origin_keys": list(origin.keys()),
+            "settest": settest,
+            "name": origin.get("name", "")[:40],
             "leafCategoryId": origin.get("leafCategoryId"),
+            "had_noto": "Noto Sans KR" in orig_detail,
             "put_http": rp.status_code,
+            "restored": restored,
             "put_body": rp.text[:1500],
         })
     except Exception as e:
