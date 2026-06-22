@@ -918,16 +918,24 @@ async def debug_gen_html(no: str):
         no_style = _re.sub(r"<script[\s\S]*?</script>", "", no_style)
         text_only = _re.sub(r"<[^>]+>", "", no_style)
         text_only = _re.sub(r"\s+", " ", text_only).strip()
+        _h = html or ""
         return JSONResponse({
             "no": no, "name": name[:40],
-            "html_len": len(html or ""),
-            "has_noto": "Noto Sans KR" in (html or ""),
-            "has_style_block": "<style" in (html or ""),
-            "has_script": "<script" in (html or ""),
-            "has_doctype_or_html": bool(_re.search(r"<!doctype|<html", html or "", _re.I)),
-            "starts_with": (html or "")[:80],
+            "html_len": len(_h),
+            "has_noto": "Noto Sans KR" in _h,
+            "has_style_block": "<style" in _h,
+            "has_script": "<script" in _h,
+            "has_doctype_or_html": bool(_re.search(r"<!doctype|<html", _h, _re.I)),
+            "starts_with": _h[:80],
             "text_len_after_strip_style": len(text_only),
-            "text_preview": text_only[:300],
+            # 모바일 반응형 마커
+            "has_table": bool(_re.search(r"<table|<td\b|<tr\b", _h, _re.I)),
+            "has_max_width": "max-width" in _h,
+            "width_100_count": len(_re.findall(r"width:\s*100%", _h, _re.I)),
+            "has_flex": "flex" in _h,
+            "fixed_px_width_count": len(_re.findall(r"width:\s*\d{2,}px", _h, _re.I)),
+            "img_height_auto": bool(_re.search(r"height:\s*auto", _h, _re.I)),
+            "text_preview": text_only[:200],
         })
     except Exception as e:
         import traceback

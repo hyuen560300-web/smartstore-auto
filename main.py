@@ -2049,7 +2049,14 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "- 이모지 최소화, 여백 충분히\n\n"
         + _sections + "\n" + _product_info
         + "이미지를 실제로 분석해서 맞춤 디자인을 적용하세요.\n"
-        "width: 860px, Noto Sans KR 반드시 포함."
+        "\n[모바일 반응형 필수 — PC·모바일 둘 다 안 깨지게]\n"
+        "- 모든 width는 고정 px 금지. % 또는 max-width 사용\n"
+        "- 전체 래퍼 div: style=\"max-width:860px; width:100%; margin:0 auto;\"\n"
+        "- 이미지: width:100%; height:auto (고정 px 금지)\n"
+        "- 글자 크기: 고정 px 대신 em/vw 단위 위주, font-size 는 최소 14px 이상 보장\n"
+        "- 표(table/tr/td) 사용 절대 금지 → div + flexbox(display:flex; flex-wrap:wrap)로 대체\n"
+        "- 그리드/카드도 flex-wrap 으로 모바일에서 자동 줄바꿈되게\n"
+        "- Noto Sans KR 반드시 포함."
     )
 
     # 텍스트 전용 폴백 프롬프트
@@ -2068,7 +2075,14 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         + _sections + "\n"
         f"[상품 정보]\n- 상품명: {product_name}\n- 가격: ₩{price:,}\n"
         f"- 카테고리: {category}\n- 이미지URL: {main_img}\n- 특징: {features_str}\n\n"
-        "width: 860px, Noto Sans KR 반드시 포함."
+        "\n[모바일 반응형 필수 — PC·모바일 둘 다 안 깨지게]\n"
+        "- 모든 width는 고정 px 금지. % 또는 max-width 사용\n"
+        "- 전체 래퍼 div: style=\"max-width:860px; width:100%; margin:0 auto;\"\n"
+        "- 이미지: width:100%; height:auto (고정 px 금지)\n"
+        "- 글자 크기: 고정 px 대신 em/vw 단위 위주, font-size 는 최소 14px 이상 보장\n"
+        "- 표(table/tr/td) 사용 절대 금지 → div + flexbox(display:flex; flex-wrap:wrap)로 대체\n"
+        "- 그리드/카드도 flex-wrap 으로 모바일에서 자동 줄바꿈되게\n"
+        "- Noto Sans KR 반드시 포함."
     )
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
