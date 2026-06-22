@@ -806,7 +806,11 @@ async def register_simple(request: Request):
 
 @app.post("/update-category")
 async def update_category(request: Request):
-    """등록 상품의 카테고리(leafCategoryId) 변경. body: {product_no, leaf_category_id}."""
+    """등록 상품 카테고리(leafCategoryId) 변경.
+    네이버는 부분 PUT을 거부(statusType 등 필수)하므로 전체 payload GET → leafCategoryId 교체 → 전체 PUT.
+    body: {product_no, leaf_category_id}."""
+    import httpx as _hx
+    from main import NAVER_BASE
     data = await request.json()
     no = str(data.get("product_no", "")).strip()
     try:
@@ -815,9 +819,23 @@ async def update_category(request: Request):
         leaf = 0
     if not no or not leaf:
         return JSONResponse({"status": "error", "error": "product_no, leaf_category_id 필수"}, status_code=400)
-    ok, msg = await naver_api.update_product(no, {"leafCategoryId": leaf})
-    return JSONResponse({"status": "ok" if ok else "error", "product_no": no,
-                         "leaf_category_id": leaf, "error": msg})
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=30) as c:
+            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+        if rd.status_code != 200:
+            return JSONResponse({"status": "error", "error": f"상품 조회 실패 {rd.status_code}: {rd.text[:300]}"}, status_code=400)
+        origin = rd.json().get("originProduct", {})
+        old_leaf = origin.get("leafCategoryId")
+        payload = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+        payload["leafCategoryId"] = leaf
+        payload["statusType"] = "SALE"
+        ok, msg = await naver_api.update_product(no, payload)
+        return JSONResponse({"status": "ok" if ok else "error", "product_no": no,
+                             "old_leaf": old_leaf, "new_leaf": leaf, "error": msg})
+    except Exception as e:
+        import traceback
+        return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
 
 
 # ─── Pinterest ───────────────────────────────────────────────────────────────
