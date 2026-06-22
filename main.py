@@ -2036,7 +2036,9 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     vision_text = (
         "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
         "첨부된 상품 이미지를 직접 보고, 이미지의 색상·분위기에 맞는 맞춤 HTML 상세페이지를 만들어주세요.\n"
-        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n\n"
+        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n"
+        "⚠️ HTML fragment만 생성할 것. <!DOCTYPE>, <html>, <head>, <body> 태그 절대 포함 금지. "
+        "<style> 블록도 금지(모든 스타일은 각 태그의 inline style 속성으로). <div>로 시작하는 본문 내용만 출력.\n\n"
         "[디자인 규칙]\n"
         "- 이미지 색상/분위기 분석 후 맞춤 컬러 팔레트 선택\n"
         "  (밝은 상품 → 밝은 배경 / 어두운 상품 → 다크 배경 / 파스텔 상품 → 파스텔 톤)\n"
@@ -2054,7 +2056,9 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     text_prompt = (
         "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
         "아래 상품 정보로 스마트스토어 상세페이지 HTML을 만들어주세요.\n"
-        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n\n"
+        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n"
+        "⚠️ HTML fragment만 생성할 것. <!DOCTYPE>, <html>, <head>, <body> 태그 절대 포함 금지. "
+        "<style> 블록도 금지(모든 스타일은 각 태그의 inline style 속성으로). <div>로 시작하는 본문 내용만 출력.\n\n"
         "[디자인 규칙]\n"
         "- 색상: #1a1a1a(다크) / #c8a97a(골드) / #ffffff(흰색) / #f8f5f0(베이지)\n"
         "- 그라데이션 절대 금지 / 알록달록 금지\n"
