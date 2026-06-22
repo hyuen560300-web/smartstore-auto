@@ -1975,6 +1975,27 @@ async def _prepare_image_for_claude(url: str) -> dict | None:
         return None
 
 
+def _to_naver_fragment(html: str) -> str:
+    """네이버 detailContent는 본문 fragment만 허용 — Claude가 전체 문서(<!DOCTYPE>/<html>/<head>)로
+    생성하면 네이버가 래퍼를 통째로 제거해 빈값(NotBlank 400)이 됨. <head>의 <style> 보존 +
+    <body> 내부만 추출해 fragment 로 변환한다."""
+    if not html:
+        return html
+    low = html.lower()
+    if "<!doctype" not in low and "<html" not in low:
+        return html  # 이미 fragment
+    styles = "".join(re.findall(r"<style[\s\S]*?</style>", html, re.I))
+    m = re.search(r"<body[^>]*>([\s\S]*?)</body>", html, re.I)
+    if m:
+        body = m.group(1)
+    else:
+        body = re.sub(r"<!doctype[^>]*>", "", html, flags=re.I)
+        body = re.sub(r"</?html[^>]*>", "", body, flags=re.I)
+        body = re.sub(r"<head[\s\S]*?</head>", "", body, flags=re.I)
+    frag = (styles + "\n" + body).strip()
+    return frag or html
+
+
 async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list) -> str:
     """Claude Haiku Vision으로 19섹션 HTML 생성. Vision 실패 시 텍스트 모드 폴백."""
     if not ANTHROPIC_API_KEY:
@@ -2067,7 +2088,8 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
                 html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
                 html = re.sub(r'\n?```$', '', html)
                 if len(html) >= 5000:
-                    print(f"[CLAUDE-HTML] ✅ Vision {len(html):,}자 생성", flush=True)
+                    html = _to_naver_fragment(html)
+                    print(f"[CLAUDE-HTML] ✅ Vision {len(html):,}자 생성(fragment)", flush=True)
                     return html
                 print(f"[CLAUDE-HTML] Vision 시도{attempt+1}: {len(html)}자 미달", flush=True)
                 await asyncio.sleep(1)
@@ -2087,7 +2109,8 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
             html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
             html = re.sub(r'\n?```$', '', html)
             if len(html) >= 5000:
-                print(f"[CLAUDE-HTML] ✅ 텍스트 {len(html):,}자 생성", flush=True)
+                html = _to_naver_fragment(html)
+                print(f"[CLAUDE-HTML] ✅ 텍스트 {len(html):,}자 생성(fragment)", flush=True)
                 return html
             print(f"[CLAUDE-HTML] 텍스트 시도{attempt+1}: {len(html)}자 미달", flush=True)
             await asyncio.sleep(1)
