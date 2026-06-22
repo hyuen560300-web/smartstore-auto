@@ -1180,12 +1180,15 @@ async def html_coverage_scan():
 
 
 @app.post("/reapply-html")
-async def reapply_html_endpoint(background_tasks: BackgroundTasks, limit: int = 0):
-    """Noto Sans KR 미적용 상품에 Claude HTML 19섹션 재적용 (백그라운드).
-    ?limit=N 으로 배치 처리(미적용분 앞 N개). 미지정(0)이면 전체. 1개씩 순차, 실패 시 중단."""
-    background_tasks.add_task(pipeline_reapply_claude_html, limit)
+async def reapply_html_endpoint(background_tasks: BackgroundTasks, limit: int = 0, nos: str = ""):
+    """Claude HTML 19섹션 재적용 (백그라운드).
+    ?nos=13580354278,13580357571 로 지정 상품 우선 강제 재적용.
+    ?limit=N 으로 미적용분 배치 처리. 미지정이면 전체. 개별 실패는 건너뛰고 계속."""
+    no_list = [n.strip() for n in nos.split(",") if n.strip()] if nos else None
+    background_tasks.add_task(pipeline_reapply_claude_html, limit, no_list)
     return {"message": "HTML 재적용 백그라운드 시작", "limit": limit or "전체",
-            "info": "진행은 Railway 로그 [REAPPLY] 태그 확인. 적용수는 /html-coverage로 확인."}
+            "nos_count": len(no_list) if no_list else 0,
+            "info": "진행은 Railway 로그 [REAPPLY] 태그 확인."}
 
 
 @app.post("/find-similar-products")
