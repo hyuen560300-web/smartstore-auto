@@ -895,7 +895,7 @@ async def debug_gen_html(no: str):
     NotBlank(빈값 판정) 원인 진단용 — <style>/<script>/text길이/wrapper 확인."""
     import httpx as _hx
     import re as _re
-    from main import NAVER_BASE, generate_product_copy, generate_claude_html_detail
+    from main import NAVER_BASE, generate_product_copy, generate_claude_html_detail, _html_style_for
     try:
         headers = await naver_api._headers()
         async with _hx.AsyncClient(timeout=30) as c:
@@ -911,6 +911,7 @@ async def debug_gen_html(no: str):
         if isinstance(ri, dict) and ri.get("url"):
             imgs.append(ri["url"])
         pdict = {"name": name, "category": cat, "price": price}
+        _style = _html_style_for(str(cat), str(name))
         ai = await generate_product_copy(pdict, {})
         html = await generate_claude_html_detail(pdict, ai, imgs)
         # sanitize 시뮬: style/script 제거 후 텍스트
@@ -921,6 +922,7 @@ async def debug_gen_html(no: str):
         _h = html or ""
         return JSONResponse({
             "no": no, "name": name[:40],
+            "category": cat, "detected_style": _style,
             "html_len": len(_h),
             "has_noto": "Noto Sans KR" in _h,
             "has_style_block": "<style" in _h,

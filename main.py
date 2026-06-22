@@ -2002,6 +2002,61 @@ def _to_naver_fragment(html: str) -> str:
     return html
 
 
+# ── 카테고리 세분화 → HTML 스타일 자동 매칭 (4종 A/B/C/D) ────────────────────
+# 30+ 카테고리 키워드를 4개 디자인 스타일로 매핑. 도매꾹/네이버 카테고리·상품명에서 자동 감지.
+_STYLE_KEYWORDS = {
+    # C. 브랜드 감성형 — 프리미엄 뷰티/스킨케어/향수 (모호어 제외: 크림(색)/선블록(래쉬가드))
+    "C": ["스킨케어", "세럼", "앰플", "에센스", "토너", "스킨로션", "바디로션", "향수", "퍼퓸",
+          "아이크림", "핸드크림", "수분크림", "보습크림", "마스크팩", "화장품", "안티에이징", "미백"],
+    # B. 인포그래픽형 — 캠핑/스포츠/아웃도어/헬스
+    "B": ["캠핑", "텐트", "그늘막", "등산", "아웃도어", "스포츠", "헬스", "요가", "골프",
+          "자전거", "낚시", "러닝", "트레킹", "웨이트", "수영용품", "물놀이용품", "스쿠버", "서핑"],
+    # D. 썸네일 임팩트형 — 생활잡화/주방/청소/수납/인테리어
+    "D": ["주방", "조리", "식기", "냄비", "프라이팬", "도마", "청소", "세제", "수납", "정리",
+          "욕실", "인테리어", "조명", "무드등", "생활", "걸레", "행거", "선반", "옷걸이", "보온", "보냉"],
+    # A(기본) — 패션/의류/가방/모자/양말/속옷/수영복/래쉬가드/펫/유아동/문구/일반뷰티
+}
+
+def _html_style_for(category: str, name: str = "") -> str:
+    """카테고리·상품명 → HTML 스타일 키(A/B/C/D). 우선순위 C(프리미엄뷰티) > B(스포츠) > D(생활) > A(기본)."""
+    t = f"{category} {name}"
+    for st in ("C", "B", "D"):
+        if any(k in t for k in _STYLE_KEYWORDS[st]):
+            return st
+    return "A"
+
+_STYLE_DESIGN = {
+    "A": (
+        "[디자인 스타일 — A. 스토리텔링형 (패션·가방·뷰티·펫)]\n"
+        "- 감성 카피 + 라이프스타일 시나리오 중심. '이 상품과 함께하는 하루' 흐름으로 스토리텔링\n"
+        "- 따뜻하고 부드러운 톤: 아이보리/베이지/소프트 뉴트럴 배경 + 골드(#c8a97a) 라인 포인트\n"
+        "- 큰 감성 헤드라인 + 충분한 여백, 착용·사용 장면을 상상하게 하는 묘사형 카피\n"
+        "- 후기/FAQ는 실제 사용자 대화체로 따뜻하게\n"
+    ),
+    "B": (
+        "[디자인 스타일 — B. 인포그래픽형 (캠핑·스포츠·아웃도어·헬스)]\n"
+        "- 스펙·기능·수치 시각화 중심. 아이콘 + 큰 숫자 그리드, 기능별 카드(div+flex)\n"
+        "- 강인한 톤: 차콜/다크(#1a1a1a) 배경 섹션 + 골드(#c8a97a)·화이트 강한 대비\n"
+        "- 핵심수치(방수·무게·내구·용량 등)를 크게, 기능 비교는 표 대신 flex 카드로 시각화\n"
+        "- 데이터·성능 중심의 신뢰감 있는 카피\n"
+    ),
+    "C": (
+        "[디자인 스타일 — C. 브랜드 감성형 (스킨케어·향수·프리미엄 뷰티, 미니멀 고급)]\n"
+        "- 극도의 미니멀: 흰색/오프화이트(#ffffff,#faf8f5) 배경에 여백을 매우 많이\n"
+        "- 절제된 골드(#c8a97a) 얇은 라인 포인트, 한 섹션 한 메시지, 룩북 느낌\n"
+        "- 작고 우아한 텍스트, 화려함 배제. 성분·효능을 담백하고 정제되게\n"
+        "- 고급 뷰티 브랜드 톤 (조용하고 세련됨)\n"
+    ),
+    "D": (
+        "[디자인 스타일 — D. 썸네일 임팩트형 (생활잡화·주방·청소·수납)]\n"
+        "- 강렬한 후킹: 매우 큰 굵은 헤드라인(font-weight 800~900), 강한 대비\n"
+        "- 다크 배경(#1a1a1a) + 골드/화이트 큰 글씨, 핵심 숫자·퍼센트를 크게 강조\n"
+        "- Before/After, '이것 하나로 끝!' 류 임팩트 문구, 한눈에 스캔되는 큰 블록\n"
+        "- 직관적이고 강한 베네핏 전달 (생활 편의가 즉시 와닿게)\n"
+    ),
+}
+
+
 async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list) -> str:
     """Claude Haiku Vision으로 19섹션 HTML 생성. Vision 실패 시 텍스트 모드 폴백."""
     if not ANTHROPIC_API_KEY:
@@ -2037,6 +2092,11 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         f"- 카테고리: {category}\n- 특징: {features_str}\n"
     )
 
+    # 카테고리 → HTML 스타일 자동 매칭 (A/B/C/D)
+    _style = _html_style_for(str(category), str(product_name))
+    _style_block = _STYLE_DESIGN.get(_style, _STYLE_DESIGN["A"])
+    print(f"[CLAUDE-HTML] 카테고리 '{category}' → 스타일 {_style}", flush=True)
+
     # Vision 프롬프트 (이미지 보고 맞춤 디자인)
     vision_text = (
         "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
@@ -2044,14 +2104,10 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n"
         "⚠️ HTML fragment만 생성할 것. <!DOCTYPE>, <html>, <head>, <body> 태그 절대 포함 금지. "
         "<style> 블록도 금지(모든 스타일은 각 태그의 inline style 속성으로). <div>로 시작하는 본문 내용만 출력.\n\n"
-        "[디자인 규칙]\n"
-        "- 이미지 색상/분위기 분석 후 맞춤 컬러 팔레트 선택\n"
-        "  (밝은 상품 → 밝은 배경 / 어두운 상품 → 다크 배경 / 파스텔 상품 → 파스텔 톤)\n"
-        "- 골드(#c8a97a) 포인트 컬러 항상 유지\n"
-        "- 그라데이션 절대 금지 / 알록달록 금지\n"
-        "- 폰트: Noto Sans KR (Google Fonts)\n"
-        "- 전체 느낌: 쿠팡/무신사 수준 프리미엄 스타일\n"
-        "- 이모지 최소화, 여백 충분히\n\n"
+        + _style_block
+        + "- 그라데이션 절대 금지 / 알록달록 금지 / 폰트 Noto Sans KR(Google Fonts) / 골드(#c8a97a) 포인트 유지\n"
+        "- 첨부 이미지의 색상·분위기를 분석해 위 스타일 팔레트로 자연스럽게 적용\n"
+        "- 이모지 최소화, 여백 충분히. 쿠팡/무신사 수준 완성도\n\n"
         + _sections + "\n" + _product_info
         + "이미지를 실제로 분석해서 맞춤 디자인을 적용하세요.\n"
         "\n[⚠️ 모바일 반응형 필수 — width/height 에 px 절대 금지]\n"
@@ -2073,12 +2129,9 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n"
         "⚠️ HTML fragment만 생성할 것. <!DOCTYPE>, <html>, <head>, <body> 태그 절대 포함 금지. "
         "<style> 블록도 금지(모든 스타일은 각 태그의 inline style 속성으로). <div>로 시작하는 본문 내용만 출력.\n\n"
-        "[디자인 규칙]\n"
-        "- 색상: #1a1a1a(다크) / #c8a97a(골드) / #ffffff(흰색) / #f8f5f0(베이지)\n"
-        "- 그라데이션 절대 금지 / 알록달록 금지\n"
-        "- 폰트: Noto Sans KR (Google Fonts)\n"
-        "- 카드/섹션 배경: 흰색 or 연베이지 + 얇은 테두리(#e8e0d0)\n"
-        "- 전체 느낌: 쿠팡/무신사 수준 프리미엄 스타일\n\n"
+        + _style_block
+        + "- 그라데이션 절대 금지 / 알록달록 금지 / 폰트 Noto Sans KR(Google Fonts) / 골드(#c8a97a) 포인트 유지\n"
+        "- 카드/섹션 톤은 위 스타일에 맞춰 적용. 쿠팡/무신사 수준 완성도\n\n"
         + _sections + "\n"
         f"[상품 정보]\n- 상품명: {product_name}\n- 가격: ₩{price:,}\n"
         f"- 카테고리: {category}\n- 이미지URL: {main_img}\n- 특징: {features_str}\n\n"
