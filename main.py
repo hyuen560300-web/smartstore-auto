@@ -2109,7 +2109,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
             try:
                 content = vision_imgs + [{"type": "text", "text": vision_text}]
                 resp = await client.messages.create(
-                    model="claude-haiku-4-5-20251001",
+                    model="claude-sonnet-4-6",
                     max_tokens=4000,
                     messages=[{"role": "user", "content": content}],
                 )
@@ -2130,7 +2130,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     for attempt in range(3):
         try:
             resp = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",
                 max_tokens=4000,
                 messages=[{"role": "user", "content": text_prompt}],
             )
