@@ -1982,19 +1982,24 @@ def _to_naver_fragment(html: str) -> str:
     if not html:
         return html
     low = html.lower()
-    if "<!doctype" not in low and "<html" not in low:
-        return html  # 이미 fragment
-    styles = "".join(re.findall(r"<style[\s\S]*?</style>", html, re.I))
-    m = re.search(r"<body[^>]*>([\s\S]*?)</body>", html, re.I)
-    if m:
-        body = m.group(1)
-    else:
-        body = re.sub(r"<!doctype[^>]*>", "", html, flags=re.I)
-        body = re.sub(r"</?html[^>]*>", "", body, flags=re.I)
-        body = re.sub(r"<head[\s\S]*?</head>", "", body, flags=re.I)
-    frag = (styles + "\n" + body).strip()
-    frag = re.sub(r"</?body[^>]*>", "", frag, flags=re.I).strip()  # 남은 body 래퍼 제거
-    return frag or html
+    # ① 전체 문서면 fragment 로 변환 (style 보존 + body 내부 추출)
+    if "<!doctype" in low or "<html" in low:
+        styles = "".join(re.findall(r"<style[\s\S]*?</style>", html, re.I))
+        m = re.search(r"<body[^>]*>([\s\S]*?)</body>", html, re.I)
+        if m:
+            body = m.group(1)
+        else:
+            body = re.sub(r"<!doctype[^>]*>", "", html, flags=re.I)
+            body = re.sub(r"</?html[^>]*>", "", body, flags=re.I)
+            body = re.sub(r"<head[\s\S]*?</head>", "", body, flags=re.I)
+        frag = (styles + "\n" + body).strip()
+        html = re.sub(r"</?body[^>]*>", "", frag, flags=re.I).strip() or html
+
+    # ② 모바일 반응형 후처리 — 고정 px width/height 결정적 변환 (fragment 여부 무관 항상 적용).
+    #    max-width/min-width/line-height 는 앞의 '-'로 제외, padding/margin 의 px 는 속성명이 달라 무관.
+    html = re.sub(r"(?<![-a-zA-Z])width\s*:\s*\d+px", lambda m: "max-" + m.group(0), html, flags=re.I)
+    html = re.sub(r"(?<![-a-zA-Z])height\s*:\s*\d+px", "height:auto", html, flags=re.I)
+    return html
 
 
 async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list) -> str:

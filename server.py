@@ -933,7 +933,10 @@ async def debug_gen_html(no: str):
             "has_max_width": "max-width" in _h,
             "width_100_count": len(_re.findall(r"width:\s*100%", _h, _re.I)),
             "has_flex": "flex" in _h,
-            "fixed_px_width_count": len(_re.findall(r"width:\s*\d{2,}px", _h, _re.I)),
+            # standalone width:NNpx (max-width/min-width 제외) — 후처리 후 0이어야 정상
+            "fixed_px_width_count": len(_re.findall(r"(?<![-a-zA-Z])width\s*:\s*\d+px", _h, _re.I)),
+            "max_width_px_count": len(_re.findall(r"max-width\s*:\s*\d+px", _h, _re.I)),
+            "fixed_px_height_count": len(_re.findall(r"(?<![-a-zA-Z])height\s*:\s*\d+px", _h, _re.I)),
             "img_height_auto": bool(_re.search(r"height:\s*auto", _h, _re.I)),
             "text_preview": text_only[:200],
         })
