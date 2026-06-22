@@ -889,6 +889,51 @@ async def debug_update_test(no: str, settest: int = 1):
         return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
 
 
+@app.get("/debug-gen-html")
+async def debug_gen_html(no: str):
+    """상품 1개에 대해 reapply와 동일하게 HTML 생성만 하고 PUT 없이 구조 분석 반환.
+    NotBlank(빈값 판정) 원인 진단용 — <style>/<script>/text길이/wrapper 확인."""
+    import httpx as _hx
+    import re as _re
+    from main import NAVER_BASE, generate_product_copy, generate_claude_html_detail
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=30) as c:
+            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+        if rd.status_code != 200:
+            return JSONResponse({"step": "get", "http": rd.status_code, "body": rd.text[:300]}, status_code=400)
+        origin = rd.json().get("originProduct", {})
+        name = (origin.get("name") or "").strip()
+        price = int(origin.get("salePrice", 0))
+        cat = ((origin.get("detailAttribute") or {}).get("naverShoppingSearchInfo", {}).get("categoryName", ""))
+        imgs = []
+        ri = (origin.get("images") or {}).get("representativeImage") or {}
+        if isinstance(ri, dict) and ri.get("url"):
+            imgs.append(ri["url"])
+        pdict = {"name": name, "category": cat, "price": price}
+        ai = await generate_product_copy(pdict, {})
+        html = await generate_claude_html_detail(pdict, ai, imgs)
+        # sanitize 시뮬: style/script 제거 후 텍스트
+        no_style = _re.sub(r"<style[\s\S]*?</style>", "", html or "")
+        no_style = _re.sub(r"<script[\s\S]*?</script>", "", no_style)
+        text_only = _re.sub(r"<[^>]+>", "", no_style)
+        text_only = _re.sub(r"\s+", " ", text_only).strip()
+        return JSONResponse({
+            "no": no, "name": name[:40],
+            "html_len": len(html or ""),
+            "has_noto": "Noto Sans KR" in (html or ""),
+            "has_style_block": "<style" in (html or ""),
+            "has_script": "<script" in (html or ""),
+            "has_doctype_or_html": bool(_re.search(r"<!doctype|<html", html or "", _re.I)),
+            "starts_with": (html or "")[:80],
+            "text_len_after_strip_style": len(text_only),
+            "text_preview": text_only[:300],
+        })
+    except Exception as e:
+        import traceback
+        return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-400:]}, status_code=500)
+
+
 # ─── Pinterest ───────────────────────────────────────────────────────────────
 @app.get("/pinterest/boards")
 async def pinterest_boards_list():
