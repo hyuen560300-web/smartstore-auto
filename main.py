@@ -1993,6 +1993,7 @@ def _to_naver_fragment(html: str) -> str:
         body = re.sub(r"</?html[^>]*>", "", body, flags=re.I)
         body = re.sub(r"<head[\s\S]*?</head>", "", body, flags=re.I)
     frag = (styles + "\n" + body).strip()
+    frag = re.sub(r"</?body[^>]*>", "", frag, flags=re.I).strip()  # 남은 body 래퍼 제거
     return frag or html
 
 
