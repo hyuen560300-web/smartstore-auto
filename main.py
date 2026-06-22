@@ -4128,7 +4128,8 @@ async def pipeline_reapply_claude_html(limit: int = 0) -> dict:
     _READONLY = {"originProductNo", "channelProductNo", "regDate",
                  "modDate", "statusFrom", "totalSalesQuantity"}
 
-    # 3. 1개씩 순차 처리
+    # 3. 1개씩 순차 처리 (개별 실패는 건너뛰고 계속, 연속 5회 실패 시에만 중단)
+    consecutive_fail = 0
     for idx, item in enumerate(not_applied, 1):
         origin = item.get("originProduct", {})
         product_id = str(item.get("originProductNo", ""))
@@ -4157,49 +4158,60 @@ async def pipeline_reapply_claude_html(limit: int = 0) -> dict:
 
         print(f"[REAPPLY] [{idx}/{len(not_applied)}] {name[:40]}", flush=True)
 
-        # AI copy 생성
+        # AI copy 생성 — 실패 시 건너뛰고 계속
         try:
             ai_copy = await generate_product_copy(product_dict, {})
         except Exception as e:
-            msg = f"[재적용 실패] [{idx}/{len(not_applied)}] {name[:30]}\n오류: AI 카피 생성 실패\n{str(e)[:120]}\n\n작업 중단."
-            print(f"[REAPPLY] {msg}", flush=True)
-            await _tg_notify(msg)
+            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ❌ 카피 실패(건너뜀): {name[:30]} — {str(e)[:80]}", flush=True)
             results["failed"] += 1
-            results["stopped_at"] = f"{idx}/{len(not_applied)} — {name[:30]}"
-            break
+            consecutive_fail += 1
+            if consecutive_fail >= 5:
+                results["stopped_at"] = f"{idx}/{len(not_applied)} — 연속 {consecutive_fail}회 실패(시스템 이상 추정)"
+                break
+            continue
 
-        # Claude HTML 19섹션 생성
+        # Claude HTML 19섹션 생성 — 실패 시 건너뛰고 계속
         html = await generate_claude_html_detail(product_dict, ai_copy, image_urls)
         if not html or "Noto Sans KR" not in html:
-            msg = (f"[재적용 실패] [{idx}/{len(not_applied)}] {name[:30]}\n"
-                   f"오류: HTML 생성 실패 (Noto Sans KR 미포함)\n\n작업 중단.")
-            print(f"[REAPPLY] {msg}", flush=True)
-            await _tg_notify(msg)
+            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ❌ HTML 생성 실패(건너뜀): {name[:30]}", flush=True)
             results["failed"] += 1
-            results["stopped_at"] = f"{idx}/{len(not_applied)} — {name[:30]}"
-            break
+            consecutive_fail += 1
+            if consecutive_fail >= 5:
+                results["stopped_at"] = f"{idx}/{len(not_applied)} — 연속 {consecutive_fail}회 실패(시스템 이상 추정)"
+                break
+            continue
 
-        # Naver API 업데이트 (full payload merge)
+        # Naver API 업데이트 (full payload merge) — 429 등 일시오류 3회 재시도, 실패 시 건너뜀
         full_payload = {k: v for k, v in origin.items() if k not in _READONLY}
         full_payload["detailContent"] = html
-
-        try:
-            ok, err_msg = await naver_api.update_product(product_id, full_payload)
-        except Exception as e:
-            ok, err_msg = False, str(e)[:120]
+        ok, err_msg = False, ""
+        for _att in range(3):
+            try:
+                ok, err_msg = await naver_api.update_product(product_id, full_payload)
+            except Exception as e:
+                ok, err_msg = False, str(e)[:150]
+            if ok:
+                break
+            # 429/레이트리밋이면 길게, 그 외는 짧게 대기 후 재시도
+            if "429" in str(err_msg) or "RATE" in str(err_msg).upper():
+                await asyncio.sleep(20 * (_att + 1))
+            else:
+                await asyncio.sleep(3)
 
         if not ok:
-            msg = (f"[재적용 실패] [{idx}/{len(not_applied)}] {name[:30]}\n"
-                   f"오류: Naver API 업데이트 실패\n{err_msg}\n\n작업 중단.")
-            print(f"[REAPPLY] {msg}", flush=True)
-            await _tg_notify(msg)
             results["failed"] += 1
-            results["stopped_at"] = f"{idx}/{len(not_applied)} — {name[:30]}"
-            break
+            consecutive_fail += 1
+            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ❌ 업데이트 실패(건너뜀): {name[:30]} — {str(err_msg)[:90]}", flush=True)
+            if consecutive_fail >= 5:
+                results["stopped_at"] = f"{idx}/{len(not_applied)} — 연속 {consecutive_fail}회 실패(시스템 이상 추정)"
+                await _tg_notify(f"[HTML 재적용 중단] 연속 {consecutive_fail}회 실패 — {name[:30]}")
+                break
+            await asyncio.sleep(2.0)
+            continue
 
+        consecutive_fail = 0
         results["success"] += 1
         print(f"[REAPPLY] [{idx}/{len(not_applied)}] ✅ {name[:40]}", flush=True)
-        await _tg_notify(f"[재적용 {idx}/{len(not_applied)}] {name[:40]} ✅")
         await asyncio.sleep(2.5)
 
     # 4. 최종 요약
