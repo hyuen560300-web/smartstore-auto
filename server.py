@@ -2237,7 +2237,7 @@ async def naver_product_count():
     now = datetime.now(timezone.utc)
     counts = {}
     async with httpx.AsyncClient(timeout=15) as c:
-        for st, label in [("SALE","판매중"), ("SUSPENSION","판매중지"), ("SALE_WAIT","판매대기"), ("OUT_OF_STOCK","품절")]:
+        for st, label in [("SALE","판매중"), ("SUSPENSION","판매중지"), ("WAIT","판매대기"), ("OUTOFSTOCK","품절")]:
             try:
                 r = await c.post(
                     f"{NAVER_BASE}/v1/products/search",
