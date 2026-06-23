@@ -2101,34 +2101,69 @@ def _html_style_for(category: str, name: str = "") -> str:
             return st
     return "A"
 
+def _html_quality_ok(html: str) -> tuple:
+    """생성 HTML 품질 게이트. (통과여부, 사유). img태그+inline style+길이 검증."""
+    if not html:
+        return False, "빈 결과"
+    low = html.lower()
+    if "<img" not in low:
+        return False, "img 태그 없음"
+    if "style=" not in low:
+        return False, "inline style 없음(텍스트만)"
+    if len(html) < 3000:
+        return False, f"길이 {len(html)}자<3000"
+    return True, "ok"
+
+
+# 카테고리별 HTML 스타일 상세 구조 (2026-06-23 고도화 — 스타일별 6섹션 필수구조 + 팔레트)
 _STYLE_DESIGN = {
     "A": (
-        "[디자인 스타일 — A. 스토리텔링형 (패션·가방·뷰티·펫)]\n"
-        "- 감성 카피 + 라이프스타일 시나리오 중심. '이 상품과 함께하는 하루' 흐름으로 스토리텔링\n"
-        "- 따뜻하고 부드러운 톤: 아이보리/베이지/소프트 뉴트럴 배경 + 골드(#c8a97a) 라인 포인트\n"
-        "- 큰 감성 헤드라인 + 충분한 여백, 착용·사용 장면을 상상하게 하는 묘사형 카피\n"
-        "- 후기/FAQ는 실제 사용자 대화체로 따뜻하게\n"
+        "[디자인 스타일 — A. 스토리텔링형 (패션·가방·뷰티일반·펫·유아동·신발·주얼리·여행)]\n"
+        "감성 카피 + 라이프스타일 시나리오 중심. 색상 팔레트: #F5F0E8 / #8B7355 / #5C4A32 / #FAF7F2\n"
+        "필수 구조 6개(순서대로, 각 섹션 div):\n"
+        "  1) 감성 헤더 — 배경 #F5F0E8, 대형 제목(font-size 1.8em+), 감성 카피\n"
+        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\">\n"
+        "  3) 핵심 특징 3가지 — 이모지 아이콘+텍스트, display:flex;flex-wrap:wrap\n"
+        "  4) 라이프스타일 카피 — 이탤릭(font-style:italic), 배경 #FAF7F2, 중앙정렬\n"
+        "  5) 상세 설명 — 소재/사이즈/색상 (flex 리스트)\n"
+        "  6) 가격+구매유도 — 배경 #E8E0D5\n"
+        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / flex 레이아웃 필수\n"
     ),
     "B": (
-        "[디자인 스타일 — B. 인포그래픽형 (캠핑·스포츠·아웃도어·헬스)]\n"
-        "- 스펙·기능·수치 시각화 중심. 아이콘 + 큰 숫자 그리드, 기능별 카드(div+flex)\n"
-        "- 강인한 톤: 차콜/다크(#1a1a1a) 배경 섹션 + 골드(#c8a97a)·화이트 강한 대비\n"
-        "- 핵심수치(방수·무게·내구·용량 등)를 크게, 기능 비교는 표 대신 flex 카드로 시각화\n"
-        "- 데이터·성능 중심의 신뢰감 있는 카피\n"
+        "[디자인 스타일 — B. 인포그래픽형 (캠핑·스포츠·아웃도어·자동차·건강식품)]\n"
+        "스펙·수치 시각화 중심. 색상 팔레트: #1A1A2E / #16213E / #FFD700(골드) / #FFFFFF\n"
+        "필수 구조 6개(순서대로, 각 섹션 div):\n"
+        "  1) 강렬한 다크 헤더 — 배경 #1A1A2E, 흰 제목, 골드 #FFD700 포인트\n"
+        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\">\n"
+        "  3) 핵심 스펙 수치 3가지 — 큰 숫자+단위, display:flex(그리드형), 골드 강조\n"
+        "  4) 특징 비교/스펙 카드 — 배경 #16213E, 아이콘 스펙 카드(flex)\n"
+        "  5) 사용 상황별 활용 섹션\n"
+        "  6) 가격+구매유도 — 배경 #FFD700, 다크 텍스트\n"
+        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / flex(그리드) 레이아웃 필수\n"
     ),
     "C": (
-        "[디자인 스타일 — C. 브랜드 감성형 (스킨케어·향수·프리미엄 뷰티, 미니멀 고급)]\n"
-        "- 극도의 미니멀: 흰색/오프화이트(#ffffff,#faf8f5) 배경에 여백을 매우 많이\n"
-        "- 절제된 골드(#c8a97a) 얇은 라인 포인트, 한 섹션 한 메시지, 룩북 느낌\n"
-        "- 작고 우아한 텍스트, 화려함 배제. 성분·효능을 담백하고 정제되게\n"
-        "- 고급 뷰티 브랜드 톤 (조용하고 세련됨)\n"
+        "[디자인 스타일 — C. 브랜드 감성형 (스킨케어·향수·프리미엄뷰티·시계·주얼리)]\n"
+        "극도의 미니멀·여백. 색상 팔레트: #FFFFFF / #000000 / #888888 / #F8F8F8\n"
+        "필수 구조 6개(순서대로, 각 섹션 div):\n"
+        "  1) 미니멀 화이트 헤더 — 배경 #FFFFFF, 여백 多(padding 24px+), 세리프체 제목(font-family:'Noto Serif KR',serif)\n"
+        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\"> (여백 있게)\n"
+        "  3) 브랜드 스토리 카피 — 짧고 고급스러운 문구, 중앙정렬\n"
+        "  4) 성분/소재 상세 — 심플 리스트, 라인 구분(border-bottom)\n"
+        "  5) 사용법 — 번호 순서, 미니멀\n"
+        "  6) 가격 — 심플, 여백 多, 배경 #F8F8F8\n"
+        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / 여백(padding 20px+) 필수\n"
     ),
     "D": (
-        "[디자인 스타일 — D. 썸네일 임팩트형 (생활잡화·주방·청소·수납)]\n"
-        "- 강렬한 후킹: 매우 큰 굵은 헤드라인(font-weight 800~900), 강한 대비\n"
-        "- 다크 배경(#1a1a1a) + 골드/화이트 큰 글씨, 핵심 숫자·퍼센트를 크게 강조\n"
-        "- Before/After, '이것 하나로 끝!' 류 임팩트 문구, 한눈에 스캔되는 큰 블록\n"
-        "- 직관적이고 강한 베네핏 전달 (생활 편의가 즉시 와닿게)\n"
+        "[디자인 스타일 — D. 썸네일 임팩트형 (생활잡화·주방·청소·수납·인테리어·식품·문구)]\n"
+        "강렬한 훅·Before/After. 색상 팔레트: #FF4444 / #FF6B00 / #FFFFFF / #FFF3E0\n"
+        "필수 구조 6개(순서대로, 각 섹션 div):\n"
+        "  1) 강렬한 훅 헤더 — 큰 글씨(font-weight 800+), 배경 #FF4444 또는 #FF6B00, 흰 텍스트\n"
+        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\">\n"
+        "  3) Before/After 비교 — 2컬럼 display:flex(왼쪽 문제/오른쪽 해결)\n"
+        "  4) 핵심 혜택 3가지 — ✓체크마크+굵은 텍스트, 강조색 배경\n"
+        "  5) 사용 방법 — 번호+간단 설명\n"
+        "  6) 가격+긴급 구매유도 — 배경 #FF4444, 흰 텍스트, 큰 가격\n"
+        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / Before/After 섹션 필수\n"
     ),
 }
 
@@ -2224,8 +2259,25 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     )
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    _best = ""  # 품질통과(img+style+>=3000) 최장 후보. 5000 미달이어도 skip보다 우선
 
-    # ── Vision 모드 시도 ──────────────────────────────────────────────────────
+    def _accept(raw: str, mode: str, attempt: int):
+        """fragment 변환 + 품질검증. 5000자 통과면 반환, 3000~5000은 후보 보관."""
+        nonlocal _best
+        frag = _to_naver_fragment(raw)
+        ok, why = _html_quality_ok(frag)
+        if not ok:
+            print(f"[CLAUDE-HTML] {mode} 시도{attempt+1} 재생성: {why}", flush=True)
+            return None
+        if len(frag) > len(_best):
+            _best = frag
+        if len(frag) >= 5000:
+            print(f"[CLAUDE-HTML] ✅ {mode} {len(frag):,}자 생성(fragment, 품질OK)", flush=True)
+            return frag
+        print(f"[CLAUDE-HTML] {mode} 시도{attempt+1}: {len(frag)}자(5000미달, 후보보관)", flush=True)
+        return None
+
+    # ── Vision 모드 시도 (최대 3회 재생성) ────────────────────────────────────
     vision_imgs = []
     for _url in image_urls[:3]:
         _img = await _prepare_image_for_claude(_url)
@@ -2242,20 +2294,18 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
                     max_tokens=4000,
                     messages=[{"role": "user", "content": content}],
                 )
-                html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
-                html = re.sub(r'\n?```$', '', html)
-                if len(html) >= 5000:
-                    html = _to_naver_fragment(html)
-                    print(f"[CLAUDE-HTML] ✅ Vision {len(html):,}자 생성(fragment)", flush=True)
-                    return html
-                print(f"[CLAUDE-HTML] Vision 시도{attempt+1}: {len(html)}자 미달", flush=True)
+                raw = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
+                raw = re.sub(r'\n?```$', '', raw)
+                got = _accept(raw, "Vision", attempt)
+                if got:
+                    return got
                 await asyncio.sleep(1)
             except Exception as e:
                 print(f"[CLAUDE-HTML] Vision 시도{attempt+1} 실패: {e}", flush=True)
                 await asyncio.sleep(2)
-        print("[CLAUDE-HTML] Vision 3회 실패 → 텍스트 폴백", flush=True)
+        print("[CLAUDE-HTML] Vision 3회 품질미달 → 텍스트 폴백", flush=True)
 
-    # ── 텍스트 전용 폴백 ──────────────────────────────────────────────────────
+    # ── 텍스트 전용 폴백 (최대 3회 재생성) ────────────────────────────────────
     for attempt in range(3):
         try:
             resp = await client.messages.create(
@@ -2263,18 +2313,21 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
                 max_tokens=4000,
                 messages=[{"role": "user", "content": text_prompt}],
             )
-            html = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
-            html = re.sub(r'\n?```$', '', html)
-            if len(html) >= 5000:
-                html = _to_naver_fragment(html)
-                print(f"[CLAUDE-HTML] ✅ 텍스트 {len(html):,}자 생성(fragment)", flush=True)
-                return html
-            print(f"[CLAUDE-HTML] 텍스트 시도{attempt+1}: {len(html)}자 미달", flush=True)
+            raw = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
+            raw = re.sub(r'\n?```$', '', raw)
+            got = _accept(raw, "텍스트", attempt)
+            if got:
+                return got
             await asyncio.sleep(1)
         except Exception as e:
             print(f"[CLAUDE-HTML] 텍스트 시도{attempt+1} 실패: {e}", flush=True)
             await asyncio.sleep(2)
-    print("[CLAUDE-HTML] 3회 실패 → build_detail_html 폴백", flush=True)
+
+    # 5000자 통과는 없지만 품질통과(img+style+>=3000) 후보가 있으면 사용
+    if _best:
+        print(f"[CLAUDE-HTML] ⚠️ 5000자 미달이나 품질통과 후보 {len(_best):,}자 사용", flush=True)
+        return _best
+    print("[CLAUDE-HTML] 품질검증 모두 실패 → skip(build_detail_html 폴백)", flush=True)
     return ""
 
 
