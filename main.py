@@ -2168,8 +2168,71 @@ _STYLE_DESIGN = {
 }
 
 
+# ── 초고수 프롬프트 엔지니어링 (2026-06-23): ① 역할부여(system) + ③ few-shot 예시 ──
+_SYSTEM_ROLE = (
+    "당신은 한국 이커머스 전문 UI 디자이너이자 카피라이터입니다. "
+    "무신사·29CM·마켓컬리 수준의 고품질 상세페이지를 제작합니다. "
+    "감성적이고 구매욕을 자극하는 카피라이팅과 시각적으로 완성도 높은 레이아웃을 구현합니다."
+)
+
+# 스타일별 few-shot 예시 (구조·톤·팔레트 참고용, 50줄 이내)
+_STYLE_EXAMPLE = {
+    "A": (
+        "<div style=\"max-width:860px;width:100%;margin:0 auto;font-family:'Noto Sans KR',sans-serif;\">\n"
+        " <div style=\"background:#F5F0E8;padding:44px 24px;text-align:center;\">\n"
+        "  <h1 style=\"font-size:1.9em;color:#5C4A32;margin:0;\">일상에 스며드는 감성</h1>\n"
+        "  <p style=\"color:#8B7355;margin-top:10px;\">매일이 특별해지는 순간</p></div>\n"
+        " <img src=\"IMG\" style=\"width:100%;height:auto;display:block;\">\n"
+        " <div style=\"display:flex;flex-wrap:wrap;gap:14px;padding:30px 24px;\">\n"
+        "  <div style=\"flex:1 1 28%;text-align:center;\"><div style=\"font-size:2em;\">🌿</div><p style=\"color:#5C4A32;\">천연 소재</p></div>\n"
+        "  <div style=\"flex:1 1 28%;text-align:center;\"><div style=\"font-size:2em;\">✨</div><p style=\"color:#5C4A32;\">감성 디자인</p></div>\n"
+        "  <div style=\"flex:1 1 28%;text-align:center;\"><div style=\"font-size:2em;\">💛</div><p style=\"color:#5C4A32;\">데일리 활용</p></div></div>\n"
+        " <div style=\"background:#FAF7F2;padding:34px 24px;text-align:center;font-style:italic;color:#8B7355;\">\"이 상품과 함께라면 평범한 하루도 특별해집니다.\"</div>\n"
+        " <div style=\"background:#E8E0D5;padding:30px 24px;text-align:center;\"><p style=\"font-size:1.7em;color:#5C4A32;font-weight:700;margin:0;\">₩29,900</p></div>\n"
+        "</div>"
+    ),
+    "B": (
+        "<div style=\"max-width:860px;width:100%;margin:0 auto;font-family:'Noto Sans KR',sans-serif;\">\n"
+        " <div style=\"background:#1A1A2E;padding:44px 24px;text-align:center;\">\n"
+        "  <h1 style=\"color:#fff;font-size:1.9em;margin:0;\">압도적 <span style=\"color:#FFD700;\">퍼포먼스</span></h1></div>\n"
+        " <img src=\"IMG\" style=\"width:100%;height:auto;display:block;\">\n"
+        " <div style=\"display:flex;flex-wrap:wrap;gap:12px;padding:30px 24px;background:#16213E;\">\n"
+        "  <div style=\"flex:1 1 28%;text-align:center;\"><div style=\"font-size:2.2em;color:#FFD700;font-weight:800;\">30<span style=\"font-size:.5em;\">L</span></div><p style=\"color:#fff;\">대용량</p></div>\n"
+        "  <div style=\"flex:1 1 28%;text-align:center;\"><div style=\"font-size:2.2em;color:#FFD700;font-weight:800;\">5<span style=\"font-size:.5em;\">kg</span></div><p style=\"color:#fff;\">초경량</p></div>\n"
+        "  <div style=\"flex:1 1 28%;text-align:center;\"><div style=\"font-size:2.2em;color:#FFD700;font-weight:800;\">IPX7</div><p style=\"color:#fff;\">완전방수</p></div></div>\n"
+        " <div style=\"background:#FFD700;padding:30px 24px;text-align:center;\"><p style=\"font-size:1.7em;color:#1A1A2E;font-weight:800;margin:0;\">₩59,000</p></div>\n"
+        "</div>"
+    ),
+    "C": (
+        "<div style=\"max-width:860px;width:100%;margin:0 auto;font-family:'Noto Sans KR',sans-serif;background:#fff;\">\n"
+        " <div style=\"padding:60px 32px;text-align:center;\">\n"
+        "  <h1 style=\"font-family:'Noto Serif KR',serif;font-size:1.7em;color:#000;font-weight:400;letter-spacing:2px;margin:0;\">ESSENTIAL CARE</h1>\n"
+        "  <p style=\"color:#888;margin-top:16px;font-size:.95em;\">피부 본연의 균형을 위하여</p></div>\n"
+        " <img src=\"IMG\" style=\"width:100%;height:auto;display:block;\">\n"
+        " <div style=\"padding:48px 32px;text-align:center;color:#000;\">매일의 루틴에 더하는 단 하나의 정성</div>\n"
+        " <div style=\"padding:32px;border-top:1px solid #eee;color:#000;\">\n"
+        "  <div style=\"padding:14px 0;border-bottom:1px solid #f0f0f0;\">히알루론산 · 깊은 수분</div>\n"
+        "  <div style=\"padding:14px 0;border-bottom:1px solid #f0f0f0;\">판테놀 · 진정</div></div>\n"
+        " <div style=\"background:#F8F8F8;padding:48px 32px;text-align:center;\"><p style=\"font-size:1.4em;color:#000;margin:0;\">₩38,000</p></div>\n"
+        "</div>"
+    ),
+    "D": (
+        "<div style=\"max-width:860px;width:100%;margin:0 auto;font-family:'Noto Sans KR',sans-serif;\">\n"
+        " <div style=\"background:#FF4444;padding:44px 24px;text-align:center;\">\n"
+        "  <h1 style=\"color:#fff;font-size:2.1em;font-weight:800;margin:0;\">이거 하나면 끝!</h1></div>\n"
+        " <img src=\"IMG\" style=\"width:100%;height:auto;display:block;\">\n"
+        " <div style=\"display:flex;flex-wrap:wrap;gap:12px;padding:28px 24px;\">\n"
+        "  <div style=\"flex:1 1 45%;background:#fff;border:2px solid #ddd;border-radius:10px;padding:20px;\"><b style=\"color:#888;\">BEFORE</b><p>매번 번거로운 정리…</p></div>\n"
+        "  <div style=\"flex:1 1 45%;background:#FFF3E0;border:2px solid #FF6B00;border-radius:10px;padding:20px;\"><b style=\"color:#FF6B00;\">AFTER</b><p>한 번에 깔끔하게!</p></div></div>\n"
+        " <div style=\"padding:24px;\"><p style=\"font-weight:700;color:#FF4444;\">✓ 10초 설치 ✓ 강력 고정 ✓ 물세척 OK</p></div>\n"
+        " <div style=\"background:#FF4444;padding:32px 24px;text-align:center;\"><p style=\"font-size:1.9em;color:#fff;font-weight:800;margin:0;\">단돈 ₩12,900</p></div>\n"
+        "</div>"
+    ),
+}
+
+
 async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list) -> str:
-    """Claude Haiku Vision으로 19섹션 HTML 생성. Vision 실패 시 텍스트 모드 폴백."""
+    """Claude Sonnet Vision으로 고품질 HTML 생성(역할부여+XML구조+few-shot). Vision 실패 시 텍스트 폴백."""
     if not ANTHROPIC_API_KEY:
         return ""
     product_name = ai.get("product_name") or str(product.get("name", ""))
@@ -2198,64 +2261,60 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "17. 신뢰배지 3개 (빠른배송/정품보장/AS보장 — 무료배송 문구 절대 금지)\n"
         "18. CTA\n19. 스토어찜 유도 + 푸터\n"
     )
-    _product_info = (
-        f"[상품 정보]\n- 상품명: {product_name}\n- 가격: ₩{price:,}\n"
-        f"- 카테고리: {category}\n- 특징: {features_str}\n"
-    )
-
     # 카테고리 → HTML 스타일 자동 매칭 (A/B/C/D)
     _style = _html_style_for(str(category), str(product_name))
     _style_block = _STYLE_DESIGN.get(_style, _STYLE_DESIGN["A"])
+    _style_example = _STYLE_EXAMPLE.get(_style, "")
     print(f"[CLAUDE-HTML] 카테고리 '{category}' → 스타일 {_style}", flush=True)
 
-    # Vision 프롬프트 (이미지 보고 맞춤 디자인)
+    # ② XML 구조화 상품 정보
+    _product_info = (
+        "<product_info>\n"
+        f"  <name>{product_name}</name>\n"
+        f"  <price>₩{price:,}</price>\n"
+        f"  <image_url>{main_img}</image_url>\n"
+        f"  <features>{features_str}</features>\n"
+        f"  <category>{category}</category>\n"
+        "</product_info>\n"
+        f"<style_type>{_style}</style_type>\n"
+    )
+
+    # 공통 규칙 (④) — fragment·반응형·img 필수
+    _common = (
+        "\n[공통 규칙 — 전 스타일 필수]\n"
+        "- ⛔ <!DOCTYPE>·<html>·<head>·<body>·<style> 절대 금지 (fragment만, <div>로 시작, 모든 스타일 inline)\n"
+        "- ⛔ width:NNpx / height:NNpx 절대 금지 → %·max-width·flex-basis 사용\n"
+        "- 이미지는 반드시 <img src=\"...\" style=\"width:100%;max-width:100%;height:auto;display:block;\"> (텍스트만 금지)\n"
+        "- 전체 래퍼 div: style=\"max-width:860px;width:100%;margin:0 auto;\"\n"
+        "- 표(table) 금지 → div+flex(display:flex;flex-wrap:wrap) / 글자 em·vw, 최소 14px\n"
+        "- 폰트 'Noto Sans KR' / 그라데이션·알록달록 금지 / 골드(#c8a97a) 포인트 / 최소 5000자\n"
+    )
+    _instruction = (
+        "\n<instruction>위 <product_info>와 <style_type>를 바탕으로, 위 필수 구조와 예시 톤을 따라 "
+        "고품질 HTML 상세페이지를 생성하세요. 반드시 <output_html>...</output_html> 태그로 감싸 출력하세요. "
+        "(마크다운·백틱·설명 없이 HTML만)</instruction>"
+    )
+    # ④ 쿼리 끝 배치: 스타일구조 → 예시 → 섹션 → 상품정보(XML) → 공통규칙 → 생성지시(맨 아래)
     vision_text = (
-        "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
-        "첨부된 상품 이미지를 직접 보고, 이미지의 색상·분위기에 맞는 맞춤 HTML 상세페이지를 만들어주세요.\n"
-        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n"
-        "⚠️ HTML fragment만 생성할 것. <!DOCTYPE>, <html>, <head>, <body> 태그 절대 포함 금지. "
-        "<style> 블록도 금지(모든 스타일은 각 태그의 inline style 속성으로). <div>로 시작하는 본문 내용만 출력.\n\n"
-        + _style_block
-        + "- 그라데이션 절대 금지 / 알록달록 금지 / 폰트 Noto Sans KR(Google Fonts) / 골드(#c8a97a) 포인트 유지\n"
-        "- 첨부 이미지의 색상·분위기를 분석해 위 스타일 팔레트로 자연스럽게 적용\n"
-        "- 이모지 최소화, 여백 충분히. 쿠팡/무신사 수준 완성도\n\n"
-        + _sections + "\n" + _product_info
-        + "이미지를 실제로 분석해서 맞춤 디자인을 적용하세요.\n"
-        "\n[⚠️ 모바일 반응형 필수 — width/height 에 px 절대 금지]\n"
-        "- ⛔ 어떤 요소도 width:NNpx / height:NNpx 절대 금지 (아이콘·뱃지·소형 박스·이미지 전부 예외 없음)\n"
-        "- width 는 %, max-width, flex-basis 만 사용. 작은 요소도 max-width 또는 flex-basis 로 크기 지정\n"
-        "- 전체 래퍼 div: style=\"max-width:860px; width:100%; margin:0 auto;\"\n"
-        "- 이미지: width:100%; max-width:100%; height:auto (반드시, 예외 없음)\n"
-        "- padding·margin·border 는 px 허용. 단 width·height 만 px 절대 금지\n"
-        "- 글자 크기: em/vw 단위 위주, font-size 최소 14px 이상\n"
-        "- 표(table/tr/td) 절대 금지 → div + flexbox(display:flex; flex-wrap:wrap)\n"
-        "- 그리드/카드도 flex-wrap 으로 모바일에서 자동 줄바꿈\n"
-        "- Noto Sans KR 반드시 포함."
+        _style_block
+        + "<style_example>\n" + _style_example + "\n</style_example>\n"
+        "(위 예시는 구조·톤·팔레트 참고용 — 복제 금지, 상품에 맞게 재구성)\n\n"
+        + _sections + "\n"
+        + _product_info
+        + _common
+        + "- 첨부 이미지의 색감·분위기를 위 스타일 팔레트로 반영\n"
+        + _instruction
     )
 
     # 텍스트 전용 폴백 프롬프트
     text_prompt = (
-        "당신은 한국 프리미엄 이커머스 상세페이지 전문 디자이너입니다.\n"
-        "아래 상품 정보로 스마트스토어 상세페이지 HTML을 만들어주세요.\n"
-        "HTML만 출력 (마크다운·백틱·주석 없이). 인라인 CSS만 사용. 최소 5000자.\n"
-        "⚠️ HTML fragment만 생성할 것. <!DOCTYPE>, <html>, <head>, <body> 태그 절대 포함 금지. "
-        "<style> 블록도 금지(모든 스타일은 각 태그의 inline style 속성으로). <div>로 시작하는 본문 내용만 출력.\n\n"
-        + _style_block
-        + "- 그라데이션 절대 금지 / 알록달록 금지 / 폰트 Noto Sans KR(Google Fonts) / 골드(#c8a97a) 포인트 유지\n"
-        "- 카드/섹션 톤은 위 스타일에 맞춰 적용. 쿠팡/무신사 수준 완성도\n\n"
+        _style_block
+        + "<style_example>\n" + _style_example + "\n</style_example>\n"
+        "(위 예시는 구조·톤·팔레트 참고용 — 복제 금지, 상품에 맞게 재구성)\n\n"
         + _sections + "\n"
-        f"[상품 정보]\n- 상품명: {product_name}\n- 가격: ₩{price:,}\n"
-        f"- 카테고리: {category}\n- 이미지URL: {main_img}\n- 특징: {features_str}\n\n"
-        "\n[⚠️ 모바일 반응형 필수 — width/height 에 px 절대 금지]\n"
-        "- ⛔ 어떤 요소도 width:NNpx / height:NNpx 절대 금지 (아이콘·뱃지·소형 박스·이미지 전부 예외 없음)\n"
-        "- width 는 %, max-width, flex-basis 만 사용. 작은 요소도 max-width 또는 flex-basis 로 크기 지정\n"
-        "- 전체 래퍼 div: style=\"max-width:860px; width:100%; margin:0 auto;\"\n"
-        "- 이미지: width:100%; max-width:100%; height:auto (반드시, 예외 없음)\n"
-        "- padding·margin·border 는 px 허용. 단 width·height 만 px 절대 금지\n"
-        "- 글자 크기: em/vw 단위 위주, font-size 최소 14px 이상\n"
-        "- 표(table/tr/td) 절대 금지 → div + flexbox(display:flex; flex-wrap:wrap)\n"
-        "- 그리드/카드도 flex-wrap 으로 모바일에서 자동 줄바꿈\n"
-        "- Noto Sans KR 반드시 포함."
+        + _product_info
+        + _common
+        + _instruction
     )
 
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
@@ -2264,6 +2323,9 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     def _accept(raw: str, mode: str, attempt: int):
         """fragment 변환 + 품질검증. 5000자 통과면 반환, 3000~5000은 후보 보관."""
         nonlocal _best
+        mo = re.search(r"<output_html>([\s\S]*?)</output_html>", raw, re.I)
+        if mo:
+            raw = mo.group(1).strip()
         frag = _to_naver_fragment(raw)
         ok, why = _html_quality_ok(frag)
         if not ok:
@@ -2292,6 +2354,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
                 resp = await client.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=4000,
+                    system=_SYSTEM_ROLE,
                     messages=[{"role": "user", "content": content}],
                 )
                 raw = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
@@ -2311,6 +2374,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
             resp = await client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=4000,
+                system=_SYSTEM_ROLE,
                 messages=[{"role": "user", "content": text_prompt}],
             )
             raw = re.sub(r'^```(?:html)?\n?', '', resp.content[0].text.strip())
