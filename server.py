@@ -1785,6 +1785,9 @@ async def register_single_product(request: Request):
         if detail_html:
             payload["originProduct"]["detailContent"] = detail_html
 
+        # 가격표시제 대상 카테고리 필수 필드 (unitPriceYn) — 미표시(false)로 충족
+        payload["originProduct"].setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
+
         result = await naver_api.register_product(payload)
         save_registered_code(p["code"])
         save_registered_name(safe_name)
