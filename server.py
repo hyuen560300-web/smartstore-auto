@@ -1804,6 +1804,28 @@ async def register_single_product(request: Request):
                 import asyncio as _aio
                 from main import generate_claude_html_detail as _gen_html, _to_naver_fragment as _frag
                 _vimgs = [u for u in [naver_img_url] if u]
+                try:
+                    import httpx as _hx2
+                    from main import _dg_item_detail as _dgd_fn, _dg_to_product as _dgp_fn
+                    _dgno = "".join(_c for _c in str(p.get("code", "")) if _c.isdigit())
+                    if _dgno and len(_dgno) >= 6:
+                        _dgd = await _dgd_fn(_dgno)
+                        _dgp = _dgp_fn({"no": _dgno, "title": product_name, "price": price or 1}, _dgd) if _dgd else None
+                        _exraw = (_dgp or {}).get("_dg_extra_images") or []
+                        async with _hx2.AsyncClient(timeout=15, follow_redirects=True) as _ec:
+                            for _eu in _exraw[:14]:
+                                try:
+                                    _er = await _ec.get(_eu)
+                                    if _er.status_code != 200 or len(_er.content) < 30 * 1024:
+                                        continue
+                                    _enav = await naver_api.upload_detail_image(_er.content)
+                                    if _enav:
+                                        _vimgs.append(_enav)
+                                except Exception:
+                                    pass
+                        print(f"[register-single] 도매꾹 추가이미지 {len(_vimgs)-1}장 수집", flush=True)
+                except Exception as _dge:
+                    print(f"[register-single] 도매꾹 추가이미지 실패(무시): {str(_dge)[:120]}", flush=True)
                 _vh = await _gen_html(p, ai, _vimgs)
                 if _vh and "Noto Sans KR" in _vh and len(_vh) >= 1000:
                     _vh = _frag(_vh)
