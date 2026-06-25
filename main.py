@@ -974,7 +974,7 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
 
     # desc.contents.item에서 추가 이미지 파싱
     _desc_html = str((detail.get("desc", {}) or {}).get("contents", {}).get("item", "") or "") if detail else ""
-    extra_images = extract_domeggook_images(_desc_html, main_url=image, max_count=5)
+    extra_images = extract_domeggook_images(_desc_html, main_url=image, max_count=20)
 
     return {
         "code":             f"DG_{no}",
@@ -997,7 +997,7 @@ import re as _re_img
 
 _SUPPLIER_FILTER_KWS = ["소싱", "무역", "견적", "운송", "공급사", "셀렉터", "DISTRIBUTION", "배송 거리"]
 
-def extract_domeggook_images(desc_html: str, main_url: str = "", max_count: int = 5) -> list[str]:
+def extract_domeggook_images(desc_html: str, main_url: str = "", max_count: int = 20) -> list[str]:
     """도매꾹 desc.contents.item HTML에서 추가 이미지 URL 파싱.
     공급사 홍보 문구(소싱/무역/견적 등) 주변 이미지 제외. 메인 이미지 중복 제외."""
     if not desc_html:
@@ -2251,11 +2251,11 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     category     = str(product.get("category", ""))
     price        = int(product.get("price", 0))
     main_img     = image_urls[0] if image_urls else ""
-    extra_imgs   = [u for u in image_urls[1:6] if u]
+    extra_imgs   = [u for u in image_urls[1:15] if u]
     selling_pts  = ai.get("selling_points") or ai.get("recommend_list") or []
     gallery_html = "\n".join(
         f'<img src="{u}" style="width:100%;max-width:860px;height:auto;display:block;margin:8px auto;">'
-        for u in extra_imgs
+        for u in extra_imgs[:10]
     ) or f'<img src="{main_img}" style="width:100%;max-width:860px;height:auto;display:block;margin:0 auto;">'
     features_str = ", ".join(str(s) for s in selling_pts[:5]) or product_name
 
@@ -2366,7 +2366,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
 
     # ── Vision 모드 시도 (최대 3회 재생성) ────────────────────────────────────
     vision_imgs = []
-    for _url in image_urls[:3]:
+    for _url in image_urls[:5]:
         _img = await _prepare_image_for_claude(_url)
         if _img:
             vision_imgs.append(_img)
@@ -3997,7 +3997,7 @@ async def pipeline_register_from_domeggook(
             _extra_raw = p.get("_dg_extra_images") or []
             if _extra_raw:
                 async with httpx.AsyncClient(timeout=15, follow_redirects=True) as _ec:
-                    for _eu in _extra_raw[:9]:
+                    for _eu in _extra_raw[:19]:
                         try:
                             _er = await _ec.get(_eu)
                             if _er.status_code != 200 or len(_er.content) < 50 * 1024:
