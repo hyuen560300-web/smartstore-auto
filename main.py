@@ -2176,11 +2176,16 @@ _STYLE_DESIGN = {
 
 
 # ── 초고수 프롬프트 엔지니어링 (2026-06-23): ① 역할부여(system) + ③ few-shot 예시 ──
-_SYSTEM_ROLE = (
-    "당신은 한국 이커머스 전문 UI 디자이너이자 카피라이터입니다. "
-    "무신사·29CM·마켓컬리 수준의 고품질 상세페이지를 제작합니다. "
-    "감성적이고 구매욕을 자극하는 카피라이팅과 시각적으로 완성도 높은 레이아웃을 구현합니다."
-)
+_SYSTEM_ROLE = """당신은 한국 최고 수준의 이커머스 상세페이지 전문 디자이너이자 카피라이터입니다.
+무신사·29CM·마켓컬리·쿠팡 베스트셀러 수준의 고품질 상세페이지를 제작합니다.
+
+핵심 원칙:
+1. 상품마다 완전히 다른 고유한 페이지를 만든다 (절대 틀에 박힌 구조 반복 금지)
+2. 감성적이고 구매욕을 자극하는 카피라이팅 (페인포인트 공략)
+3. 시각적으로 완성도 높은 레이아웃 (섹션별 다양한 배경색/레이아웃 변화)
+4. 2025년 네이버 알고리즘: 체류시간·전환율·키워드밀도 모두 고려
+5. 모바일 우선 반응형 (100% 모바일 최적화 필수)
+6. 최소 10,000자 이상의 풍부한 콘텐츠 생성"""
 
 # 스타일별 few-shot 예시 (구조·톤·팔레트 참고용, 50줄 이내)
 _STYLE_EXAMPLE = {
@@ -2254,19 +2259,36 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     ) or f'<img src="{main_img}" style="width:100%;max-width:860px;height:auto;display:block;margin:0 auto;">'
     features_str = ", ".join(str(s) for s in selling_pts[:5]) or product_name
 
+    img1_html = f'<img src="{extra_imgs[0]}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">' if len(extra_imgs) > 0 else f'<img src="{main_img}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">'
+    img2_html = f'<img src="{extra_imgs[1]}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">' if len(extra_imgs) > 1 else f'<img src="{main_img}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">'
+    img3_html = f'<img src="{extra_imgs[2]}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">' if len(extra_imgs) > 2 else ""
     _sections = (
-        "[필수 섹션 19개]\n"
-        "1. 상단배너 (빠른배송/정품보장 문구)\n"
-        "2. 히어로 (포인트 텍스트)\n"
-        "3. 5초 후킹 (임팩트 문구)\n"
-        f"4. 메인이미지 <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n"
-        "5. 핵심수치 4개 (그리드)\n6. 문제제기 4개 (카드)\n7. 해결책 3개\n"
-        f"8. 이미지갤러리\n{gallery_html}\n"
-        "9. 상세설명1 (좌이미지+우텍스트)\n10. 상세설명2 (좌텍스트+우이미지)\n"
-        "11. 사용법 4단계 (STEP 번호)\n12. 비교표\n13. 후기 3개 (별점)\n14. FAQ 4개\n"
-        "15. 스펙표\n16. 배송/교환 안내\n"
-        "17. 신뢰배지 3개 (빠른배송/정품보장/AS보장 — 무료배송 문구 절대 금지)\n"
-        "18. CTA\n19. 스토어찜 유도 + 푸터\n"
+        "[필수 섹션 19개 — 각 섹션 충분한 분량으로 작성, 전체 최소 10,000자]\n\n"
+        "1. 상단배너: 빠른배송/정품보장/AS보장 뱃지 (무료배송 문구 절대 금지)\n\n"
+        "2. 히어로섹션: 상품명 + 강력한 감성 카피 (이 상품만의 핵심 가치 1줄)\n\n"
+        "3. 5초 후킹: 고객 페인포인트를 직접 자극하는 임팩트 문구\n"
+        "   '혹시 이런 불편함 느끼셨나요?' → 구체적 상황 3가지 나열\n\n"
+        f"4. 메인이미지: <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n\n"
+        "5. 핵심수치 4개: 상품의 강점을 숫자로 표현 (flex 그리드 레이아웃)\n\n"
+        "6. 문제제기 4개: 기존 제품/방법의 불편함 카드 형식 (이모지+제목+설명)\n\n"
+        "7. 해결책 3개: 이 상품이 해결하는 방법 (체크마크 스타일)\n\n"
+        f"8. 이미지갤러리:\n{gallery_html}\n\n"
+        f"9. 상세설명1: 첫 번째 핵심 특징 심층 설명\n"
+        f"   {img1_html}\n"
+        "   flex 레이아웃 (좌이미지+우텍스트) / 특징명+상세설명 2~3문단\n\n"
+        f"10. 상세설명2: 두 번째 핵심 특징 심층 설명\n"
+        f"    {img2_html}\n"
+        "    flex 레이아웃 (좌텍스트+우이미지 순서반전) / 특징명+상세설명 2~3문단\n\n"
+        f"11. 사용법 4단계: STEP 01~04 번호 형식\n"
+        f"    {img3_html}\n\n"
+        "12. 비교표: 우리 상품 vs 일반 상품 / ✅❌ flex 기반 최소 5개 항목\n\n"
+        "13. 실제 후기 3개: 별점★★★★★ + 구매자(익명) + 구체적 후기 내용\n\n"
+        "14. FAQ 4개: 실제 고객이 네이버에서 검색할 법한 질문+상세 답변\n\n"
+        "15. 스펙표: 소재/사이즈/무게/색상/원산지 (flex 기반)\n\n"
+        "16. 배송/교환 안내: 배송기간, 교환반품 조건\n\n"
+        "17. 신뢰배지 3개: 빠른배송/정품보장/AS보장 (무료배송 절대 금지)\n\n"
+        "18. CTA: 강력한 구매 유도 섹션\n\n"
+        "19. 이런 분께 추천(타겟 페르소나 3~5가지) + 스토어찜 유도 + 푸터\n"
     )
     # 카테고리 → HTML 스타일 자동 매칭 (A/B/C/D)
     _style = _html_style_for(str(category), str(product_name))
@@ -2294,7 +2316,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "- 이미지는 반드시 <img src=\"...\" style=\"width:100%;max-width:100%;height:auto;display:block;\"> (텍스트만 금지)\n"
         "- 전체 래퍼 div: style=\"max-width:860px;width:100%;margin:0 auto;\"\n"
         "- 표(table) 금지 → div+flex(display:flex;flex-wrap:wrap) / 글자 em·vw, 최소 14px\n"
-        "- 폰트 'Noto Sans KR' / 그라데이션·알록달록 금지 / 골드(#c8a97a) 포인트 / 최소 5000자\n"
+        "- 폰트 'Noto Sans KR' (필수) / 섹션마다 다른 배경색 사용 / 상품명 키워드 5회 이상 포함 / 최소 10,000자\n"
     )
     _instruction = (
         "\n<instruction>위 <product_info>와 <style_type>를 바탕으로, 위 필수 구조와 예시 톤을 따라 "
@@ -2304,8 +2326,6 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     # ④ 쿼리 끝 배치: 스타일구조 → 예시 → 섹션 → 상품정보(XML) → 공통규칙 → 생성지시(맨 아래)
     vision_text = (
         _style_block
-        + "<style_example>\n" + _style_example + "\n</style_example>\n"
-        "(위 예시는 구조·톤·팔레트 참고용 — 복제 금지, 상품에 맞게 재구성)\n\n"
         + _sections + "\n"
         + _product_info
         + _common
@@ -2316,8 +2336,6 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     # 텍스트 전용 폴백 프롬프트
     text_prompt = (
         _style_block
-        + "<style_example>\n" + _style_example + "\n</style_example>\n"
-        "(위 예시는 구조·톤·팔레트 참고용 — 복제 금지, 상품에 맞게 재구성)\n\n"
         + _sections + "\n"
         + _product_info
         + _common
@@ -2340,10 +2358,10 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
             return None
         if len(frag) > len(_best):
             _best = frag
-        if len(frag) >= 5000:
+        if len(frag) >= 8000:
             print(f"[CLAUDE-HTML] ✅ {mode} {len(frag):,}자 생성(fragment, 품질OK)", flush=True)
             return frag
-        print(f"[CLAUDE-HTML] {mode} 시도{attempt+1}: {len(frag)}자(5000미달, 후보보관)", flush=True)
+        print(f"[CLAUDE-HTML] {mode} 시도{attempt+1}: {len(frag)}자(8000미달, 후보보관)", flush=True)
         return None
 
     # ── Vision 모드 시도 (최대 3회 재생성) ────────────────────────────────────
@@ -2360,7 +2378,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
                 content = vision_imgs + [{"type": "text", "text": vision_text}]
                 resp = await client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=4000,
+                    max_tokens=8000,
                     system=_SYSTEM_ROLE,
                     messages=[{"role": "user", "content": content}],
                 )
@@ -2380,7 +2398,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         try:
             resp = await client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=4000,
+                max_tokens=8000,
                 system=_SYSTEM_ROLE,
                 messages=[{"role": "user", "content": text_prompt}],
             )
