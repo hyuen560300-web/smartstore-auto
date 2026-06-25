@@ -1798,6 +1798,35 @@ async def register_single_product(request: Request):
                          or (chans[0].get("channelProductNo", "") if chans else "") or "")
         store_url = (f"https://smartstore.naver.com/khww/products/{channel_no}"
                      if channel_no else (f"https://smartstore.naver.com/khww/products/{origin_no}" if origin_no else ""))
+        # ── Vision HTML 강제적용 (등록 직후, 실패해도 등록은 성공 유지) ──
+        if origin_no:
+            try:
+                import asyncio as _aio
+                from main import generate_claude_html_detail as _gen_html, _to_naver_fragment as _frag
+                _vimgs = [u for u in [naver_img_url] if u]
+                _vh = await _gen_html(p, ai, _vimgs)
+                if _vh and "Noto Sans KR" in _vh and len(_vh) >= 1000:
+                    _vh = _frag(_vh)
+                    if _vh and len(_vh) >= 500:
+                        _upd = {k: v for k, v in payload["originProduct"].items()
+                                if k not in ("originProductNo", "channelProductNo", "regDate", "modDate", "statusFrom", "totalSalesQuantity")}
+                        _upd["detailContent"] = _vh
+                        _vok, _verr = False, ""
+                        for _va in range(3):
+                            try:
+                                _vok, _verr = await naver_api.update_product(origin_no, _upd)
+                            except Exception as _ve:
+                                _vok, _verr = False, str(_ve)[:150]
+                            if _vok:
+                                break
+                            await _aio.sleep(20 * (_va + 1) if ("429" in str(_verr) or "RATE" in str(_verr).upper()) else 3)
+                        print(f"[register-single] {'OK Vision HTML 강제적용 완료' if _vok else 'WARN Vision HTML 적용실패(등록은 성공)'}: {safe_name[:30]} {'' if _vok else str(_verr)[:200]}", flush=True)
+                    else:
+                        print(f"[register-single] WARN Vision HTML fragment 빈값 skip(등록은 성공): {safe_name[:30]}", flush=True)
+                else:
+                    print(f"[register-single] WARN Vision HTML 생성실패/짧음(등록은 성공): {safe_name[:30]}", flush=True)
+            except Exception as _ve:
+                print(f"[register-single] WARN Vision HTML 단계 예외(등록은 성공): {str(_ve)[:200]}", flush=True)
         return JSONResponse({"status": "success", "product_name": safe_name, "price": price,
                              "origin_no": origin_no, "channel_no": channel_no, "store_url": store_url})
 
