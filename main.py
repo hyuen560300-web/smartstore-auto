@@ -763,19 +763,60 @@ class NaverCommerceAPI:
             return r.status_code == 200
 
     async def get_all_orders(self, days: int = 7) -> list:
-        """최근 N일 주문 전체 조회"""
+        """최근 N일 주문 조회 — Naver는 1회 24h 제한 → 24h 윈도우로 분할 호출.
+        last-changed-statuses로 productOrderId 수집 → product-orders/query로 상세 조회."""
         from datetime import timedelta
-        now = datetime.now(timezone.utc)
-        from_dt = (now - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00.000Z")
-        to_dt = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        base = datetime.now(timezone.utc)
+        ids: list = []
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(
-                f"{NAVER_BASE}/v1/pay-order/seller/product-orders",
-                headers=await self._headers(),
-                params={"from": from_dt, "to": to_dt, "pageSize": 300}
-            )
-            r.raise_for_status()
-            return r.json().get("data", {}).get("contents", [])
+            for d in range(max(1, days)):
+                win_to = base - timedelta(days=d)
+                win_from = win_to - timedelta(hours=24)
+                params = {
+                    "lastChangedFrom": win_from.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    "lastChangedTo": win_to.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                }
+                try:
+                    r = await c.get(
+                        f"{NAVER_BASE}/v1/pay-order/seller/product-orders/last-changed-statuses",
+                        headers=await self._headers(), params=params)
+                    if r.status_code != 200:
+                        continue
+                    data = r.json().get("data", {}) or {}
+                    for s in (data.get("lastChangeStatuses") or []):
+                        pid = s.get("productOrderId")
+                        if pid:
+                            ids.append(pid)
+                except Exception:
+                    continue
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            return []
+        out: list = []
+        async with httpx.AsyncClient(timeout=30) as c:
+            for i in range(0, len(ids), 300):
+                chunk = ids[i:i + 300]
+                try:
+                    r = await c.post(
+                        f"{NAVER_BASE}/v1/pay-order/seller/product-orders/query",
+                        headers=await self._headers(), json={"productOrderIds": chunk})
+                    if r.status_code != 200:
+                        continue
+                    for item in (r.json().get("data") or []):
+                        po = item.get("productOrder", {}) or {}
+                        od = item.get("order", {}) or {}
+                        out.append({
+                            "productOrderId": po.get("productOrderId") or item.get("productOrderId", ""),
+                            "productName": po.get("productName", ""),
+                            "quantity": po.get("quantity", 0),
+                            "totalPaymentAmount": po.get("totalPaymentAmount", od.get("totalPaymentAmount", 0)),
+                            "productOrderStatus": po.get("productOrderStatus", ""),
+                            "buyerName": od.get("ordererName", ""),
+                            "paymentDate": od.get("paymentDate", ""),
+                        })
+                except Exception:
+                    continue
+        return out
 
 
 # ─── 도매꾹 API 소싱 ─────────────────────────────────────────────────────────
