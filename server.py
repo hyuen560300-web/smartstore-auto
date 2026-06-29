@@ -2292,6 +2292,7 @@ async def list_products(page: int = 1, size: int = 50):
             "products": [
                 {
                     "id": p.get("originProductNo"),
+                    "channel_no": p.get("channelProductNo"),
                     "name": p.get("originProduct", {}).get("name", ""),
                     "price": p.get("originProduct", {}).get("salePrice", 0),
                     "status": p.get("originProduct", {}).get("statusType", ""),
