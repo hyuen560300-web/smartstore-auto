@@ -2292,7 +2292,12 @@ async def list_products(page: int = 1, size: int = 50):
             "products": [
                 {
                     "id": p.get("originProductNo"),
-                    "channel_no": p.get("channelProductNo"),
+                    "channel_no": (
+                        p.get("channelProductNo")
+                        or (p.get("channelProducts") or [{}])[0].get("channelProductNo")
+                        or p.get("originProduct", {}).get("channelProductNo")
+                    ),
+                    "_keys": list(p.keys()),
                     "name": p.get("originProduct", {}).get("name", ""),
                     "price": p.get("originProduct", {}).get("salePrice", 0),
                     "status": p.get("originProduct", {}).get("statusType", ""),
