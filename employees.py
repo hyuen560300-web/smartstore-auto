@@ -4,6 +4,7 @@
 """
 import asyncio
 import json
+import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
@@ -12,6 +13,16 @@ from typing import Optional, List, Dict
 
 import anthropic
 import httpx
+
+# ⛔ Opus 영구 차단 가드 (2026-06-29)
+def _assert_no_opus(model: str) -> str:
+    if model and "opus" in model.lower():
+        raise RuntimeError(f"⛔ Opus 모델 영구 차단: {model}")
+    return model
+
+_cm = os.environ.get("CLAUDE_MODEL", "")
+if _cm:
+    _assert_no_opus(_cm)
 
 # DALL-E 하이브리드 배너 하루 제한 (스마트스토어 전체 10개 안에서 공유)
 _dalle_hybrid_count: dict = {"date": None, "n": 0}
