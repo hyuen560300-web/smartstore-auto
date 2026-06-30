@@ -4314,6 +4314,15 @@ async def startup_event():
     # 매주 월요일 09:00 — 주간 성과 요약
     scheduler.add_job(job_weekly_summary,    "cron", day_of_week="mon", hour=9, minute=0, id="weekly_summary")
 
+    # 매일 09:00 — 일일 가격 비교 (7개)
+    from main import _run_daily_price_check_ss
+    async def _job_daily_price_check_ss():
+        try:
+            await _run_daily_price_check_ss(limit=7)
+        except Exception as e:
+            print(f"[SCHED-SS] 일일가격비교 오류: {e}", flush=True)
+    scheduler.add_job(_job_daily_price_check_ss, "cron", hour=9, minute=0, id="daily_price_check_ss", replace_existing=True)
+
     try:
         scheduler.start()
         print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)

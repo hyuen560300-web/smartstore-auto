@@ -5140,6 +5140,147 @@ async def _run_price_competition_update(limit: int = 30) -> dict:
     return results
 
 
+# ─── 일일 가격비교 스케줄러 ─────────────────────────────────────────────────
+_PRICE_CHECK_LOG_SS = pathlib.Path("/tmp/price_check_ss.json")
+_CONTEXT_STORE_URL_SS = os.environ.get("CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app")
+
+def _pc_load_ss() -> dict:
+    try:
+        if _PRICE_CHECK_LOG_SS.exists():
+            return json.loads(_PRICE_CHECK_LOG_SS.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    try:
+        import urllib.request as _ur
+        with _ur.urlopen(f"{_CONTEXT_STORE_URL_SS}/context/price_check.ss", timeout=5) as r:
+            return json.loads(r.read()).get("value") or {}
+    except Exception:
+        return {}
+
+def _pc_save_ss(data: dict) -> None:
+    try:
+        _PRICE_CHECK_LOG_SS.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        import urllib.request as _ur
+        body = json.dumps({"key": "price_check.ss", "value": data, "category": "memory"}).encode()
+        req = _ur.Request(f"{_CONTEXT_STORE_URL_SS}/context", data=body, headers={"Content-Type": "application/json"})
+        _ur.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+async def _search_coupang_prices_ss(keyword: str) -> list:
+    """쿠팡 검색 폴백 — 랜덤 3~10초 대기, 차단 방지 헤더."""
+    import random as _r, re as _re, urllib.parse as _up
+    await asyncio.sleep(_r.uniform(3, 10))
+    url = f"https://www.coupang.com/np/search?q={_up.quote(keyword)}&channel=user"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://www.coupang.com/",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as c:
+            r = await c.get(url, headers=headers)
+            if r.status_code != 200:
+                return []
+            raw = [int(p.replace(",", "")) for p in _re.findall(r'"priceText"\s*:\s*"([\d,]+)"', r.text)]
+            if not raw:
+                raw = [int(p.replace(",", "")) for p in _re.findall(r'class="price-value[^"]*"[^>]*>([\d,]+)', r.text)]
+            return sorted(v for v in raw if v > 100)[:5]
+    except Exception:
+        return []
+
+async def _run_daily_price_check_ss(limit: int = 7) -> dict:
+    """일일 가격비교: 마지막 체크 오래된 SS 상품 7개 우선 처리 (매일 09:00)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    store = _pc_load_ss()
+    if store.get("last_run") == today:
+        print("[PRICE-DAILY-SS] 오늘 이미 실행됨 — 건너뜀", flush=True)
+        return {"status": "skipped"}
+    log: dict = store.get("log", {})
+
+    results = {"checked": 0, "adjusted": 0, "ok": 0, "skipped": 0, "errors": []}
+    all_prods: list = []
+    page = 1
+    while len(all_prods) < 500:
+        resp = await naver_api.list_products(page=page, size=50)
+        batch = resp.get("contents", [])
+        if not batch:
+            break
+        all_prods.extend(batch)
+        if len(batch) < 50:
+            break
+        page += 1
+
+    sale = [p for p in all_prods if p.get("originProduct", {}).get("statusType") == "SALE"]
+    sale.sort(key=lambda p: log.get(str(p.get("originProductNo", "")), "1970-01-01"))
+    targets = sale[:limit]
+    print(f"[PRICE-DAILY-SS] 대상 {len(targets)}개 처리 시작 (전체 {len(sale)}개 중)", flush=True)
+
+    for prod in targets:
+        origin = prod.get("originProduct", {})
+        pid = str(prod.get("originProductNo", ""))
+        name = origin.get("name", "")
+        our = int(origin.get("salePrice") or 0)
+        cost = int(origin.get("costPrice") or 0)
+        if our <= 0:
+            continue
+        results["checked"] += 1
+
+        comps = await search_naver_shopping(name[:20], display=10)
+        prices = [c["price"] for c in (comps or []) if c.get("price", 0) > 0]
+        if not prices:
+            prices = await _search_coupang_prices_ss(name[:20])
+
+        if not prices:
+            results["skipped"] += 1
+            log[pid] = today
+            await asyncio.sleep(1.0)
+            continue
+
+        min_p = min(prices)
+        if our <= min_p * 1.10:
+            results["ok"] += 1
+            log[pid] = today
+            await asyncio.sleep(1.0)
+            continue
+
+        target = round(min_p * 1.05 / 10) * 10
+        floor  = round(cost * 1.15 / 10) * 10 if cost > 0 else 0
+        new_p  = max(target, floor)
+        if new_p > 0 and new_p < our:
+            full = dict(origin)
+            full["salePrice"] = new_p
+            ok, err = await naver_api.update_product(pid, full)
+            if ok:
+                results["adjusted"] += 1
+                print(f"[PRICE-DAILY-SS] ✅ {name[:20]} {our:,}→{new_p:,}원 (경쟁최저:{min_p:,})", flush=True)
+            else:
+                results["errors"].append(f"{name[:15]}: {str(err)[:30]}")
+        else:
+            results["ok"] += 1
+        log[pid] = today
+        await asyncio.sleep(1.2)
+
+    if len(log) > 1200:
+        log = dict(sorted(log.items(), key=lambda x: x[1], reverse=True)[:1000])
+    store["log"] = log
+    store["last_run"] = today
+    _pc_save_ss(store)
+
+    total_logged = len(log)
+    msg = (
+        f"[가격비교-SS] {today} 완료\n"
+        f"✅ {results['adjusted']}개 조정 / {results['ok']}개 적정 / {results['skipped']}개 미검색\n"
+        f"📊 누적 체크: {total_logged}/1000개 ({round(total_logged/10,1)}% 완료)"
+    )
+    asyncio.create_task(_tg_notify(msg))
+    print(f"[PRICE-DAILY-SS] {msg}", flush=True)
+    return results
+
+
 # ─── ⑤ 리뷰·위시리스트 모니터링 ────────────────────────────────────────────
 
 _REVIEW_NEG_KW = ["불량", "파손", "오배송", "사기", "환불", "취소", "실망", "별로", "최악", "쓰레기"]
