@@ -589,6 +589,23 @@ JSON만 출력:
         if price < cost_price * 1.1 or price > cost_price * 5:
             price = round(cost_price * 1.15 / 10) * 10
         result["suggested_price"] = price
+        # Hard ceiling: 경쟁사 최저가 × 1.10 초과 시 가격 강제 하향, 마진 확보 불가 시 skip
+        if competitor_prices:
+            _cp = [c["price"] for c in competitor_prices if c.get("price", 0) > 0]
+            if _cp:
+                _comp_min = min(_cp)
+                _cap = int(_comp_min * 1.10 / 10) * 10
+                _floor = int(cost_price * 1.15 / 10) * 10
+                if _floor > _cap:
+                    return {
+                        "suggested_price": None,
+                        "skip": True,
+                        "reason": f"경쟁최저 ₩{_comp_min:,} — 원가 ₩{cost_price:,} 기준 마진 확보 불가 (소싱제외)",
+                        "competitor_min": _comp_min,
+                    }
+                if price > _cap:
+                    price = max(_floor, _cap)
+                    result["suggested_price"] = price
         return result
     except Exception:
         return {"suggested_price": round(cost_price * 1.15 / 10) * 10, "reason": "기본 마진 적용"}

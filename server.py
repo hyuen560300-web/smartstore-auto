@@ -1727,6 +1727,12 @@ async def register_single_product(request: Request):
             competitor_prices=competitor_prices)
         price = price_result["suggested_price"]
         print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
+        if price_result.get("skip"):
+            return JSONResponse({
+                "status": "skip",
+                "reason": price_result.get("reason", "경쟁가 하회"),
+                "competitor_min": price_result.get("competitor_min"),
+            })
 
         naver_img_url = await get_product_image(p)
         if not naver_img_url:
@@ -2126,6 +2132,14 @@ async def cs_inquiries(status: str = "pending", limit: int = 10):
 async def cs_reviews(limit: int = 20, days: int = 1):
     """최근 리뷰 조회 — cs_automator 연동용 (Naver 리뷰 API 미연동 시 빈 목록 반환)."""
     return JSONResponse({"reviews": [], "total": 0})
+
+
+@app.post("/price-audit")
+async def price_audit_now(limit: int = 100):
+    """경쟁사 가격 감사 즉시 실행 (백그라운드). 일일 자동 실행과 동일한 로직."""
+    from main import _run_price_competition_update
+    asyncio.create_task(_run_price_competition_update(limit=limit))
+    return JSONResponse({"status": "started", "limit": limit, "message": f"가격 감사 {limit}개 백그라운드 실행 중"})
 
 
 @app.get("/price-check")

@@ -3818,6 +3818,10 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
                 competitor_prices=competitor_prices)
             price = price_result["suggested_price"]
             print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
+            if price_result.get("skip"):
+                print(f"[소싱제외-가격] {p.get('name','')[:25]} — {price_result.get('reason','')}", flush=True)
+                results["skip"] += 1
+                continue
 
             # ⑦ 등록 전 필수 데이터 검증 (name + price 없으면 절대 등록 금지)
             final_name = (ai.get("product_name") or "").strip() or str(p.get("name", "")).strip()
@@ -4041,6 +4045,10 @@ async def pipeline_register_from_domeggook(
                 int(p.get("price", 0)), ANTHROPIC_API_KEY,
                 competitor_prices=competitor_prices)
             price = price_result["suggested_price"]
+            if price_result.get("skip"):
+                print(f"[소싱제외-가격] {p.get('name','')[:25]} — {price_result.get('reason','')}", flush=True)
+                results["skip"] += 1
+                continue
 
             _cat         = str(p.get("category", ""))
             naver_img_url = await get_product_image(p)
