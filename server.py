@@ -4215,7 +4215,7 @@ async def startup_event():
     # 1시간
     scheduler.add_job(job_process_orders,       "interval", hours=1,    id="process_orders")
     scheduler.add_job(job_order_checker,        "interval", minutes=30, id="order_checker")
-    scheduler.add_job(job_error_audit,          "interval", hours=1,    id="error_audit")
+    scheduler.add_job(job_error_audit,          "interval", hours=3,    id="error_audit")
     scheduler.add_job(job_pending_orders_checker, "interval", hours=1,  id="pending_orders_checker")
     # 2시간
     scheduler.add_job(job_reply_inquiries, "interval", hours=2, id="reply_inquiries")
