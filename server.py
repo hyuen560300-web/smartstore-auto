@@ -3922,6 +3922,24 @@ async def startup_event():
     # registered_codes.json 동기화를 백그라운드로 실행 (healthcheck 응답 차단 방지)
     _asyncio.create_task(_sync_registered_codes())
 
+    # 오늘 알림된 주문 ID 복원 (재배포 후 중복 알림 방지)
+    global _notified_order_ids
+    try:
+        _today_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+        async with httpx.AsyncClient(timeout=5) as _c:
+            _r = await _c.get(
+                f"https://loving-serenity-production-2635.up.railway.app/context/ss.order_notified_ids.{_today_kst}"
+            )
+        if _r.status_code == 200:
+            import json as _jj
+            _ids = _r.json().get("value", [])
+            if isinstance(_ids, str):
+                _ids = _jj.loads(_ids)
+            _notified_order_ids.update(_ids or [])
+            print(f"[STARTUP] 주문 ID {len(_notified_order_ids)}건 복원 완료", flush=True)
+    except Exception as _e:
+        print(f"[STARTUP] 주문 ID 복원 스킵: {_e}", flush=True)
+
     # ── APScheduler: n8n 워크플로우 3개 대체 ─────────────────────────────────
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from employees import (
@@ -3975,6 +3993,20 @@ async def startup_event():
                 _notified_order_ids.add(oid)
             if new_orders:
                 print(f"[ORDER_CHECK] 신규 주문 {len(new_orders)}건 알림 완료", flush=True)
+                # context_store 영속화 (재배포 후 중복 알림 방지)
+                try:
+                    _today_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+                    async with httpx.AsyncClient(timeout=5) as _c:
+                        await _c.post(
+                            "https://loving-serenity-production-2635.up.railway.app/context",
+                            json={
+                                "key": f"ss.order_notified_ids.{_today_kst}",
+                                "value": list(_notified_order_ids),
+                                "category": "system",
+                            },
+                        )
+                except Exception:
+                    pass
             else:
                 print("[ORDER_CHECK] 신규 주문 없음", flush=True)
         except Exception as e:
