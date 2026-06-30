@@ -5141,7 +5141,7 @@ async def _run_price_competition_update(limit: int = 30) -> dict:
 
 
 # ─── 일일 가격비교 스케줄러 ─────────────────────────────────────────────────
-_PRICE_CHECK_LOG_SS = pathlib.Path("/tmp/price_check_ss.json")
+_PRICE_CHECK_LOG_SS = Path("/tmp/price_check_ss.json")
 _CONTEXT_STORE_URL_SS = os.environ.get("CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app")
 
 def _pc_load_ss() -> dict:
