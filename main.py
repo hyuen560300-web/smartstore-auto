@@ -762,6 +762,21 @@ class NaverCommerceAPI:
             )
             return r.status_code == 200
 
+    async def dispatch_orders(self, dispatch_list: list) -> tuple:
+        """배송처리 (송장번호 입력).
+        dispatch_list: [{"productOrderId": "...", "deliveryCompanyCode": "CJGLS", "trackingNumber": "..."}]
+        택배사 코드: CJGLS(CJ대한통운) HANJIN(한진) LOTTE(롯데) POST(우체국) HYUNDAI(현대)
+        """
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/pay-order/seller/product-orders/dispatch",
+                headers=await self._headers(),
+                json={"dispatchProductOrders": dispatch_list},
+            )
+            if r.status_code == 200:
+                return True, ""
+            return False, f"HTTP {r.status_code}: {r.text[:300]}"
+
     async def get_all_orders(self, days: int = 7) -> list:
         """최근 N일 주문 조회 — Naver는 1회 24h 제한 → 24h 윈도우로 분할 호출.
         last-changed-statuses로 productOrderId 수집 → product-orders/query로 상세 조회."""
@@ -813,6 +828,7 @@ class NaverCommerceAPI:
                             "productOrderStatus": po.get("productOrderStatus", ""),
                             "buyerName": od.get("ordererName", ""),
                             "paymentDate": od.get("paymentDate", ""),
+                            "sellerProductCode": po.get("sellerProductCode", ""),
                         })
                 except Exception:
                     continue

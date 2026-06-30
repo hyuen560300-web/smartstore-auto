@@ -11,6 +11,7 @@ import httpx
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, BackgroundTasks, Request, UploadFile, File
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -2764,6 +2765,36 @@ async def order_summary(days: int = 1):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+class DispatchInvoiceRequest(BaseModel):
+    productOrderId: str
+    trackingNumber: str
+    deliveryCompanyCode: str = "CJGLS"
+
+
+@app.post("/dispatch-invoice")
+async def dispatch_invoice(req: DispatchInvoiceRequest):
+    """📦 송장번호 입력 → 스마트스토어 배송처리 자동 등록
+    deliveryCompanyCode: CJGLS(CJ대한통운) HANJIN(한진) LOTTE(롯데) POST(우체국) HYUNDAI(현대)
+    """
+    try:
+        ok, err = await naver_api.dispatch_orders([{
+            "productOrderId": req.productOrderId,
+            "deliveryCompanyCode": req.deliveryCompanyCode,
+            "trackingNumber": req.trackingNumber,
+        }])
+        if ok:
+            _tg_ss(
+                f"📦 <b>[스마트스토어] 배송처리 완료</b>\n"
+                f"주문번호: <code>{req.productOrderId}</code>\n"
+                f"택배사: {req.deliveryCompanyCode}\n"
+                f"송장번호: {req.trackingNumber}"
+            )
+            return JSONResponse({"status": "ok", "message": "배송처리 완료"})
+        return JSONResponse({"status": "error", "message": err}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 @app.post("/register-digital")
 async def register_digital_product(request: Request):
     """디지털 상품 직접 등록 (AI 파이프라인 없이 payload 그대로 전달)"""
@@ -3969,31 +4000,50 @@ async def startup_event():
             _tg_ss(f"🛒 <b>[스마트스토어] 신규 주문 {count}건</b>")
 
     async def job_order_checker():
-        """30분마다 신규 주문 체크 → 주문별 텔레그램 상세 알림 (중복 방지)"""
+        """30분마다 신규 주문 체크 → 발주확인 자동처리 + 도매꾹 발주링크 + 텔레그램 알림 (중복 방지)"""
         global _notified_order_ids
         try:
             orders = await naver_api.get_all_orders(1)
             new_orders = [o for o in orders
                           if o.get("productOrderId") not in _notified_order_ids]
+            new_ids = [o["productOrderId"] for o in new_orders if o.get("productOrderId")]
+
+            # 발주확인 자동처리 (결제완료 → 발주확인)
+            if new_ids:
+                try:
+                    ok = await naver_api.confirm_orders(new_ids)
+                    print(f"[ORDER_CHECK] 발주확인 자동처리 {len(new_ids)}건 — {'성공' if ok else '실패'}", flush=True)
+                except Exception as _ce:
+                    print(f"[ORDER_CHECK] 발주확인 오류(무시): {_ce}", flush=True)
+
             for o in new_orders:
                 oid   = o.get("productOrderId", "?")
                 pname = o.get("productName", "상품명 없음")
                 qty   = int(o.get("quantity", 1) or 1)
                 amt   = int(o.get("totalPaymentAmount", 0) or 0)
                 buyer = o.get("buyerName", "?")
+                sc    = o.get("sellerProductCode", "")
+
+                # 도매꾹 상품이면 직접 발주 링크 포함
+                dg_line = ""
+                if sc.startswith("DG_"):
+                    dg_no = sc[3:]
+                    dg_line = f"\n🔗 도매꾹 발주: https://www.domeggook.com/main/item/itemView/?no={dg_no}"
+
                 msg = (
                     f"🛒 <b>[스마트스토어 신규주문]</b>\n"
                     f"주문번호: <code>{oid}</code>\n"
                     f"상품명: {pname}\n"
                     f"수량: {qty}개\n"
                     f"결제금액: ₩{amt:,}\n"
-                    f"주문자: {buyer}"
+                    f"주문자: {buyer}\n"
+                    f"✅ 발주확인 자동처리됨{dg_line}\n"
+                    f"📦 송장입력: POST /dispatch-invoice"
                 )
                 _tg_ss(msg)
                 _notified_order_ids.add(oid)
             if new_orders:
                 print(f"[ORDER_CHECK] 신규 주문 {len(new_orders)}건 알림 완료", flush=True)
-                # context_store 영속화 (재배포 후 중복 알림 방지)
                 try:
                     _today_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
                     async with httpx.AsyncClient(timeout=5) as _c:
@@ -4011,6 +4061,36 @@ async def startup_event():
                 print("[ORDER_CHECK] 신규 주문 없음", flush=True)
         except Exception as e:
             print(f"[ORDER_CHECK] 오류: {e}", flush=True)
+
+    async def job_pending_orders_checker():
+        """1시간마다 미배송 주문 체크 → 7일 이상 발송 지연 시 텔레그램 경보"""
+        try:
+            orders = await naver_api.get_all_orders(10)
+            now_utc = datetime.now(timezone.utc)
+            delayed = []
+            for o in orders:
+                if o.get("productOrderStatus") in ("PAYED", "PAYMENT_WAIT"):
+                    paid_str = o.get("paymentDate", "")
+                    if paid_str:
+                        try:
+                            paid_dt = datetime.fromisoformat(paid_str.replace("Z", "+00:00"))
+                            if (now_utc - paid_dt).days >= 7:
+                                delayed.append(o)
+                        except Exception:
+                            pass
+            if delayed:
+                lines = "\n".join(
+                    f"  • {o.get('productName','?')[:25]} ({o.get('paymentDate','')[:10]})"
+                    for o in delayed[:5]
+                )
+                _tg_ss(
+                    f"⚠️ <b>[스마트스토어] 발송 지연 주문 {len(delayed)}건</b>\n"
+                    f"7일 이상 미배송:\n{lines}\n"
+                    f"📦 도매꾹 발주 및 송장 입력 필요"
+                )
+                print(f"[PENDING_CHECK] 발송 지연 {len(delayed)}건 경보", flush=True)
+        except Exception as e:
+            print(f"[PENDING_CHECK] 오류: {e}", flush=True)
 
     async def job_error_audit():
         print("[SCHED] 에러 감사원", flush=True)
@@ -4133,9 +4213,10 @@ async def startup_event():
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
     # 1시간
-    scheduler.add_job(job_process_orders,  "interval", hours=1,    id="process_orders")
-    scheduler.add_job(job_order_checker,   "interval", minutes=30, id="order_checker")
-    scheduler.add_job(job_error_audit,     "interval", hours=1,    id="error_audit")
+    scheduler.add_job(job_process_orders,       "interval", hours=1,    id="process_orders")
+    scheduler.add_job(job_order_checker,        "interval", minutes=30, id="order_checker")
+    scheduler.add_job(job_error_audit,          "interval", hours=1,    id="error_audit")
+    scheduler.add_job(job_pending_orders_checker, "interval", hours=1,  id="pending_orders_checker")
     # 2시간
     scheduler.add_job(job_reply_inquiries, "interval", hours=2, id="reply_inquiries")
     scheduler.add_job(job_stock_alert,     "interval", hours=2, id="stock_alert")
