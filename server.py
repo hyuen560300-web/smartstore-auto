@@ -89,6 +89,8 @@ _AUDIT_CACHE: dict = {"status": "idle", "scanned": 0, "products": []}
 
 _PURGE_CACHE: dict = {"status": "idle", "scanned": 0, "deleted": 0, "failed": 0, "log": []}
 
+_notified_order_ids: set = set()  # 텔레그램 이미 알림한 주문 ID (재시작 시 초기화)
+
 _PURGE_KEEP = [
     "에펠탑", "이중유리 커피", "커피 추출기", "통풍시트커버", "통풍 시트커버",
     "레인부츠", "미스트 분사기", "미스트분사기", "나노 미스트",
@@ -2748,6 +2750,20 @@ async def get_orders(days: int = 7):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.get("/order-summary")
+async def order_summary(days: int = 1):
+    """📊 오늘 주문 수 + 총 매출 (CEO 대시보드용)"""
+    try:
+        orders = await naver_api.get_all_orders(days)
+        return JSONResponse({
+            "days": days,
+            "total_orders": len(orders),
+            "total_revenue": sum(int(o.get("totalPaymentAmount", 0) or 0) for o in orders),
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 @app.post("/register-digital")
 async def register_digital_product(request: Request):
     """디지털 상품 직접 등록 (AI 파이프라인 없이 payload 그대로 전달)"""
@@ -3934,6 +3950,36 @@ async def startup_event():
         if count > 0:
             _tg_ss(f"🛒 <b>[스마트스토어] 신규 주문 {count}건</b>")
 
+    async def job_order_checker():
+        """30분마다 신규 주문 체크 → 주문별 텔레그램 상세 알림 (중복 방지)"""
+        global _notified_order_ids
+        try:
+            orders = await naver_api.get_all_orders(1)
+            new_orders = [o for o in orders
+                          if o.get("productOrderId") not in _notified_order_ids]
+            for o in new_orders:
+                oid   = o.get("productOrderId", "?")
+                pname = o.get("productName", "상품명 없음")
+                qty   = int(o.get("quantity", 1) or 1)
+                amt   = int(o.get("totalPaymentAmount", 0) or 0)
+                buyer = o.get("buyerName", "?")
+                msg = (
+                    f"🛒 <b>[스마트스토어 신규주문]</b>\n"
+                    f"주문번호: <code>{oid}</code>\n"
+                    f"상품명: {pname}\n"
+                    f"수량: {qty}개\n"
+                    f"결제금액: ₩{amt:,}\n"
+                    f"주문자: {buyer}"
+                )
+                _tg_ss(msg)
+                _notified_order_ids.add(oid)
+            if new_orders:
+                print(f"[ORDER_CHECK] 신규 주문 {len(new_orders)}건 알림 완료", flush=True)
+            else:
+                print("[ORDER_CHECK] 신규 주문 없음", flush=True)
+        except Exception as e:
+            print(f"[ORDER_CHECK] 오류: {e}", flush=True)
+
     async def job_error_audit():
         print("[SCHED] 에러 감사원", flush=True)
         await employee_error_auditor([], ANTHROPIC_API_KEY)
@@ -4055,8 +4101,9 @@ async def startup_event():
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
     # 1시간
-    scheduler.add_job(job_process_orders,  "interval", hours=1, id="process_orders")
-    scheduler.add_job(job_error_audit,     "interval", hours=1, id="error_audit")
+    scheduler.add_job(job_process_orders,  "interval", hours=1,    id="process_orders")
+    scheduler.add_job(job_order_checker,   "interval", minutes=30, id="order_checker")
+    scheduler.add_job(job_error_audit,     "interval", hours=1,    id="error_audit")
     # 2시간
     scheduler.add_job(job_reply_inquiries, "interval", hours=2, id="reply_inquiries")
     scheduler.add_job(job_stock_alert,     "interval", hours=2, id="stock_alert")
