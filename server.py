@@ -2142,6 +2142,14 @@ async def price_audit_now(limit: int = 100):
     return JSONResponse({"status": "started", "limit": limit, "message": f"가격 감사 {limit}개 백그라운드 실행 중"})
 
 
+@app.post("/daily-price-check")
+async def daily_price_check_ss(force: bool = False):
+    """일일 가격비교 즉시 실행 (동기 대기, 결과 반환). force=true 시 오늘 중복 실행 허용."""
+    from main import _run_daily_price_check_ss
+    result = await _run_daily_price_check_ss(limit=7, force=force)
+    return JSONResponse(result)
+
+
 @app.get("/price-check")
 def price_check(wholesale_price: int):
     selling = calculate_selling_price(wholesale_price)

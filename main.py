@@ -5192,16 +5192,17 @@ async def _search_coupang_prices_ss(keyword: str) -> list:
     except Exception:
         return []
 
-async def _run_daily_price_check_ss(limit: int = 7) -> dict:
+async def _run_daily_price_check_ss(limit: int = 7, force: bool = False) -> dict:
     """일일 가격비교: 마지막 체크 오래된 SS 상품 7개 우선 처리 (매일 09:00)."""
     today = datetime.now().strftime("%Y-%m-%d")
     store = _pc_load_ss()
-    if store.get("last_run") == today:
+    if store.get("last_run") == today and not force:
         print("[PRICE-DAILY-SS] 오늘 이미 실행됨 — 건너뜀", flush=True)
         return {"status": "skipped"}
     log: dict = store.get("log", {})
 
     results = {"checked": 0, "adjusted": 0, "ok": 0, "skipped": 0, "errors": []}
+    details = []
     all_prods: list = []
     page = 1
     while len(all_prods) < 500:
@@ -5236,6 +5237,7 @@ async def _run_daily_price_check_ss(limit: int = 7) -> dict:
 
         if not prices:
             results["skipped"] += 1
+            details.append({"name": name, "old": our, "comp_min": None, "new": None, "action": "no_price"})
             log[pid] = today
             await asyncio.sleep(1.0)
             continue
@@ -5243,6 +5245,7 @@ async def _run_daily_price_check_ss(limit: int = 7) -> dict:
         min_p = min(prices)
         if our <= min_p * 1.10:
             results["ok"] += 1
+            details.append({"name": name, "old": our, "comp_min": min_p, "new": our, "action": "ok"})
             log[pid] = today
             await asyncio.sleep(1.0)
             continue
@@ -5256,11 +5259,14 @@ async def _run_daily_price_check_ss(limit: int = 7) -> dict:
             ok, err = await naver_api.update_product(pid, full)
             if ok:
                 results["adjusted"] += 1
+                details.append({"name": name, "old": our, "comp_min": min_p, "new": new_p, "action": "adjusted"})
                 print(f"[PRICE-DAILY-SS] ✅ {name[:20]} {our:,}→{new_p:,}원 (경쟁최저:{min_p:,})", flush=True)
             else:
                 results["errors"].append(f"{name[:15]}: {str(err)[:30]}")
+                details.append({"name": name, "old": our, "comp_min": min_p, "new": None, "action": "error"})
         else:
             results["ok"] += 1
+            details.append({"name": name, "old": our, "comp_min": min_p, "new": our, "action": "ok"})
         log[pid] = today
         await asyncio.sleep(1.2)
 
@@ -5278,7 +5284,7 @@ async def _run_daily_price_check_ss(limit: int = 7) -> dict:
     )
     asyncio.create_task(_tg_notify(msg))
     print(f"[PRICE-DAILY-SS] {msg}", flush=True)
-    return results
+    return {**results, "details": details}
 
 
 # ─── ⑤ 리뷰·위시리스트 모니터링 ────────────────────────────────────────────
