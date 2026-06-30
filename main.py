@@ -5151,9 +5151,15 @@ def _pc_load_ss() -> dict:
     except Exception:
         pass
     try:
-        import urllib.request as _ur
+        import urllib.request as _ur, ast as _ast
         with _ur.urlopen(f"{_CONTEXT_STORE_URL_SS}/context/price_check.ss", timeout=5) as r:
-            return json.loads(r.read()).get("value") or {}
+            v = json.loads(r.read()).get("value") or {}
+            if isinstance(v, str):
+                try:
+                    v = json.loads(v)
+                except Exception:
+                    v = _ast.literal_eval(v)
+            return v if isinstance(v, dict) else {}
     except Exception:
         return {}
 
