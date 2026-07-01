@@ -1204,6 +1204,65 @@ async def reapply_html_endpoint(background_tasks: BackgroundTasks, limit: int = 
             "info": "진행은 Railway 로그 [REAPPLY] 태그 확인."}
 
 
+@app.post("/strip-prices-direct")
+async def strip_prices_direct(background_tasks: BackgroundTasks, nos: str = ""):
+    """기존 HTML에서 ₩X,XXX / X,XXX원 패턴만 제거 (Claude 재생성 없음).
+    ?nos=13580354278,13580357571 — 쉼표 구분 originProductNo 목록 필수."""
+    no_list = [n.strip() for n in nos.split(",") if n.strip()]
+    if not no_list:
+        return {"error": "nos 파라미터 필수 (쉼표 구분 originProductNo)"}
+    background_tasks.add_task(_run_strip_prices, no_list)
+    return {"message": "가격 제거 백그라운드 시작", "count": len(no_list)}
+
+
+async def _run_strip_prices(nos: list[str]):
+    import re as _re
+    results = {"success": 0, "failed": 0, "skipped": 0}
+    for no in nos:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                    headers=await naver_api._headers()
+                )
+            if r.status_code != 200:
+                print(f"[STRIP] ❌ 조회 실패 {no}: HTTP {r.status_code}", flush=True)
+                results["failed"] += 1
+                continue
+            origin = r.json().get("originProduct", {})
+            html = origin.get("detailContent") or ""
+            if not html:
+                print(f"[STRIP] ⚠️ detailContent 없음 {no} — skip", flush=True)
+                results["skipped"] += 1
+                continue
+            # 가격 패턴 제거
+            before_count = len(_re.findall(r"₩[\d,]+|[\d]{1,3}(?:,\d{3})+원", html))
+            html = _re.sub(r"₩[\d,]+", "", html)
+            html = _re.sub(r"\d{1,3}(?:,\d{3})+원", "", html)
+            if before_count == 0:
+                print(f"[STRIP] ✅ 가격 없음 {no} — skip", flush=True)
+                results["skipped"] += 1
+                continue
+            # 최소 payload로 업데이트 (detailContent만)
+            async with httpx.AsyncClient(timeout=30) as c:
+                upd = await c.put(
+                    f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                    headers=await naver_api._headers(),
+                    json={"originProduct": {"detailContent": html}},
+                )
+            if upd.status_code == 200:
+                print(f"[STRIP] ✅ {no} — {before_count}개 가격 제거 완료", flush=True)
+                results["success"] += 1
+            else:
+                print(f"[STRIP] ❌ 업데이트 실패 {no}: HTTP {upd.status_code} {upd.text[:200]}", flush=True)
+                results["failed"] += 1
+        except Exception as e:
+            print(f"[STRIP] ❌ 오류 {no}: {e}", flush=True)
+            results["failed"] += 1
+        await asyncio.sleep(1.0)
+    print(f"[STRIP] 완료: 성공 {results['success']} / 실패 {results['failed']} / 스킵 {results['skipped']}", flush=True)
+
+
 @app.post("/find-similar-products")
 async def find_similar_products_bg(background_tasks: BackgroundTasks, prefix_len: int = 12):
     """유사 상품 탐지 — 백그라운드 실행, 결과는 context_store[smartstore.similar_products_report]에 저장."""
