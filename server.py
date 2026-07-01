@@ -1255,10 +1255,11 @@ async def _run_strip_prices(nos: list[str]):
                 print(f"[STRIP] ✅ 가격 없음 {no} — skip", flush=True)
                 results["skipped"] += 1
                 continue
-            # 전체 origin 필드 포함, statusType만 제외 (NotValidEnum 방지)
+            # 전체 origin 필드 포함, readonly 제외 후 statusType 강제 SALE
             _STRIP_SKIP = {"originProductNo", "channelProductNo", "regDate", "modDate",
                            "statusFrom", "totalSalesQuantity", "statusType", "channelProducts"}
             payload = {k: v for k, v in origin.items() if k not in _STRIP_SKIP}
+            payload["statusType"] = "SALE"
             payload["detailContent"] = html
             async with httpx.AsyncClient(timeout=30) as c:
                 upd = await c.put(
