@@ -1215,6 +1215,35 @@ async def strip_prices_direct(background_tasks: BackgroundTasks, nos: str = ""):
     return {"message": "가격 제거 백그라운드 시작", "count": len(no_list)}
 
 
+@app.get("/strip-prices-sync")
+async def strip_prices_sync(no: str = ""):
+    """단일 상품 가격 제거 — 동기 실행, 결과 즉시 반환 (디버그용)."""
+    import re as _re
+    if not no:
+        return {"error": "no 파라미터 필수"}
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                        headers=await naver_api._headers())
+        if r.status_code != 200:
+            return {"step": "GET", "http": r.status_code, "body": r.text[:500]}
+        origin = r.json().get("originProduct", {})
+        html = origin.get("detailContent") or ""
+        before = _re.findall(r"₩[\d,]+|[\d,]+원", html)
+        html = _re.sub(r"₩[\d,]+", "", html)
+        html = _re.sub(r"\d{1,3}(?:,\d{3})+원", "", html)
+        after = _re.findall(r"₩[\d,]+|[\d,]+원", html)
+        _SKIP = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                 "statusFrom", "totalSalesQuantity", "statusType", "channelProducts"}
+        payload = {k: v for k, v in origin.items() if k not in _SKIP}
+        payload["statusType"] = "SALE"
+        payload["detailContent"] = html
+        upd = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                          headers=await naver_api._headers(),
+                          json={"originProduct": payload})
+        return {"no": no, "before_prices": before, "after_prices": after,
+                "put_http": upd.status_code, "put_body": upd.text[:800]}
+
+
 async def _run_strip_prices(nos: list[str]):
     import re as _re
     results = {"success": 0, "failed": 0, "skipped": 0}
