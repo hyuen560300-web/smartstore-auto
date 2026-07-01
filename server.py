@@ -1115,7 +1115,7 @@ async def products_catalog():
 
 
 @app.get("/html-coverage")
-async def html_coverage_scan():
+async def html_coverage_scan(no_tg: int = 0):
     """전체 상품 중 Claude HTML 19섹션 적용 여부 스캔 (Noto Sans KR 포함 여부 판별)."""
     import asyncio as _ai
     applied, not_applied = [], []
@@ -1164,7 +1164,7 @@ async def html_coverage_scan():
     import os as _os
     _tg_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("TELEGRAM_TOKEN", "")
     _tg_chat = _os.environ.get("TELEGRAM_CHAT_ID", "5506801011")
-    if _tg_token and not_applied:
+    if _tg_token and not_applied and not no_tg:
         lines = [f"• {p['name'][:40]}" for p in not_applied[:40]]
         if len(not_applied) > 40:
             lines.append(f"... 외 {len(not_applied) - 40}개")
