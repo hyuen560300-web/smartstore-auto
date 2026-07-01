@@ -2127,6 +2127,9 @@ def _to_naver_fragment(html: str) -> str:
     #    max-width/min-width/line-height 는 앞의 '-'로 제외, padding/margin 의 px 는 속성명이 달라 무관.
     html = re.sub(r"(?<![-a-zA-Z])width\s*:\s*\d+px", lambda m: "max-" + m.group(0), html, flags=re.I)
     html = re.sub(r"(?<![-a-zA-Z])height\s*:\s*\d+px", "height:auto", html, flags=re.I)
+    # ③ 가격 텍스트 제거 — 판매가는 플랫폼이 표시하므로 HTML 본문에서 강제 제거
+    html = re.sub(r"₩[\d,]+", "", html)
+    html = re.sub(r"\d{1,3}(?:,\d{3})+원", "", html)
     return html
 
 
