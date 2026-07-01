@@ -1220,17 +1220,30 @@ async def _run_strip_prices(nos: list[str]):
     results = {"success": 0, "failed": 0, "skipped": 0}
     for no in nos:
         try:
-            async with httpx.AsyncClient(timeout=20) as c:
-                r = await c.get(
-                    f"{NAVER_BASE}/v2/products/origin-products/{no}",
-                    headers=await naver_api._headers()
-                )
-            if r.status_code != 200:
+            # GET with 429 retry
+            origin = {}
+            for attempt in range(4):
+                await asyncio.sleep(2.0 * (attempt + 1))  # 2s, 4s, 6s, 8s
+                async with httpx.AsyncClient(timeout=20) as c:
+                    r = await c.get(
+                        f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                        headers=await naver_api._headers()
+                    )
+                if r.status_code == 200:
+                    origin = r.json().get("originProduct", {})
+                    break
+                if r.status_code == 429:
+                    print(f"[STRIP] 429 재시도 {no} ({attempt+1}/4)", flush=True)
+                    await asyncio.sleep(15)
+                    continue
                 print(f"[STRIP] ❌ 조회 실패 {no}: HTTP {r.status_code}", flush=True)
+                break
+            if not origin:
                 results["failed"] += 1
                 continue
-            origin = r.json().get("originProduct", {})
+
             html = origin.get("detailContent") or ""
+            status_type = origin.get("statusType") or "SALE"
             if not html:
                 print(f"[STRIP] ⚠️ detailContent 없음 {no} — skip", flush=True)
                 results["skipped"] += 1
@@ -1243,18 +1256,18 @@ async def _run_strip_prices(nos: list[str]):
                 print(f"[STRIP] ✅ 가격 없음 {no} — skip", flush=True)
                 results["skipped"] += 1
                 continue
-            # 최소 payload로 업데이트 (detailContent만)
+            # statusType 포함 최소 payload (Naver PUT 필수 필드)
             async with httpx.AsyncClient(timeout=30) as c:
                 upd = await c.put(
                     f"{NAVER_BASE}/v2/products/origin-products/{no}",
                     headers=await naver_api._headers(),
-                    json={"originProduct": {"detailContent": html}},
+                    json={"originProduct": {"statusType": status_type, "detailContent": html}},
                 )
             if upd.status_code == 200:
                 print(f"[STRIP] ✅ {no} — {before_count}개 가격 제거 완료", flush=True)
                 results["success"] += 1
             else:
-                print(f"[STRIP] ❌ 업데이트 실패 {no}: HTTP {upd.status_code} {upd.text[:200]}", flush=True)
+                print(f"[STRIP] ❌ 업데이트 실패 {no}: HTTP {upd.status_code} {upd.text[:300]}", flush=True)
                 results["failed"] += 1
         except Exception as e:
             print(f"[STRIP] ❌ 오류 {no}: {e}", flush=True)
