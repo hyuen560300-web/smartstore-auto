@@ -2294,7 +2294,7 @@ _STYLE_EXAMPLE = {
         "  <div style=\"flex:1 1 45%;background:#fff;border:2px solid #ddd;border-radius:10px;padding:20px;\"><b style=\"color:#888;\">BEFORE</b><p>매번 번거로운 정리…</p></div>\n"
         "  <div style=\"flex:1 1 45%;background:#FFF3E0;border:2px solid #FF6B00;border-radius:10px;padding:20px;\"><b style=\"color:#FF6B00;\">AFTER</b><p>한 번에 깔끔하게!</p></div></div>\n"
         " <div style=\"padding:24px;\"><p style=\"font-weight:700;color:#FF4444;\">✓ 10초 설치 ✓ 강력 고정 ✓ 물세척 OK</p></div>\n"
-        " <div style=\"background:#FF4444;padding:32px 24px;text-align:center;\"><p style=\"font-size:1.9em;color:#fff;font-weight:800;margin:0;\">단돈 ₩12,900</p></div>\n"
+        " <div style=\"background:#FF4444;padding:32px 24px;text-align:center;\"><p style=\"font-size:1.9em;color:#fff;font-weight:800;margin:0;\">지금 바로 구매하기</p></div>\n"
         "</div>"
     ),
 }
@@ -2357,7 +2357,6 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     _product_info = (
         "<product_info>\n"
         f"  <name>{product_name}</name>\n"
-        f"  <price>₩{price:,}</price>\n"
         f"  <image_url>{main_img}</image_url>\n"
         f"  <features>{features_str}</features>\n"
         f"  <category>{category}</category>\n"
@@ -2374,6 +2373,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "- 전체 래퍼 div: style=\"max-width:860px;width:100%;margin:0 auto;\"\n"
         "- 표(table) 금지 → div+flex(display:flex;flex-wrap:wrap) / 글자 em·vw, 최소 14px\n"
         "- 폰트 'Noto Sans KR' (필수) / 섹션마다 다른 배경색 사용 / 상품명 키워드 5회 이상 포함 / 최소 10,000자\n"
+        "- ⛔ 특정 가격(₩X,XXX / 단돈 XXX원 등) HTML에 절대 포함 금지 — 가격은 플랫폼이 표시함\n"
     )
     _instruction = (
         "\n<instruction>위 <product_info>와 <style_type>를 바탕으로, 위 필수 구조와 예시 톤을 따라 "
