@@ -1243,7 +1243,6 @@ async def _run_strip_prices(nos: list[str]):
                 continue
 
             html = origin.get("detailContent") or ""
-            status_type = origin.get("statusType") or "SALE"
             if not html:
                 print(f"[STRIP] ⚠️ detailContent 없음 {no} — skip", flush=True)
                 results["skipped"] += 1
@@ -1256,12 +1255,16 @@ async def _run_strip_prices(nos: list[str]):
                 print(f"[STRIP] ✅ 가격 없음 {no} — skip", flush=True)
                 results["skipped"] += 1
                 continue
-            # statusType 포함 최소 payload (Naver PUT 필수 필드)
+            # 전체 origin 필드 포함, statusType만 제외 (NotValidEnum 방지)
+            _STRIP_SKIP = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                           "statusFrom", "totalSalesQuantity", "statusType", "channelProducts"}
+            payload = {k: v for k, v in origin.items() if k not in _STRIP_SKIP}
+            payload["detailContent"] = html
             async with httpx.AsyncClient(timeout=30) as c:
                 upd = await c.put(
                     f"{NAVER_BASE}/v2/products/origin-products/{no}",
                     headers=await naver_api._headers(),
-                    json={"originProduct": {"statusType": status_type, "detailContent": html}},
+                    json={"originProduct": payload},
                 )
             if upd.status_code == 200:
                 print(f"[STRIP] ✅ {no} — {before_count}개 가격 제거 완료", flush=True)
