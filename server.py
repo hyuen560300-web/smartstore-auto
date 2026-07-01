@@ -1237,6 +1237,11 @@ async def strip_prices_sync(no: str = ""):
         payload = {k: v for k, v in origin.items() if k not in _SKIP}
         payload["statusType"] = "SALE"
         payload["detailContent"] = html
+        da = payload.get("detailAttribute") or {}
+        ci = da.get("productCertificationInfos") or []
+        if ci:
+            da["productCertificationInfos"] = [x for x in ci if x.get("kindType")]
+            payload["detailAttribute"] = da
         upd = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{no}",
                           headers=await naver_api._headers(),
                           json={"originProduct": payload})
@@ -1290,6 +1295,14 @@ async def _run_strip_prices(nos: list[str]):
             payload = {k: v for k, v in origin.items() if k not in _STRIP_SKIP}
             payload["statusType"] = "SALE"
             payload["detailContent"] = html
+            # KC인증 kindType 비어있으면 해당 항목 제거 (BAD_REQUEST 방지)
+            detail_attr = payload.get("detailAttribute") or {}
+            cert_infos = detail_attr.get("productCertificationInfos") or []
+            if cert_infos:
+                detail_attr["productCertificationInfos"] = [
+                    c for c in cert_infos if c.get("kindType")
+                ]
+                payload["detailAttribute"] = detail_attr
             async with httpx.AsyncClient(timeout=30) as c:
                 upd = await c.put(
                     f"{NAVER_BASE}/v2/products/origin-products/{no}",
