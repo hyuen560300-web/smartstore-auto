@@ -1253,9 +1253,7 @@ async def strip_prices_sync(no: str = ""):
                           headers=await naver_api._headers(),
                           json={"originProduct": payload})
         return {"no": no, "before_prices": before, "after_prices": after,
-                "put_http": upd.status_code, "put_body": upd.text[:800],
-                "debug_da_type": str(type(payload.get("detailAttribute"))),
-                "debug_cert": str(payload.get("detailAttribute", {}).get("productCertificationInfos") if isinstance(payload.get("detailAttribute"), dict) else "N/A")[:300]}
+                "put_http": upd.status_code, "put_body": upd.text[:800]}
 
 
 async def _run_strip_prices(nos: list[str]):
