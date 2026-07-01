@@ -1131,8 +1131,7 @@ async def _run_html_coverage_scan():
             name = (origin.get("name") or item.get("name") or "").strip()
             detail = origin.get("detailContent") or ""
             sale_price = int(origin.get("salePrice") or 0)
-            channel_products = origin.get("channelProducts", [])
-            channel_no = (channel_products[0].get("channelProductNo", "") if channel_products else "")
+            origin_no = str(item.get("originProductNo") or origin.get("id") or "")
             has_html = "Noto Sans KR" in detail
             if has_html:
                 applied.append(name)
@@ -1142,7 +1141,7 @@ async def _run_html_coverage_scan():
                 if price_hits:
                     price_mismatch.append({
                         "name": name[:40],
-                        "channel_no": channel_no,
+                        "origin_no": origin_no,
                         "sale_price": sale_price,
                         "prices_in_html": price_hits[:5],
                     })
