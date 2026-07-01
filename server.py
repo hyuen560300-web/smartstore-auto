@@ -1237,11 +1237,18 @@ async def strip_prices_sync(no: str = ""):
         payload = {k: v for k, v in origin.items() if k not in _SKIP}
         payload["statusType"] = "SALE"
         payload["detailContent"] = html
-        da = payload.get("detailAttribute") or {}
-        ci = da.get("productCertificationInfos") or []
-        if ci:
-            da["productCertificationInfos"] = [x for x in ci if x.get("kindType")]
-            payload["detailAttribute"] = da
+        # KC인증 kindType 빈 항목 제거 (BAD_REQUEST 방지)
+        da = payload.get("detailAttribute")
+        if isinstance(da, dict):
+            ci = da.get("productCertificationInfos") or []
+            cleaned = [x for x in ci if x.get("kindType")]
+            if len(cleaned) != len(ci):
+                da = dict(da)
+                if cleaned:
+                    da["productCertificationInfos"] = cleaned
+                else:
+                    da.pop("productCertificationInfos", None)
+                payload["detailAttribute"] = da
         upd = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{no}",
                           headers=await naver_api._headers(),
                           json={"originProduct": payload})
@@ -1295,14 +1302,18 @@ async def _run_strip_prices(nos: list[str]):
             payload = {k: v for k, v in origin.items() if k not in _STRIP_SKIP}
             payload["statusType"] = "SALE"
             payload["detailContent"] = html
-            # KC인증 kindType 비어있으면 해당 항목 제거 (BAD_REQUEST 방지)
-            detail_attr = payload.get("detailAttribute") or {}
-            cert_infos = detail_attr.get("productCertificationInfos") or []
-            if cert_infos:
-                detail_attr["productCertificationInfos"] = [
-                    c for c in cert_infos if c.get("kindType")
-                ]
-                payload["detailAttribute"] = detail_attr
+            # KC인증 kindType 빈 항목 제거 (BAD_REQUEST 방지)
+            _da = payload.get("detailAttribute")
+            if isinstance(_da, dict):
+                _ci = _da.get("productCertificationInfos") or []
+                _cleaned = [x for x in _ci if x.get("kindType")]
+                if len(_cleaned) != len(_ci):
+                    _da = dict(_da)
+                    if _cleaned:
+                        _da["productCertificationInfos"] = _cleaned
+                    else:
+                        _da.pop("productCertificationInfos", None)
+                    payload["detailAttribute"] = _da
             async with httpx.AsyncClient(timeout=30) as c:
                 upd = await c.put(
                     f"{NAVER_BASE}/v2/products/origin-products/{no}",
