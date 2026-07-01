@@ -1114,85 +1114,83 @@ async def products_catalog():
     return {"total": len(out), "products": out}
 
 
-@app.get("/html-coverage")
-async def html_coverage_scan(no_tg: int = 0):
-    """전체 상품 중 Claude HTML 19섹션 적용 여부 스캔 (Noto Sans KR 포함 여부 판별)."""
+async def _run_html_coverage_scan():
+    """백그라운드 HTML 커버리지 스캔 — 결과를 context_store에 저장."""
     import asyncio as _ai
+    import httpx as _hx
     applied, not_applied = [], []
+    price_mismatch = []
     page = 1
-    debug_first = {}
     while True:
         resp = await naver_api.list_products(page=page, size=50, days=1000)
         contents = resp.get("contents", [])
-        total_count = resp.get("totalCount", 0)
         if not contents:
             break
-        if page == 1 and contents:
-            first = contents[0]
-            op = first.get("originProduct", {})
-            debug_first = {
-                "totalCount": total_count,
-                "keys_in_item": list(first.keys()),
-                "keys_in_origin": list(op.keys()),
-                "has_detail": bool(op.get("detailContent")),
-                "detail_snippet": (op.get("detailContent") or "")[:100],
-                "name_in_origin": op.get("name", ""),
-                "name_in_item": first.get("name", ""),
-            }
         for item in contents:
             origin = item.get("originProduct", {})
             name = (origin.get("name") or item.get("name") or "").strip()
             detail = origin.get("detailContent") or ""
+            sale_price = int(origin.get("salePrice") or 0)
             channel_products = origin.get("channelProducts", [])
             channel_no = (channel_products[0].get("channelProductNo", "") if channel_products else "")
-            url = (f"https://smartstore.naver.com/thehwmall/products/{channel_no}"
-                   if channel_no else "https://smartstore.naver.com/thehwmall")
-            if "Noto Sans KR" in detail:
-                applied.append({"name": name, "url": url})
+            has_html = "Noto Sans KR" in detail
+            if has_html:
+                applied.append(name)
+                # 가격 패턴 검사: ₩X,XXX 또는 X,XXX원
+                import re as _re
+                price_hits = _re.findall(r"₩[\d,]+|[\d,]+원", detail)
+                if price_hits:
+                    price_mismatch.append({
+                        "name": name[:40],
+                        "channel_no": channel_no,
+                        "sale_price": sale_price,
+                        "prices_in_html": price_hits[:5],
+                    })
             else:
-                not_applied.append({"name": name, "url": url})
-        # 마지막 페이지 체크: 반환 수 < 요청 size
+                not_applied.append(name)
         if len(contents) < 50:
             break
         page += 1
-        await _ai.sleep(0.5)
+        await _ai.sleep(0.3)
 
     total = len(applied) + len(not_applied)
     pct = round(len(applied) / total * 100, 1) if total else 0
-
-    # 텔레그램 전송
-    import os as _os
-    _tg_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("TELEGRAM_TOKEN", "")
-    _tg_chat = _os.environ.get("TELEGRAM_CHAT_ID", "5506801011")
-    if _tg_token and not_applied and not no_tg:
-        lines = [f"• {p['name'][:40]}" for p in not_applied[:40]]
-        if len(not_applied) > 40:
-            lines.append(f"... 외 {len(not_applied) - 40}개")
-        msg = (
-            f"[스마트스토어 HTML 적용 현황]\n\n"
-            f"✅ 새 HTML 적용 (Noto Sans KR): {len(applied)}개\n"
-            f"❌ 미적용 (도매꾹 원본): {len(not_applied)}개\n"
-            f"📊 총 스캔: {total}개 | 적용률 {pct}%\n\n"
-            f"❌ 미적용 상품 목록:\n" + "\n".join(lines)
-        )
-        try:
-            import httpx as _hx
-            async with _hx.AsyncClient(timeout=8) as _c:
-                await _c.post(
-                    f"https://api.telegram.org/bot{_tg_token}/sendMessage",
-                    json={"chat_id": _tg_chat, "text": msg},
-                )
-        except Exception:
-            pass
-
-    return {
+    result = {
         "total": total,
         "applied": len(applied),
         "not_applied": len(not_applied),
         "applied_pct": pct,
-        "debug": debug_first,
-        "not_applied_list": not_applied,
+        "price_in_html": len(price_mismatch),
+        "price_mismatch_samples": price_mismatch[:20],
     }
+    try:
+        async with _hx.AsyncClient(timeout=10) as _c:
+            await _c.post(
+                "https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "html.coverage.result", "value": result, "category": "memory"},
+            )
+    except Exception:
+        pass
+    print(f"[HTML-COVERAGE] 완료: {len(applied)}/{total} Vision HTML, 가격포함 {len(price_mismatch)}개", flush=True)
+
+
+@app.get("/html-coverage")
+async def html_coverage_scan(background_tasks: BackgroundTasks):
+    """전체 상품 HTML 커버리지 스캔 (백그라운드) — 결과는 /html-coverage/result 로 조회."""
+    background_tasks.add_task(_run_html_coverage_scan)
+    return {"status": "started", "message": "스캔 백그라운드 실행 중. /html-coverage/result 로 결과 확인."}
+
+
+@app.get("/html-coverage/result")
+async def html_coverage_result():
+    """html-coverage 스캔 결과 조회 (context_store)."""
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=8) as _c:
+            r = await _c.get("https://loving-serenity-production-2635.up.railway.app/context/html.coverage.result")
+            return r.json().get("value") or {"status": "no_result", "message": "/html-coverage 먼저 실행 필요"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 @app.post("/reapply-html")
