@@ -4363,14 +4363,14 @@ async def startup_event():
     # 1시간
     scheduler.add_job(job_process_orders,       "interval", hours=1,    id="process_orders")
     scheduler.add_job(job_order_checker,        "interval", minutes=30, id="order_checker")
-    scheduler.add_job(job_error_audit,          "interval", hours=3,    id="error_audit")
+    scheduler.add_job(job_error_audit,          "interval", hours=24,   id="error_audit")
     scheduler.add_job(job_pending_orders_checker, "interval", hours=1,  id="pending_orders_checker")
     # 2시간
-    scheduler.add_job(job_reply_inquiries, "interval", hours=2, id="reply_inquiries")
-    scheduler.add_job(job_stock_alert,     "interval", hours=2, id="stock_alert")
+    scheduler.add_job(job_reply_inquiries, "interval", hours=6,  id="reply_inquiries")
+    scheduler.add_job(job_stock_alert,     "interval", hours=6,  id="stock_alert")
     # 6시간
-    scheduler.add_job(job_sync_inventory,  "interval", hours=6, id="sync_inventory")
-    scheduler.add_job(job_trend_scout,     "interval", hours=6, id="trend_scout")
+    scheduler.add_job(job_sync_inventory,  "interval", hours=6,  id="sync_inventory")
+    scheduler.add_job(job_trend_scout,     "interval", hours=24, id="trend_scout")
     # 매일
     scheduler.add_job(job_daily_report,    "interval", hours=24, id="daily_report")
     scheduler.add_job(job_season_plan,     "interval", hours=24, id="season_plan")

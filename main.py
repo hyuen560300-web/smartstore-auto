@@ -182,6 +182,24 @@ GOOGLE_AI_API_KEY   = _clean_key(os.environ.get("GOOGLE_AI_API_KEY", ""))
 FLUX_API_KEY        = _clean_key(os.environ.get("FLUX_API_KEY", ""))
 REPLICATE_API_KEY   = _clean_key(os.environ.get("REPLICATE_API_KEY", ""))
 MARGIN_RATE         = float(os.environ.get("MARGIN_RATE", "0.15"))
+
+# ── 일일 Claude 비용 한도 가드 ─────────────────────────────────────────────────
+import threading as _thr
+_DAILY_LIMIT_USD = float(os.environ.get("CLAUDE_DAILY_LIMIT_USD", "15"))
+_cost_lock = _thr.Lock()
+_cost_state = {"date": "", "spent": 0.0}
+
+def _cost_guard_ok(estimated_usd: float = 0.12) -> bool:
+    today = __import__("datetime").date.today().isoformat()
+    with _cost_lock:
+        if _cost_state["date"] != today:
+            _cost_state["date"] = today
+            _cost_state["spent"] = 0.0
+        if _cost_state["spent"] + estimated_usd > _DAILY_LIMIT_USD:
+            print(f"[COST-GUARD] 일일 한도 도달 (${_cost_state['spent']:.2f}/${_DAILY_LIMIT_USD}) — Claude 호출 차단", flush=True)
+            return False
+        _cost_state["spent"] += estimated_usd
+        return True
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "/tmp/uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
 DOMEGGOOK_API_KEY          = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
@@ -2306,6 +2324,8 @@ _STYLE_EXAMPLE = {
 async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list) -> str:
     """Claude Sonnet Vision으로 고품질 HTML 생성(역할부여+XML구조+few-shot). Vision 실패 시 텍스트 폴백."""
     if not ANTHROPIC_API_KEY:
+        return ""
+    if not _cost_guard_ok(0.30):
         return ""
     product_name = ai.get("product_name") or str(product.get("name", ""))
     category     = str(product.get("category", ""))
