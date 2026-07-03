@@ -4324,6 +4324,9 @@ async def startup_event():
 
     async def job_register_products():
         """매일 09:00 / 13:00 / 20:00 — 도매꾹 API 소싱 후 상품 등록 (1000개 한도)"""
+        if os.getenv("SOURCING_PAUSED", "false").lower() == "true":
+            print("[SCHED] SOURCING_PAUSED=true — 신규 소싱 중단 중", flush=True)
+            return
         if os.getenv("AUTO_REGISTER_ENABLED", "true").lower() != "true":
             print("[SCHED] 상품 자동 등록 비활성화 (AUTO_REGISTER_ENABLED=false)", flush=True)
             return
@@ -4342,8 +4345,9 @@ async def startup_event():
             print(msg, flush=True)
             await _tg_notify(msg)
             return
-        _slots = min(11, 1000 - _cur)
-        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/1000, 이번:{_slots}개)", flush=True)
+        _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "11"))
+        _slots = min(_daily_limit, 1000 - _cur)
+        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/1000, 이번:{_slots}개, 일일한도:{_daily_limit})", flush=True)
         try:
             await pipeline_register_from_domeggook(limit=_slots)
         except Exception as e:
