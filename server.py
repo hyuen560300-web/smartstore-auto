@@ -3192,6 +3192,62 @@ async def get_product_detail(product_no: int):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.post("/cancel-order")
+async def cancel_order(request: Request):
+    """🚫 주문 취소 처리 (판매자 귀책 사유)"""
+    import httpx as _hx
+    body = await request.json()
+    product_order_id = str(body.get("product_order_id", ""))
+    reason = str(body.get("reason", "상품 가격 표시 오류로 인한 판매자 귀책 취소"))
+    if not product_order_id:
+        return JSONResponse({"status": "error", "message": "product_order_id 필요"}, status_code=400)
+
+    headers = await naver_api._headers()
+    NAVER_BASE = "https://api.commerce.naver.com/external"
+
+    # 1단계: 현재 주문 상태 조회
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            rs = await c.post(
+                f"{NAVER_BASE}/v1/pay-order/seller/product-orders/query",
+                headers=headers,
+                json={"productOrderIds": [product_order_id]}
+            )
+        if rs.status_code != 200:
+            return JSONResponse({"status": "error", "step": "status_check",
+                                 "code": rs.status_code, "body": rs.text[:400]})
+        items = rs.json().get("data", [])
+        po = (items[0].get("productOrder", {}) if items else {})
+        order_status = po.get("productOrderStatus", "UNKNOWN")
+    except Exception as e:
+        return JSONResponse({"status": "error", "step": "status_check", "message": str(e)})
+
+    # 2단계: 취소 API 호출
+    cancel_body = {
+        "productOrderIds": [product_order_id],
+        "cancelReasonType": "SELLER_CAUSE",
+        "cancelReason": reason
+    }
+    results = {}
+    try:
+        async with _hx.AsyncClient(timeout=20) as c:
+            rc = await c.post(
+                f"{NAVER_BASE}/v1/pay-order/seller/product-orders/cancel",
+                headers=headers,
+                json=cancel_body
+            )
+        results["cancel"] = {"status": rc.status_code, "body": rc.text[:500]}
+    except Exception as e:
+        results["cancel"] = {"error": str(e)}
+
+    return JSONResponse({
+        "status": "ok",
+        "product_order_id": product_order_id,
+        "order_status_before": order_status,
+        "cancel_result": results
+    })
+
+
 @app.post("/confirm-orders")
 async def confirm_orders(request: Request):
     """✅ 주문 발주확인 처리"""
