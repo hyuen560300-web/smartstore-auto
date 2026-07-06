@@ -2850,14 +2850,27 @@ async def delete_product(product_id: str):
 
 @app.post("/update-price")
 async def update_price(request: Request):
-    """💰 상품 가격 수정"""
+    """💰 상품 가격 수정 (read-modify-write — Naver는 부분 PUT 거부)"""
+    import httpx as _hx
     body = await request.json()
     product_id = str(body.get("product_id", ""))
     price = int(body.get("price", 0))
     if not product_id or price <= 0:
         return JSONResponse({"status": "error", "message": "product_id, price 필요"}, status_code=400)
-    ok = await naver_api.update_price(product_id, price)
-    return JSONResponse({"status": "ok" if ok else "fail", "product_id": product_id, "new_price": price})
+    headers = await naver_api._headers()
+    url = f"https://api.commerce.naver.com/external/v2/products/origin-products/{product_id}"
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(url, headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"status": "error", "message": f"GET {r.status_code}: {r.text[:200]}"}, status_code=502)
+        origin = r.json().get("originProduct", {})
+        _READONLY = {"originProductNo", "channelProductNo", "regDate", "modDate", "statusFrom", "totalSalesQuantity", "channelProducts"}
+        payload = {k: v for k, v in origin.items() if k not in _READONLY}
+        payload["salePrice"] = price
+        r2 = await c.put(url, headers=headers, json={"originProduct": payload})
+    ok = r2.status_code == 200
+    return JSONResponse({"status": "ok" if ok else "fail", "product_id": product_id, "new_price": price,
+                         "error": r2.text[:300] if not ok else ""})
 
 
 @app.post("/update-stock")
