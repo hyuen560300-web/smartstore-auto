@@ -1697,6 +1697,32 @@ async def domeggook_preview(limit: int = 10, keyword: str = ""):
     })
 
 
+@app.get("/domeggook-search")
+async def domeggook_search_endpoint(kw: str = "", sz: int = 10):
+    """도매꾹 키워드 검색 — 원가 조회용."""
+    import httpx as _hx
+    if not DOMEGGOOK_API_KEY:
+        return JSONResponse({"error": "DOMEGGOOK_API_KEY 없음"}, status_code=400)
+    if not kw:
+        return JSONResponse({"error": "kw 파라미터 필요"}, status_code=400)
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://domeggook.com/ssl/api/", params={
+                "ver": "4.1", "mode": "getItemList",
+                "aid": DOMEGGOOK_API_KEY, "market": "dome",
+                "kw": kw, "om": "json", "sz": sz, "pg": "1", "so": "rd",
+            })
+        items = r.json().get("domeggook", {}).get("list", {}).get("item", [])
+        if isinstance(items, dict):
+            items = [items]
+        result = [{"no": it.get("no"), "title": it.get("title","")[:60],
+                   "price": it.get("price"), "delivery_price": it.get("delivery_price")}
+                  for it in items]
+        return JSONResponse({"count": len(result), "items": result})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
 @app.get("/domeggook-debug")
 async def domeggook_debug():
     """도매꾹 API 직접 호출 + fetch_domeggook_products 함수 테스트 (진단용)"""
