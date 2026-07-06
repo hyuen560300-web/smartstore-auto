@@ -1515,6 +1515,26 @@ def calculate_selling_price(wholesale_price: int) -> int:
     return round(price / 10) * 10
 
 
+async def _log_sourcing_decision(platform: str, dg_code: str, name: str, platform_id, wholesale: int, sale_price: int, reason: str) -> None:
+    """소싱 결정 내역을 context_store에 기록 — 상품ID·도매가·이유 추적용"""
+    import datetime
+    try:
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        key = f"sourcing.log.{platform}.{today}"
+        async with httpx.AsyncClient(timeout=5) as c:
+            r = await c.get(f"https://loving-serenity-production-2635.up.railway.app/context/{key}")
+            existing = (r.json().get("value") or "") if r.status_code == 200 else ""
+        entry = f"{today} | DG={dg_code} | PID={platform_id} | {name[:20]} | 도매₩{wholesale:,} | 판매₩{sale_price:,} | {reason}"
+        updated = (existing + "\n" + entry).strip()
+        async with httpx.AsyncClient(timeout=5) as c:
+            await c.post(
+                "https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": key, "value": updated, "category": "sourcing_log"}
+            )
+    except Exception:
+        pass
+
+
 # ─── Claude AI 상품 설명 생성 (전 직원 협업 버전) ────────────────────────────
 async def generate_product_copy(product: dict, context: dict = None) -> dict:
     """시즌+트렌드+리뷰 Pain Point 반영한 상품 설명 생성"""
@@ -4022,6 +4042,13 @@ async def pipeline_register_from_domeggook(
                 results["duplicate"] += 1
                 continue
 
+            # ① 도매가 0 사전 차단 (등록 전 단계에서 차단)
+            _ss_wholesale = int(p.get("price", 0))
+            if _ss_wholesale <= 0:
+                print(f"[STEP1] ⛔ 도매가미기입: {p.get('name','')[:30]} — 소싱스킵", flush=True)
+                results["skip"] += 1
+                continue
+
             # 계절 필터: 현재 계절과 맞지 않는 상품 제외
             if _is_season_excluded(p.get("name", "")):
                 print(f"[계절필터] 스킵: {p.get('name','')[:30]} — {_SEASON_INFO['season']} 시즌 부적합", flush=True)
@@ -4065,6 +4092,12 @@ async def pipeline_register_from_domeggook(
                 print(f"[STEP2] 태그 기본값 보완 → {len(ai['tags'])}개", flush=True)
 
             competitor_prices = await search_naver_shopping(str(p.get("name", "")))
+            # ② 네이버쇼핑 신뢰도 체크: 최저가가 도매가의 50% 미만이면 부품/단품 매칭 → 폴백
+            if competitor_prices:
+                _ss_naver_min = min((c["price"] for c in competitor_prices if c.get("price", 0) > 0), default=None)
+                if _ss_naver_min and _ss_naver_min < _ss_wholesale * 0.5:
+                    print(f"[신뢰도낮음] {p.get('name','')[:25]} — 최저가₩{_ss_naver_min:,} < 도매가₩{_ss_wholesale:,}×0.5 → 경쟁가무시·폴백", flush=True)
+                    competitor_prices = []  # 폴백: price_optimizer가 기본 마진(2.2×) 적용
             price_result = await employee_price_optimizer(
                 str(p.get("name", "")), str(p.get("category", "")),
                 int(p.get("price", 0)), ANTHROPIC_API_KEY,
@@ -4072,6 +4105,13 @@ async def pipeline_register_from_domeggook(
             price = price_result["suggested_price"]
             if price_result.get("skip"):
                 print(f"[소싱제외-가격] {p.get('name','')[:25]} — {price_result.get('reason','')}", flush=True)
+                results["skip"] += 1
+                continue
+            # ③ floor 근접 보류: 판매가가 floor(도매가×1.15)의 110% 이내
+            _ss_floor = round(_ss_wholesale * 1.15 / 10) * 10
+            _ss_near_thr = round(_ss_floor * 1.10 / 10) * 10
+            if price < _ss_near_thr:
+                print(f"[NEAR_FLOOR] 소싱보류: {p.get('name','')[:25]} — 판매가₩{price:,} < floor×1.10=₩{_ss_near_thr:,}", flush=True)
                 results["skip"] += 1
                 continue
 
@@ -4202,6 +4242,9 @@ async def pipeline_register_from_domeggook(
             _product_url = (f"https://smartstore.naver.com/thehwmall/products/{_pid}"
                             if _pid else "https://smartstore.naver.com/thehwmall")
             print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원) → {_product_url}", flush=True)
+            asyncio.create_task(_log_sourcing_decision(
+                "smartstore", str(p.get("code", "")), final_name, _pid or "", _ss_wholesale, price, "price_optimizer"
+            ))
             asyncio.create_task(_tg_notify(f"[{_proc_n}/{_proc_total}] {final_name} ✅\n{_product_url}"))
             asyncio.create_task(_save_to_obsidian(
                 final_name, _cat, detail_html, ai, ai.get("tags") or [],
