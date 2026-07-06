@@ -2310,6 +2310,36 @@ def price_check(wholesale_price: int):
             "margin_rate": f"{margin * 100:.0f}%", "profit": selling - wholesale_price}
 
 
+@app.get("/naver-dynamic-price")
+async def naver_dynamic_price(keyword: str, wholesale_price: int):
+    """네이버쇼핑 경쟁가 기반 AI 동적가격 계산 (도매꾹 소싱용)
+    target = min_competitor × 1.05, floor = wholesale × 1.15
+    final  = max(target, floor), round to 10원
+    """
+    from main import search_naver_shopping
+    items = await search_naver_shopping(keyword, display=20)
+    if not items:
+        floor = int(wholesale_price * 1.15)
+        final = int(round(floor / 10) * 10)
+        return {"keyword": keyword, "wholesale_price": wholesale_price,
+                "competitor_min": None, "target": None,
+                "floor": floor, "final_price": final,
+                "note": "네이버쇼핑 검색 결과 없음 → floor 적용"}
+    prices = [it["price"] for it in items if it.get("price", 0) > 0]
+    min_price = min(prices)
+    target = int(min_price * 1.05)
+    floor  = int(wholesale_price * 1.15)
+    final  = int(round(max(target, floor) / 10) * 10)
+    return {
+        "keyword": keyword, "wholesale_price": wholesale_price,
+        "competitor_min": min_price, "competitor_count": len(prices),
+        "target": target, "floor": floor,
+        "final_price": final,
+        "applied": "target" if target >= floor else "floor",
+        "top5": sorted(prices)[:5],
+    }
+
+
 # ─── AI 직원단 엔드포인트 ──────────────────────────────────────────────────────
 
 @app.get("/season-plan")
