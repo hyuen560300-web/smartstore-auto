@@ -3168,6 +3168,9 @@ async def get_product_detail(product_no: int):
                 "status": "ok",
                 "name": origin.get("name"),
                 "statusType": origin.get("statusType"),
+                "salePrice": origin.get("salePrice"),
+                "wholeSalePrice": origin.get("wholeSalePrice"),
+                "stockQuantity": origin.get("stockQuantity"),
                 "originAreaInfo": detail_attr.get("originAreaInfo"),
                 "leafCategoryId": origin.get("leafCategoryId"),
             })
