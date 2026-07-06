@@ -3229,16 +3229,20 @@ async def cancel_order(request: Request):
         "cancelReason": reason
     }
     results = {}
-    try:
-        async with _hx.AsyncClient(timeout=20) as c:
-            rc = await c.post(
-                f"{NAVER_BASE}/v1/pay-order/seller/product-orders/cancel",
-                headers=headers,
-                json=cancel_body
-            )
-        results["cancel"] = {"status": rc.status_code, "body": rc.text[:500]}
-    except Exception as e:
-        results["cancel"] = {"error": str(e)}
+    async with _hx.AsyncClient(timeout=20) as c:
+        for path in [
+            f"{NAVER_BASE}/v1/pay-order/seller/product-orders/cancel",
+            f"{NAVER_BASE}/v1/pay-order/seller/product-orders/{product_order_id}/cancel",
+            f"{NAVER_BASE}/v1/pay-order/seller/product-orders/request-cancel",
+        ]:
+            try:
+                rc = await c.post(path, headers=headers, json=cancel_body)
+                key = path.split("/pay-order/seller/")[1]
+                results[key] = {"status": rc.status_code, "body": rc.text[:400]}
+                if rc.status_code in (200, 201):
+                    break
+            except Exception as e:
+                results[path] = {"error": str(e)}
 
     return JSONResponse({
         "status": "ok",
