@@ -5129,6 +5129,10 @@ async def _run_price_competition_update(limit: int = 30) -> dict:
             cost_price = int(origin.get("costPrice") or 0)
             if our_price <= 0:
                 continue
+            if cost_price <= 0:
+                results["skipped"] += 1
+                print(f"[PRICE] SKIP {name[:20]} — costPrice 미기입, price-audit 보류", flush=True)
+                continue
             results["checked"] += 1
 
             competitors = await search_naver_shopping(name[:20], display=10)
