@@ -2888,9 +2888,11 @@ async def get_orders(days: int = 7):
                     "product_name": o.get("productName", ""),
                     "quantity": o.get("quantity", 0),
                     "amount": o.get("totalPaymentAmount", 0),
+                    "unit_price": round(int(o.get("totalPaymentAmount", 0) or 0) / max(int(o.get("quantity", 1) or 1), 1)),
                     "status": o.get("productOrderStatus", ""),
                     "buyer": o.get("buyerName", ""),
                     "ordered_at": o.get("paymentDate", ""),
+                    "seller_code": o.get("sellerProductCode", ""),
                 }
                 for o in orders
             ]
