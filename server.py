@@ -2296,31 +2296,31 @@ async def price_audit_now(limit: int = 100):
 
 @app.post("/set-cost-price")
 async def set_cost_price(product_no: str, cost_price: int):
-    """단일 상품 costPrice 수동 저장 (테스트용). product_no=상품번호, cost_price=도매가."""
-    resp = await naver_api.list_products(page=1, size=50, days=3650)
-    target = None
-    page = 1
-    while target is None:
-        contents = resp.get("contents", [])
-        for p in contents:
-            if str(p.get("originProductNo", "")) == str(product_no):
-                target = p
-                break
-        if target or len(contents) < 50:
-            break
-        page += 1
-        resp = await naver_api.list_products(page=page, size=50, days=3650)
-        await asyncio.sleep(0.3)
+    """단일 상품 costPrice 수동 저장 (테스트용). Naver API 직접 조회로 빠르게 처리."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    headers = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=headers)
+    if r.status_code != 200:
+        return JSONResponse({"ok": False, "error": f"Naver 조회 실패: HTTP {r.status_code}"}, status_code=404)
 
-    if not target:
-        return JSONResponse({"ok": False, "error": f"상품 {product_no} 미발견"}, status_code=404)
-
-    origin = dict(target.get("originProduct", {}))
+    data = r.json()
+    origin = dict(data.get("originProduct", {}))
     old_cost = origin.get("costPrice", 0)
     origin["costPrice"] = cost_price
     ok, err = await naver_api.update_product(product_no, origin)
     if ok:
-        return JSONResponse({"ok": True, "product_no": product_no, "old_cost_price": old_cost, "new_cost_price": cost_price})
+        # 재조회로 실제 저장 확인
+        import asyncio as _aio
+        await _aio.sleep(1)
+        async with _hx.AsyncClient(timeout=20) as c2:
+            r2 = await c2.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=await naver_api._headers())
+        verified = r2.json().get("originProduct", {}).get("costPrice", -1) if r2.status_code == 200 else -1
+        return JSONResponse({"ok": True, "product_no": product_no,
+                             "old_cost_price": old_cost, "new_cost_price": cost_price,
+                             "verified_cost_price": verified,
+                             "verified_match": verified == cost_price})
     return JSONResponse({"ok": False, "error": err}, status_code=500)
 
 
@@ -2582,20 +2582,16 @@ async def batch_price_fix(items: list[dict]):
         if not product_no or new_price <= 0:
             results.append({"product_no": product_no, "ok": False, "error": "invalid params"})
             continue
-        # 전체 상품 조회에서 해당 상품 originProduct 찾기
-        target_origin = None
-        page = 1
-        while target_origin is None:
-            resp = await naver_api.list_products(page=page, size=50, days=3650)
-            contents = resp.get("contents", [])
-            for p in contents:
-                if str(p.get("originProductNo", "")) == product_no:
-                    target_origin = dict(p.get("originProduct", {}))
-                    break
-            if target_origin or len(contents) < 50:
-                break
-            page += 1
-            await asyncio.sleep(0.3)
+        # Naver API 직접 조회 (빠름)
+        import httpx as _hx
+        from main import NAVER_BASE
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=headers)
+        if r.status_code != 200:
+            results.append({"product_no": product_no, "ok": False, "error": f"Naver 조회 실패 HTTP {r.status_code}"})
+            continue
+        target_origin = dict(r.json().get("originProduct", {}))
 
         if not target_origin:
             results.append({"product_no": product_no, "ok": False, "error": "상품 미발견"})
