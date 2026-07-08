@@ -2615,6 +2615,140 @@ async def batch_price_fix(items: list[dict]):
     return JSONResponse({"ok_count": ok_count, "fail_count": len(results) - ok_count, "results": results})
 
 
+@app.get("/verify-margin")
+async def verify_margin():
+    """22개 가격 수정 상품의 도매가 대비 안전성 검증.
+    Naver에서 sellerManagementCode 조회 → DG API 도매가 → floor(×1.15) vs 현재 판매가."""
+    import httpx as _hx
+    from main import NAVER_BASE, DOMEGGOOK_API_KEY, DOMEGGOOK_API_URL
+
+    FLOOR = 1.15
+    OLD_MARKUP = 2.2
+    DG_URL = DOMEGGOOK_API_URL or "https://domeggook.com/ssl/api/"
+    DG_KEY = DOMEGGOOK_API_KEY
+
+    # ranks 54~65 (확정 데이터)
+    items_54_65 = [
+        (54, 13574289110, "USB충전식 초소형 선풍기 클립형", 23900, 10290),
+        (55, 13564329492, "진주목걸이 DIY 직접 캐기",      21900,  9490),
+        (56, 13563141895, "360도 회전스프링클러 정원용",    13900,  6090),
+        (57, 13563140296, "3구 회전 스프링클러 텃밭용",      6900,  3030),
+        (58, 13571387436, "에어컨 실외기 커버 53cm",        19900,  9340),
+        (59, 13564087260, "비즈 DIY 만들기 세트 24색",      12900,  6200),
+        (60, 13562419805, "2단 알루미늄 노트북 거치대",      17900,  8820),
+        (61, 13572349804, "사각체크 여행용 세면도구 7종",    19900,  9960),
+        (62, 13562417539, "공룡스티커 50장",                 4490,  2260),
+        (63, 13566962206, "원형 대형 텃밭 화분",             19800,  9980),
+        (64, 13574515999, "USB충전식 초경량 선풍기",         10400,  5340),
+        (65, 13562453526, "메쉬 벨트백",                     9900,  5120),
+    ]
+    all_items = [{"rank": r, "pno": pno, "name": name,
+                  "old_price": op, "new_price": np}
+                 for r, pno, name, op, np in items_54_65]
+
+    # ranks 66~75 context_store에서 보충
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.overpriced_scan.result")
+            if r.status_code == 200:
+                val = r.json().get("value")
+                if isinstance(val, str):
+                    val = json.loads(val)
+                for it in (val.get("items") or val.get("overpriced") or []):
+                    rk = it.get("rank", 0)
+                    if 66 <= rk <= 75:
+                        pno = it.get("product_no") or it.get("productNo") or it.get("origin_product_no")
+                        old_p = it.get("current_price") or it.get("salePrice") or it.get("old_price")
+                        mmin = it.get("market_min") or it.get("naver_min")
+                        new_p = (int(round(mmin * 1.05 / 10) * 10) if mmin
+                                 else it.get("new_price") or it.get("target_price"))
+                        all_items.append({"rank": rk, "pno": int(pno) if pno else 0,
+                                          "name": it.get("name", ""),
+                                          "old_price": old_p, "new_price": new_p})
+    except Exception as e:
+        print(f"[verify-margin] context_store 조회 실패: {e}", flush=True)
+
+    all_items.sort(key=lambda x: x["rank"])
+    headers = await naver_api._headers()
+    results = []
+
+    for it in all_items:
+        pno = it["pno"]
+        new_p = it["new_price"]
+        old_p = it["old_price"]
+        if not pno or not new_p:
+            results.append({**it, "status": "skip", "reason": "데이터 없음"})
+            continue
+
+        # Naver → sellerManagementCode + 현재 판매가 확인
+        dg_code = ""
+        current_sale = new_p
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{pno}", headers=headers)
+            if r.status_code == 200:
+                origin = r.json().get("originProduct", {})
+                dg_code = origin.get("sellerManagementCode", "")
+                current_sale = origin.get("salePrice", new_p)
+        except Exception as e:
+            print(f"[verify-margin] Naver {pno}: {e}", flush=True)
+
+        # DG API 도매가
+        wholesale = 0
+        source = ""
+        if DG_KEY and dg_code:
+            try:
+                async with _hx.AsyncClient(timeout=10) as c:
+                    r = await c.get(DG_URL, params={
+                        "aid": DG_KEY, "cmd": "getItemView",
+                        "oid": dg_code, "outType": "json"})
+                if r.status_code == 200:
+                    item_data = r.json().get("item") or {}
+                    for field in ["price", "minPrice", "salePrice", "consumerPrice"]:
+                        val = item_data.get(field)
+                        if val:
+                            wholesale = int(str(val).replace(",", ""))
+                            source = f"DG({dg_code})"
+                            break
+            except Exception as e:
+                print(f"[verify-margin] DG {dg_code}: {e}", flush=True)
+
+        if wholesale == 0 and old_p:
+            wholesale = int(old_p / OLD_MARKUP)
+            source = f"추정(구가{old_p:,}÷{OLD_MARKUP})"
+
+        floor = int(wholesale * FLOOR)
+        gap = current_sale - floor
+        safe = current_sale >= floor
+
+        results.append({
+            "rank": it["rank"],
+            "name": it["name"],
+            "pno": pno,
+            "dg_code": dg_code,
+            "wholesale": wholesale,
+            "floor": floor,
+            "current_sale": current_sale,
+            "old_price": old_p,
+            "gap": gap,
+            "safe": safe,
+            "source": source,
+        })
+        print(f"[verify-margin] rank{it['rank']:>3} {'✅' if safe else '❌'} "
+              f"도매:{wholesale:,} floor:{floor:,} 현재:{current_sale:,} gap:{gap:+,} [{source}]", flush=True)
+        await asyncio.sleep(0.3)
+
+    danger = [r for r in results if not r.get("safe") and r.get("status") != "skip"]
+    safe_list = [r for r in results if r.get("safe")]
+    return JSONResponse({
+        "total": len(results),
+        "safe": len(safe_list),
+        "danger": len(danger),
+        "items": results,
+        "danger_items": danger,
+    })
+
+
 @app.post("/daily-price-check")
 async def daily_price_check_ss(force: bool = False):
     """일일 가격비교 즉시 실행 (동기 대기, 결과 반환). force=true 시 오늘 중복 실행 허용."""
