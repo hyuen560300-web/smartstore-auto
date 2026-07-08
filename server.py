@@ -2294,6 +2294,127 @@ async def price_audit_now(limit: int = 100):
     return JSONResponse({"status": "started", "limit": limit, "message": f"가격 감사 {limit}개 백그라운드 실행 중"})
 
 
+@app.post("/set-cost-price")
+async def set_cost_price(product_no: str, cost_price: int):
+    """단일 상품 costPrice 수동 저장 (테스트용). product_no=상품번호, cost_price=도매가."""
+    resp = await naver_api.list_products(page=1, size=50, days=3650)
+    target = None
+    page = 1
+    while target is None:
+        contents = resp.get("contents", [])
+        for p in contents:
+            if str(p.get("originProductNo", "")) == str(product_no):
+                target = p
+                break
+        if target or len(contents) < 50:
+            break
+        page += 1
+        resp = await naver_api.list_products(page=page, size=50, days=3650)
+        await asyncio.sleep(0.3)
+
+    if not target:
+        return JSONResponse({"ok": False, "error": f"상품 {product_no} 미발견"}, status_code=404)
+
+    origin = dict(target.get("originProduct", {}))
+    old_cost = origin.get("costPrice", 0)
+    origin["costPrice"] = cost_price
+    ok, err = await naver_api.update_product(product_no, origin)
+    if ok:
+        return JSONResponse({"ok": True, "product_no": product_no, "old_cost_price": old_cost, "new_cost_price": cost_price})
+    return JSONResponse({"ok": False, "error": err}, status_code=500)
+
+
+async def _run_backfill_cost_prices():
+    """백그라운드: SALE 상품 전체 costPrice 소급 저장 (DG API 조회). 결과 context_store에 저장."""
+    import httpx as _hx
+    from main import DOMEGGOOK_API_KEY, DOMEGGOOK_API_URL
+    print("[BACKFILL] costPrice 소급 저장 시작", flush=True)
+    all_products: list[dict] = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50, days=3650)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.3)
+
+    results = {"ok": 0, "skip_no_code": 0, "skip_dg_fail": 0, "skip_already_set": 0, "fail": 0}
+    async with _hx.AsyncClient(timeout=15) as c:
+        for prod in all_products:
+            origin = prod.get("originProduct", {})
+            if origin.get("statusType") != "SALE":
+                continue
+            existing_cost = int(origin.get("costPrice") or 0)
+            if existing_cost > 0:
+                results["skip_already_set"] += 1
+                continue
+            product_no = str(prod.get("originProductNo", ""))
+            dg_code = (origin.get("detailAttribute", {})
+                              .get("sellerCodeInfo", {})
+                              .get("sellerManagementCode", ""))
+            if not dg_code:
+                results["skip_no_code"] += 1
+                continue
+            try:
+                params = f"ver=4.1&mode=getItemView&aid={DOMEGGOOK_API_KEY}&market=dome&om=json&no={dg_code}"
+                r = await c.get(f"{DOMEGGOOK_API_URL}?{params}")
+                dg_data = r.json().get("domeggook", {})
+                price_raw = dg_data.get("basis", {}).get("price", "0")
+                wholesale = int(str(price_raw).replace(",", "") or "0")
+            except Exception as e:
+                print(f"[BACKFILL] DG 조회 실패({dg_code}): {e}", flush=True)
+                results["skip_dg_fail"] += 1
+                await asyncio.sleep(0.5)
+                continue
+            if wholesale <= 0:
+                results["skip_dg_fail"] += 1
+                await asyncio.sleep(0.3)
+                continue
+            full_origin = dict(origin)
+            full_origin["costPrice"] = wholesale
+            ok, err = await naver_api.update_product(product_no, full_origin)
+            if ok:
+                results["ok"] += 1
+                print(f"[BACKFILL] ✅ {origin.get('name','')[:25]} costPrice={wholesale:,}", flush=True)
+            else:
+                results["fail"] += 1
+                print(f"[BACKFILL] ❌ {product_no}: {err[:60]}", flush=True)
+            await asyncio.sleep(1.0)
+
+    try:
+        async with _hx.AsyncClient(timeout=10) as c2:
+            await c2.post(
+                "https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "ss.backfill_cost_prices.result", "value": json.dumps(results), "category": "audit"},
+            )
+    except Exception:
+        pass
+    print(f"[BACKFILL] 완료 — {results}", flush=True)
+
+
+@app.post("/backfill-cost-prices")
+async def backfill_cost_prices():
+    """SALE 상품 전체 costPrice 소급 저장 (DG API 활용, 백그라운드). 결과: /backfill-cost-prices-result"""
+    asyncio.create_task(_run_backfill_cost_prices())
+    return JSONResponse({"status": "started", "message": "결과는 /backfill-cost-prices-result 에서 조회"})
+
+
+@app.get("/backfill-cost-prices-result")
+async def backfill_cost_prices_result():
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=10) as c:
+        r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.backfill_cost_prices.result")
+    if r.status_code != 200:
+        return JSONResponse({"done": False, "message": "아직 결과 없음"})
+    raw = r.json()
+    val = raw.get("value", "{}")
+    return JSONResponse(json.loads(val) if isinstance(val, str) else val)
+
+
 @app.get("/price-ratio-scan")
 async def price_ratio_scan(ratio_min: float = 2.0, ratio_max: float = 2.3, check_market: bool = False):
     """가격 비율 스캔 (읽기 전용). 가격/원가 비율이 ratio_min~ratio_max 인 상품 목록 반환.
@@ -2448,6 +2569,54 @@ async def overpriced_scan_result():
     raw = r.json()
     val = raw.get("value", "{}")
     return JSONResponse(json.loads(val) if isinstance(val, str) else val)
+
+
+@app.post("/batch-price-fix")
+async def batch_price_fix(items: list[dict]):
+    """배치 가격 수정 (1개씩 순차). items=[{"product_no":"...", "new_price":N}, ...]
+    new_price는 시장최저가×1.05 기준으로 호출자가 계산해 넘김."""
+    results = []
+    for item in items:
+        product_no = str(item.get("product_no", ""))
+        new_price   = int(item.get("new_price", 0))
+        if not product_no or new_price <= 0:
+            results.append({"product_no": product_no, "ok": False, "error": "invalid params"})
+            continue
+        # 전체 상품 조회에서 해당 상품 originProduct 찾기
+        target_origin = None
+        page = 1
+        while target_origin is None:
+            resp = await naver_api.list_products(page=page, size=50, days=3650)
+            contents = resp.get("contents", [])
+            for p in contents:
+                if str(p.get("originProductNo", "")) == product_no:
+                    target_origin = dict(p.get("originProduct", {}))
+                    break
+            if target_origin or len(contents) < 50:
+                break
+            page += 1
+            await asyncio.sleep(0.3)
+
+        if not target_origin:
+            results.append({"product_no": product_no, "ok": False, "error": "상품 미발견"})
+            continue
+
+        old_price = target_origin.get("salePrice", 0)
+        target_origin["salePrice"] = new_price
+        ok, err = await naver_api.update_product(product_no, target_origin)
+        results.append({
+            "product_no": product_no,
+            "name": target_origin.get("name", "")[:40],
+            "old_price": old_price,
+            "new_price": new_price,
+            "ok": ok,
+            "error": err if not ok else "",
+        })
+        print(f"[BATCH-PRICE] {'✅' if ok else '❌'} {target_origin.get('name','')[:30]} {old_price:,}→{new_price:,}", flush=True)
+        await asyncio.sleep(1.5)
+
+    ok_count = sum(1 for r in results if r["ok"])
+    return JSONResponse({"ok_count": ok_count, "fail_count": len(results) - ok_count, "results": results})
 
 
 @app.post("/daily-price-check")

@@ -1787,6 +1787,7 @@ def build_product_payload(
                 "optionalImages": [],
             },
             "salePrice": selling_price,
+            "costPrice": int(raw.get("price", 0) or 0),
             "stockQuantity": int(raw.get("stock") or 100),
             "deliveryInfo": {
                 "deliveryType": "DELIVERY",
@@ -5069,7 +5070,7 @@ async def _source_replacement_product() -> None:
         p     = products[0]
         copy  = await generate_product_copy(p, {})
         price = calculate_selling_price(int(p.get("price", 10000)))
-        pload = build_product_payload(copy, price, p.get("image", ""), "", p)
+        pload = build_product_payload(p, copy, price, tags=copy.get("tags"))
         res   = await naver_api.register_product(pload)
         if res:
             save_registered_code(str(p.get("code", "")))
