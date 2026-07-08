@@ -2358,11 +2358,11 @@ async def price_ratio_scan(ratio_min: float = 2.0, ratio_max: float = 2.3, check
     })
 
 
-@app.get("/overpriced-scan")
-async def overpriced_scan(threshold: float = 1.10):
-    """SALE 상품 전체를 네이버쇼핑 최저가와 비교해 threshold 초과 비싼 상품 목록 반환 (읽기 전용).
-    threshold=1.10 → 최저가 대비 10% 이상 비싼 상품만."""
+async def _run_overpriced_scan(threshold: float = 1.10):
+    """백그라운드: SALE 상품 전체 네이버쇼핑 시세 비교 → context_store 저장."""
     from main import search_naver_shopping
+    import httpx as _hx
+    print("[OVERPRICED] 스캔 시작", flush=True)
     all_products: list[dict] = []
     page = 1
     while True:
@@ -2387,8 +2387,7 @@ async def overpriced_scan(threshold: float = 1.10):
         if sale_price <= 0:
             continue
         name = origin.get("name", "")
-        kw = name[:20]
-        items = await search_naver_shopping(kw, display=10)
+        items = await search_naver_shopping(name[:20], display=10)
         prices = [it["price"] for it in (items or []) if it.get("price", 0) > 0]
         if not prices:
             no_result += 1
@@ -2411,14 +2410,44 @@ async def overpriced_scan(threshold: float = 1.10):
         await asyncio.sleep(0.5)
 
     overpriced.sort(key=lambda x: x["ratio_vs_market"], reverse=True)
-    return JSONResponse({
+    result = {
         "sale_total": len(sale_products),
         "overpriced_count": len(overpriced),
         "competitive_count": competitive,
         "no_market_data": no_result,
         "threshold": f"최저가 × {threshold}",
         "overpriced": overpriced,
-    })
+        "done": True,
+    }
+    try:
+        async with _hx.AsyncClient(timeout=10) as c:
+            await c.post(
+                "https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "ss.overpriced_scan.result", "value": json.dumps(result, ensure_ascii=False), "category": "audit"},
+            )
+    except Exception as e:
+        print(f"[OVERPRICED] context_store 저장 실패: {e}", flush=True)
+    print(f"[OVERPRICED] 완료 — 고가:{len(overpriced)} 경쟁력:{competitive} 시세없음:{no_result}", flush=True)
+
+
+@app.get("/overpriced-scan")
+async def overpriced_scan(threshold: float = 1.10):
+    """SALE 상품 전체를 네이버쇼핑 최저가와 비교 (백그라운드). 결과는 /overpriced-scan-result 로 조회."""
+    asyncio.create_task(_run_overpriced_scan(threshold=threshold))
+    return JSONResponse({"status": "started", "threshold": threshold, "message": "결과는 /overpriced-scan-result 에서 조회"})
+
+
+@app.get("/overpriced-scan-result")
+async def overpriced_scan_result():
+    """overpriced_scan 결과 조회 (context_store)."""
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=10) as c:
+        r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.overpriced_scan.result")
+    if r.status_code != 200:
+        return JSONResponse({"done": False, "message": "아직 결과 없음 (스캔 진행 중 또는 미실행)"})
+    raw = r.json()
+    val = raw.get("value", "{}")
+    return JSONResponse(json.loads(val) if isinstance(val, str) else val)
 
 
 @app.post("/daily-price-check")
