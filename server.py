@@ -2303,7 +2303,7 @@ async def set_cost_price(product_no: str, cost_price: int):
     async with _hx.AsyncClient(timeout=20) as c:
         r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=headers)
     if r.status_code != 200:
-        return JSONResponse({"ok": False, "error": f"Naver 조회 실패: HTTP {r.status_code}"}, status_code=404)
+        return JSONResponse({"ok": False, "error": f"Naver 조회 실패: HTTP {r.status_code} {r.text[:200]}"})
 
     data = r.json()
     origin = dict(data.get("originProduct", {}))
@@ -2321,7 +2321,7 @@ async def set_cost_price(product_no: str, cost_price: int):
                              "old_cost_price": old_cost, "new_cost_price": cost_price,
                              "verified_cost_price": verified,
                              "verified_match": verified == cost_price})
-    return JSONResponse({"ok": False, "error": err}, status_code=500)
+    return JSONResponse({"ok": False, "error": err})
 
 
 async def _run_backfill_cost_prices():
