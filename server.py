@@ -4068,6 +4068,53 @@ def _tg_ss(msg: str):
     asyncio.create_task(_send())
 
 
+async def _dg_auto_order_ss(
+    dg_no: str, name: str, phone: str, zipcode: str,
+    address1: str, address2: str, memo: str,
+    order_id: str, product_name: str,
+):
+    """Bridge /dg-order 호출 (SS용) — 결과 직접 보고."""
+    import httpx as _hx
+    bridge_url = os.environ.get("DG_BRIDGE_URL", "https://abiding-iron-saddlebag.ngrok-free.dev") + "/dg-order"
+    payload = {
+        "dg_no": dg_no, "name": name, "phone": phone,
+        "zipcode": zipcode, "address1": address1,
+        "address2": address2, "memo": memo,
+    }
+    print(f"[DG-RPA-SS] 발주 시작 no={dg_no} order={order_id}", flush=True)
+    try:
+        async with _hx.AsyncClient(timeout=300) as c:
+            r = await c.post(bridge_url, json=payload)
+            result = r.json()
+    except Exception as e:
+        print(f"[DG-RPA-SS] Bridge 연결 오류: {e}", flush=True)
+        _tg_ss(
+            f"❌ <b>[SS 도매꾹 RPA 연결 실패]</b>\n"
+            f"주문: {order_id} / {product_name[:30]}\n"
+            f"Bridge 오류: {e}\n수동: https://domeggook.com/{dg_no}"
+        )
+        return
+    ok = result.get("ok", False)
+    dg_order_id = result.get("order_id", "-")
+    halt = result.get("halt", False)
+    daily = result.get("daily_count", "?")
+    print(f"[DG-RPA-SS] 결과 no={dg_no} ok={ok} dg_order={dg_order_id} halt={halt}", flush=True)
+    if ok:
+        _tg_ss(
+            f"✅ <b>[SS 도매꾹 자동발주 완료]</b>\n"
+            f"주문: {order_id}\n상품: {product_name[:35]}\n"
+            f"도매꾹주문번호: <code>{dg_order_id}</code>\n오늘 발주: {daily}건"
+        )
+    else:
+        err = result.get("error", "알 수 없음")
+        _tg_ss(
+            f"❌ <b>[SS 도매꾹 자동발주 실패]</b>\n"
+            f"주문: {order_id}\n상품: {product_name[:35]}\n오류: {err}\n"
+            f"{'⛔ RPA 중단 (연속실패)' if halt else '수동 발주 필요'}\n"
+            f"링크: https://domeggook.com/{dg_no}"
+        )
+
+
 _update_info_ss_running = False
 
 @app.post("/update-product-info")
@@ -4331,11 +4378,27 @@ async def startup_event():
                 buyer = o.get("buyerName", "?")
                 sc    = o.get("sellerProductCode", "")
 
-                # 도매꾹 상품이면 직접 발주 링크 포함
+                # 도매꾹 상품 — RPA 자동발주 (09~24시) 또는 수동링크
                 dg_line = ""
                 if sc.startswith("DG_"):
                     dg_no = sc[3:]
-                    dg_line = f"\n🔗 도매꾹 발주: https://www.domeggook.com/main/item/itemView/?no={dg_no}"
+                    _kst_now = datetime.now(timezone(timedelta(hours=9)))
+                    _is_op = 9 <= _kst_now.hour < 24
+                    rpa_name  = o.get("shippingName", "").strip()
+                    rpa_phone = o.get("shippingTel", "").strip()
+                    rpa_zip   = o.get("shippingZipCode", "").strip()
+                    rpa_addr1 = o.get("shippingAddr1", "").strip()
+                    rpa_addr2 = o.get("shippingAddr2", "").strip()
+                    rpa_memo  = (o.get("deliveryMessage") or "부재시 문 앞에 놓아주세요").strip()
+                    if all([rpa_name, rpa_phone, rpa_zip, rpa_addr1]) and _is_op:
+                        asyncio.create_task(_dg_auto_order_ss(
+                            dg_no, rpa_name, rpa_phone, rpa_zip,
+                            rpa_addr1, rpa_addr2, rpa_memo, oid, pname,
+                        ))
+                        dg_line = "\n🤖 도매꾹 RPA 자동발주 실행 중..."
+                    else:
+                        reason = "운영시간 외" if not _is_op else "배송지 부족"
+                        dg_line = f"\n🔗 도매꾹 수동발주({reason}): https://domeggook.com/{dg_no}"
 
                 msg = (
                     f"🛒 <b>[스마트스토어 신규주문]</b>\n"

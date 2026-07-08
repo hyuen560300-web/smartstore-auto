@@ -847,6 +847,13 @@ class NaverCommerceAPI:
                             "buyerName": od.get("ordererName", ""),
                             "paymentDate": od.get("paymentDate", ""),
                             "sellerProductCode": po.get("sellerProductCode", ""),
+                            # 배송지 (도매꾹 RPA 발주용)
+                            "shippingName":    (po.get("shippingAddress") or {}).get("name", ""),
+                            "shippingTel":     (po.get("shippingAddress") or {}).get("tel", ""),
+                            "shippingZipCode": (po.get("shippingAddress") or {}).get("zipCode", ""),
+                            "shippingAddr1":   (po.get("shippingAddress") or {}).get("baseAddress", ""),
+                            "shippingAddr2":   (po.get("shippingAddress") or {}).get("detailedAddress", ""),
+                            "deliveryMessage": po.get("deliveryMessage", ""),
                         })
                 except Exception:
                     continue
