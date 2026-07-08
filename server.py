@@ -2582,6 +2582,19 @@ async def batch_price_fix(items: list[dict]):
         if not product_no or new_price <= 0:
             results.append({"product_no": product_no, "ok": False, "error": "invalid params"})
             continue
+        # ⛔ 절대규칙: 도매가(wholesale_price) 없으면 가격 변경 불가
+        wholesale = int(item.get("wholesale_price", 0))
+        if wholesale <= 0:
+            results.append({"product_no": product_no, "ok": False,
+                            "error": "⛔ 절대규칙 위반: wholesale_price 미제공 — 도매가 없이 가격 변경 불가"})
+            print(f"[BATCH-PRICE] ⛔ SKIP {product_no} — wholesale_price 미제공", flush=True)
+            continue
+        floor = int(round(wholesale * 1.15 / 10) * 10)
+        if new_price < floor:
+            results.append({"product_no": product_no, "ok": False,
+                            "error": f"⛔ floor 미달: 새판매가₩{new_price:,} < floor₩{floor:,}(도매가₩{wholesale:,}×1.15)"})
+            print(f"[BATCH-PRICE] ⛔ floor 미달 {product_no}: {new_price:,} < {floor:,}", flush=True)
+            continue
         # Naver API 직접 조회 (빠름)
         import httpx as _hx
         from main import NAVER_BASE
@@ -2615,9 +2628,19 @@ async def batch_price_fix(items: list[dict]):
     return JSONResponse({"ok_count": ok_count, "fail_count": len(results) - ok_count, "results": results})
 
 
-@app.get("/verify-margin")
-async def verify_margin():
-    """22개 가격 수정 상품의 도매가 대비 안전성 검증.
+@app.get("/verify-margin-result")
+async def verify_margin_result():
+    """verify-margin 결과 조회 (context_store)."""
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.verify_margin.result")
+        if r.status_code == 200:
+            val = r.json().get("value")
+            return JSONResponse(json.loads(val) if isinstance(val, str) else (val or {"status": "no_result"}))
+    return JSONResponse({"status": "error"})
+
+
+async def _run_verify_margin():
+    """22개 가격 수정 상품의 도매가 대비 안전성 검증 (백그라운드).
     Naver에서 sellerManagementCode 조회 → DG API 도매가 → floor(×1.15) vs 현재 판매가."""
     import httpx as _hx
     from main import NAVER_BASE, DOMEGGOOK_API_KEY, DOMEGGOOK_API_URL
@@ -2740,13 +2763,32 @@ async def verify_margin():
 
     danger = [r for r in results if not r.get("safe") and r.get("status") != "skip"]
     safe_list = [r for r in results if r.get("safe")]
-    return JSONResponse({
+    result = {
         "total": len(results),
         "safe": len(safe_list),
         "danger": len(danger),
         "items": results,
         "danger_items": danger,
-    })
+        "done": True,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            await c.post(
+                "https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "ss.verify_margin.result",
+                      "value": json.dumps(result, ensure_ascii=False),
+                      "category": "audit"},
+            )
+        print("[verify-margin] 결과 context_store 저장 완료", flush=True)
+    except Exception as e:
+        print(f"[verify-margin] context_store 저장 실패: {e}", flush=True)
+
+
+@app.get("/verify-margin")
+async def verify_margin_trigger():
+    """22개 가격 수정 상품 안전성 검증 시작 (백그라운드). 결과는 /verify-margin-result 에서 조회."""
+    asyncio.create_task(_run_verify_margin())
+    return JSONResponse({"status": "started", "result_url": "/verify-margin-result"})
 
 
 @app.post("/daily-price-check")

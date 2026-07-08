@@ -5314,6 +5314,14 @@ async def _run_daily_price_check_ss(limit: int = 7, force: bool = False) -> dict
         cost = int(origin.get("costPrice") or 0)
         if our <= 0:
             continue
+        # ⛔ 절대규칙: 도매가(costPrice) 미기입 상품은 가격 변경 불가
+        if cost <= 0:
+            results["skipped"] += 1
+            print(f"[PRICE-DAILY-SS] ⛔ SKIP {name[:20]} — costPrice=0(도매가불명), 가격변경 금지", flush=True)
+            details.append({"name": name, "old": our, "comp_min": None, "new": None, "action": "no_costprice"})
+            log[pid] = today
+            await asyncio.sleep(0.3)
+            continue
         results["checked"] += 1
 
         comps = await search_naver_shopping(name[:20], display=10)
