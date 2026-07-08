@@ -2294,6 +2294,70 @@ async def price_audit_now(limit: int = 100):
     return JSONResponse({"status": "started", "limit": limit, "message": f"가격 감사 {limit}개 백그라운드 실행 중"})
 
 
+@app.get("/price-ratio-scan")
+async def price_ratio_scan(ratio_min: float = 2.0, ratio_max: float = 2.3, check_market: bool = False):
+    """가격 비율 스캔 (읽기 전용). 가격/원가 비율이 ratio_min~ratio_max 인 상품 목록 반환.
+    check_market=true 시 해당 상품 네이버쇼핑 최저가 추가 조회."""
+    from main import search_naver_shopping
+    flagged = []
+    all_products: list[dict] = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.3)
+
+    skipped_no_cost = 0
+    skipped_not_sale = 0
+    for prod in all_products:
+        origin = prod.get("originProduct", {})
+        if origin.get("statusType") != "SALE":
+            skipped_not_sale += 1
+            continue
+        sale_price = int(origin.get("salePrice") or 0)
+        cost_price = int(origin.get("costPrice") or 0)
+        if sale_price <= 0 or cost_price <= 0:
+            skipped_no_cost += 1
+            continue
+        ratio = round(sale_price / cost_price, 3)
+        if ratio_min <= ratio <= ratio_max:
+            entry = {
+                "product_no": str(prod.get("originProductNo", "")),
+                "name": origin.get("name", "")[:60],
+                "sale_price": sale_price,
+                "cost_price": cost_price,
+                "ratio": ratio,
+            }
+            if check_market:
+                items = await search_naver_shopping(origin.get("name", "")[:20], display=10)
+                prices = [it["price"] for it in (items or []) if it.get("price", 0) > 0]
+                if prices:
+                    market_min = min(prices)
+                    entry["market_min"] = market_min
+                    entry["vs_market"] = f"+{round((sale_price/market_min-1)*100,1)}%" if sale_price > market_min else f"{round((sale_price/market_min-1)*100,1)}%"
+                else:
+                    entry["market_min"] = None
+                    entry["vs_market"] = "검색없음"
+                await asyncio.sleep(0.5)
+            flagged.append(entry)
+
+    flagged.sort(key=lambda x: x["ratio"], reverse=True)
+    return JSONResponse({
+        "total_scanned": len(all_products),
+        "skipped_not_sale": skipped_not_sale,
+        "skipped_no_cost": skipped_no_cost,
+        "flagged_count": len(flagged),
+        "ratio_range": f"{ratio_min}~{ratio_max}",
+        "flagged": flagged,
+    })
+
+
 @app.post("/daily-price-check")
 async def daily_price_check_ss(force: bool = False):
     """일일 가격비교 즉시 실행 (동기 대기, 결과 반환). force=true 시 오늘 중복 실행 허용."""
