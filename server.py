@@ -2358,6 +2358,69 @@ async def price_ratio_scan(ratio_min: float = 2.0, ratio_max: float = 2.3, check
     })
 
 
+@app.get("/overpriced-scan")
+async def overpriced_scan(threshold: float = 1.10):
+    """SALE 상품 전체를 네이버쇼핑 최저가와 비교해 threshold 초과 비싼 상품 목록 반환 (읽기 전용).
+    threshold=1.10 → 최저가 대비 10% 이상 비싼 상품만."""
+    from main import search_naver_shopping
+    all_products: list[dict] = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        all_products.extend(contents)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.3)
+
+    sale_products = [p for p in all_products if p.get("originProduct", {}).get("statusType") == "SALE"]
+    overpriced = []
+    competitive = 0
+    no_result = 0
+    for prod in sale_products:
+        origin = prod.get("originProduct", {})
+        sale_price = int(origin.get("salePrice") or 0)
+        cost_price = int(origin.get("costPrice") or 0)
+        if sale_price <= 0:
+            continue
+        name = origin.get("name", "")
+        kw = name[:20]
+        items = await search_naver_shopping(kw, display=10)
+        prices = [it["price"] for it in (items or []) if it.get("price", 0) > 0]
+        if not prices:
+            no_result += 1
+            await asyncio.sleep(0.5)
+            continue
+        market_min = min(prices)
+        ratio_vs_market = round(sale_price / market_min, 3)
+        if ratio_vs_market > threshold:
+            overpriced.append({
+                "product_no": str(prod.get("originProductNo", "")),
+                "name": name[:60],
+                "sale_price": sale_price,
+                "cost_price": cost_price,
+                "market_min": market_min,
+                "ratio_vs_market": ratio_vs_market,
+                "overprice_pct": f"+{round((ratio_vs_market-1)*100,1)}%",
+            })
+        else:
+            competitive += 1
+        await asyncio.sleep(0.5)
+
+    overpriced.sort(key=lambda x: x["ratio_vs_market"], reverse=True)
+    return JSONResponse({
+        "sale_total": len(sale_products),
+        "overpriced_count": len(overpriced),
+        "competitive_count": competitive,
+        "no_market_data": no_result,
+        "threshold": f"최저가 × {threshold}",
+        "overpriced": overpriced,
+    })
+
+
 @app.post("/daily-price-check")
 async def daily_price_check_ss(force: bool = False):
     """일일 가격비교 즉시 실행 (동기 대기, 결과 반환). force=true 시 오늘 중복 실행 허용."""
