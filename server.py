@@ -4618,6 +4618,93 @@ async def _dg_auto_order_ss(
         )
 
 
+async def _onch3_auto_order_ss(
+    prd_code: str, option_nm: str, qty: int,
+    name: str, phone: str, zipcode: str,
+    address1: str, address2: str, memo: str,
+    order_id: str, product_name: str,
+):
+    """온채널 REST API 발주 (SS용) — onch3_sourcing 직접 호출."""
+    import onch3_sourcing as _onch3
+    print(f"[ONCH3-SS] 발주 시작 code={prd_code} order={order_id}", flush=True)
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: _onch3.place_onch3_order(
+                prd_code=prd_code,
+                option_nm=option_nm,
+                qty=qty,
+                order_name=name,
+                order_phone=phone,
+                zipcode=zipcode,
+                address=f"{address1} {address2}".strip(),
+                memo=memo,
+                sale_code=order_id,
+            ),
+        )
+    except Exception as e:
+        print(f"[ONCH3-SS] 발주 예외: {e}", flush=True)
+        _tg_ss(
+            f"❌ <b>[SS 온채널 발주 예외]</b>\n"
+            f"주문: {order_id} / {product_name[:30]}\n오류: {e}"
+        )
+        return
+
+    ok = result.get("ok", False)
+    order_code = result.get("order_code", "-")
+    halt = result.get("halt", False)
+    daily = result.get("daily_count", "?")
+    print(f"[ONCH3-SS] 결과 code={prd_code} ok={ok} onch3_order={order_code} halt={halt}", flush=True)
+    if ok:
+        _tg_ss(
+            f"✅ <b>[SS 온채널 자동발주 완료]</b>\n"
+            f"주문: {order_id}\n상품: {product_name[:35]}\n"
+            f"온채널주문번호: <code>{order_code}</code>\n오늘 발주: {daily}건"
+        )
+    else:
+        err = result.get("error", "알 수 없음")
+        _tg_ss(
+            f"❌ <b>[SS 온채널 자동발주 실패]</b>\n"
+            f"주문: {order_id}\n상품: {product_name[:35]}\n오류: {err}\n"
+            f"{'⛔ 온채널 발주 중단 (연속실패)' if halt else '수동 발주 필요'}"
+        )
+
+
+@app.post("/onch3-order")
+async def onch3_order_endpoint(request: Request):
+    """온채널 발주 HTTP 엔드포인트 (쿠팡 서비스에서 HTTP 호출).
+
+    Body: {prd_code, option_nm, qty, name, phone, zipcode, address, memo, sale_code}
+    Returns: {ok, order_code, error, halt, daily_count, point_after}
+    """
+    import onch3_sourcing as _onch3
+    body = await request.json()
+    prd_code    = body.get("prd_code", "")
+    option_nm   = body.get("option_nm", prd_code)
+    qty         = int(body.get("qty", 1) or 1)
+    order_name  = body.get("name", "")
+    order_phone = body.get("phone", "")
+    zipcode     = body.get("zipcode", "")
+    address     = body.get("address", "")
+    memo        = body.get("memo", "")
+    sale_code   = body.get("sale_code", "")
+
+    if not all([prd_code, order_name, order_phone, zipcode, address]):
+        return JSONResponse({"ok": False, "error": "필수 파라미터 누락"}, status_code=400)
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: _onch3.place_onch3_order(
+            prd_code=prd_code, option_nm=option_nm, qty=qty,
+            order_name=order_name, order_phone=order_phone,
+            zipcode=zipcode, address=address, memo=memo, sale_code=sale_code,
+        ),
+    )
+    return JSONResponse(result)
+
+
 _update_info_ss_running = False
 
 @app.post("/update-product-info")
@@ -4902,6 +4989,25 @@ async def startup_event():
                     else:
                         reason = "운영시간 외" if not _is_op else "배송지 부족"
                         dg_line = f"\n🔗 도매꾹 수동발주({reason}): https://domeggook.com/{dg_no}"
+                elif sc.startswith("ONCH3_"):
+                    _kst_now = datetime.now(timezone(timedelta(hours=9)))
+                    _is_op = 9 <= _kst_now.hour < 24
+                    rpa_name  = o.get("shippingName", "").strip()
+                    rpa_phone = o.get("shippingTel", "").strip()
+                    rpa_zip   = o.get("shippingZipCode", "").strip()
+                    rpa_addr1 = o.get("shippingAddr1", "").strip()
+                    rpa_addr2 = o.get("shippingAddr2", "").strip()
+                    rpa_memo  = (o.get("deliveryMessage") or "부재시 문 앞에 놓아주세요").strip()
+                    if all([rpa_name, rpa_phone, rpa_zip, rpa_addr1]) and _is_op:
+                        asyncio.create_task(_onch3_auto_order_ss(
+                            sc, pname, qty,
+                            rpa_name, rpa_phone, rpa_zip,
+                            rpa_addr1, rpa_addr2, rpa_memo, oid, pname,
+                        ))
+                        dg_line = "\n🤖 온채널 자동발주 실행 중..."
+                    else:
+                        reason = "운영시간 외" if not _is_op else "배송지 부족"
+                        dg_line = f"\n🔗 온채널 수동발주({reason}): https://www.onch3.co.kr/seller/orders.php"
 
                 msg = (
                     f"🛒 <b>[스마트스토어 신규주문]</b>\n"
