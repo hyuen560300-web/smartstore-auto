@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import http.cookiejar
+import json
 import os
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -204,3 +207,340 @@ async def fetch_onch3_products(
             max_price=max_price,
         ),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 자동발주 섹션 — 도매꾹 RPA와 동일 안전장치 구조
+# ═══════════════════════════════════════════════════════════════════════
+
+_API_BASE = "https://api.onch3.co.kr"
+_ORDER_STATE_FILE = Path(__file__).parent / "onch3_state.json"
+
+MAX_CONSECUTIVE_FAIL = 2    # 연속 실패 halt 임계값 (DG RPA 동일)
+DAILY_ORDER_LIMIT   = 20    # 일일 발주 한도
+LOW_POINT_THRESHOLD = 10_000  # 포인트 잔액 경고 기준 (원)
+_KST = timezone(timedelta(hours=9))
+
+
+def _today_kst() -> str:
+    return datetime.now(_KST).strftime("%Y-%m-%d")
+
+
+def _hour_kst() -> int:
+    return datetime.now(_KST).hour
+
+
+# ── 상태 관리 (DG RPA 동일 구조) ────────────────────────────────────────
+
+def _load_order_state() -> dict:
+    if _ORDER_STATE_FILE.exists():
+        try:
+            return json.loads(_ORDER_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"date": "", "daily_count": 0, "consecutive_fail": 0}
+
+
+def _save_order_state(state: dict) -> None:
+    _ORDER_STATE_FILE.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _record_order_success() -> None:
+    state = _load_order_state()
+    today = _today_kst()
+    if state.get("date") != today:
+        state = {"date": today, "daily_count": 0, "consecutive_fail": 0}
+    state["daily_count"] += 1
+    state["consecutive_fail"] = 0
+    _save_order_state(state)
+
+
+def _record_order_fail() -> None:
+    state = _load_order_state()
+    today = _today_kst()
+    if state.get("date") != today:
+        state = {"date": today, "daily_count": 0, "consecutive_fail": 0}
+    state["consecutive_fail"] += 1
+    _save_order_state(state)
+
+
+def reset_onch3_consecutive_fail() -> None:
+    """연속 실패 카운터 수동 초기화 (halt 해제 시 사용)."""
+    state = _load_order_state()
+    state["consecutive_fail"] = 0
+    _save_order_state(state)
+
+
+def check_order_limits() -> tuple[bool, str]:
+    """발주 가능 여부 체크. Returns (ok, reason)."""
+    h = _hour_kst()
+    if not (9 <= h < 24):
+        return False, f"운영시간 아님 ({h}시 KST — 09:00~24:00만 허용)"
+    state = _load_order_state()
+    today = _today_kst()
+    if state.get("date") != today:
+        state = {"date": today, "daily_count": 0, "consecutive_fail": 0}
+        _save_order_state(state)
+    if state["consecutive_fail"] >= MAX_CONSECUTIVE_FAIL:
+        return False, f"연속 실패 {state['consecutive_fail']}회 — 수동 확인 필요 (halt)"
+    if state["daily_count"] >= DAILY_ORDER_LIMIT:
+        return False, f"일일 한도 {DAILY_ORDER_LIMIT}건 초과"
+    return True, "OK"
+
+
+# ── 유틸 ────────────────────────────────────────────────────────────────
+
+def _get_jwt() -> str:
+    """온채널 API JWT 발급. 실패 시 빈 문자열."""
+    try:
+        url = (
+            f"{_API_BASE}/api/v1/getToken"
+            f"?member_id={urllib.parse.quote(ONCH3_ID)}"
+            f"&member_pw={urllib.parse.quote(ONCH3_PW)}"
+        )
+        req = urllib.request.Request(
+            url, method="POST",
+            headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read())
+        return data.get("Authorization", "")
+    except Exception as e:
+        print(f"[ONCH3] JWT 발급 실패: {e}", flush=True)
+        return ""
+
+
+def get_point_balance() -> Optional[int]:
+    """포인트 잔액 조회. 실패 시 None."""
+    jwt = _get_jwt()
+    if not jwt:
+        return None
+    try:
+        req = urllib.request.Request(
+            f"{_API_BASE}/api/v1/member/point",
+            headers={"Authorization": f"Bearer {jwt}", "User-Agent": "Mozilla/5.0"},
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read())
+        return int(data.get("point", 0))
+    except Exception as e:
+        print(f"[ONCH3] 포인트 조회 실패: {e}", flush=True)
+        return None
+
+
+def _tg_alert(text: str) -> None:
+    """긴급 텔레그램 알림 (포인트 부족 / halt 전용)."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not (token and chat_id):
+        print(f"[ONCH3-TG] {text}", flush=True)
+        return
+    try:
+        payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+
+# ── 취소 (롤백) ─────────────────────────────────────────────────────────
+
+def cancel_onch3_order(order_code: str) -> bool:
+    """온채널 주문 취소 — 공급사 미확인 상태(cancle1) 즉시환불.
+
+    Returns True if cancelled successfully.
+    """
+    opener = _make_opener()
+    if not _login(opener):
+        return False
+    try:
+        data = urllib.parse.urlencode({"code": order_code}).encode()
+        req = urllib.request.Request(
+            f"{_BASE}/access/order_access.php?ubr=order_cc&sec=1",
+            data=data,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": f"{_BASE}/seller/orders.php?state=preparing",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            method="POST",
+        )
+        resp = opener.open(req, timeout=15)
+        result = resp.read().decode("utf-8", errors="replace").strip()
+        if result == "cancle1":
+            print(f"[ONCH3] ✅ 취소+즉시환불 완료: {order_code}", flush=True)
+            return True
+        elif result in ("cancle2", "cancle5"):
+            print(f"[ONCH3] ⚠️ 취소 요청 접수 ({result}): {order_code}", flush=True)
+            return True
+        else:
+            print(f"[ONCH3] ❌ 취소 실패 ({result}): {order_code}", flush=True)
+            return False
+    except Exception as e:
+        print(f"[ONCH3] 취소 예외: {e}", flush=True)
+        return False
+
+
+# ── 발주 (메인) ─────────────────────────────────────────────────────────
+
+def place_onch3_order(
+    prd_code: str,
+    option_nm: str,
+    qty: int,
+    order_name: str,
+    order_phone: str,
+    zipcode: str,
+    address: str,
+    memo: str = "",
+    sale_code: str = "",
+    delivery_type: str = "선불",
+) -> dict:
+    """온채널 발주 API 호출 (안전장치 포함).
+
+    Args:
+        prd_code:     상품코드. ONCH3_CH... 또는 CH... 모두 허용.
+        option_nm:    옵션명 (단일옵션이면 상품명과 동일하게)
+        qty:          수량
+        order_name:   수령인 이름
+        order_phone:  수령인 전화번호
+        zipcode:      우편번호
+        address:      배송지 주소
+        memo:         배송 메모 (optional)
+        sale_code:    내부 주문번호 — SS/쿠팡 주문ID 권장
+        delivery_type: 배송비 방식 (기본: 선불)
+
+    Returns:
+        {
+          "ok": bool,
+          "order_code": str,      # 온채널 발주번호 GO_...
+          "error": str,
+          "halt": bool,           # True면 연속실패 → 수동 개입 필요
+          "daily_count": int,
+          "point_after": int|None,
+        }
+    """
+    # ── 1. 운영시간 / 연속실패 / 일일한도 체크 ───────────────────────
+    can_order, reason = check_order_limits()
+    if not can_order:
+        halt = "halt" in reason
+        print(f"[ONCH3] 발주 차단: {reason}", flush=True)
+        return {"ok": False, "error": reason, "halt": halt,
+                "daily_count": _load_order_state().get("daily_count", 0),
+                "order_code": "", "point_after": None}
+
+    # ── 2. 포인트 사전 체크 ──────────────────────────────────────────
+    point = get_point_balance()
+    if point is not None and point < LOW_POINT_THRESHOLD:
+        msg = (
+            f"⚠️ [온채널 포인트 부족]\n"
+            f"잔액: {point:,}P (기준: {LOW_POINT_THRESHOLD:,}P)\n"
+            f"충전 필요: https://www.onch3.co.kr/mypage.php"
+        )
+        _tg_alert(msg)
+        print(f"[ONCH3] {msg}", flush=True)
+        if point == 0:
+            _record_order_fail()
+            return {"ok": False, "error": f"포인트 잔액 0P", "halt": False,
+                    "daily_count": _load_order_state().get("daily_count", 0),
+                    "order_code": "", "point_after": 0}
+
+    # ── 3. 상품코드 정규화 (ONCH3_ 접두어 제거) ──────────────────────
+    raw_code = prd_code.removeprefix("ONCH3_") if prd_code.startswith("ONCH3_") else prd_code
+
+    # ── 4. JWT 발급 ────────────────────────────────────────────────────
+    jwt = _get_jwt()
+    if not jwt:
+        _record_order_fail()
+        state = _load_order_state()
+        consec = state.get("consecutive_fail", 0)
+        if consec >= MAX_CONSECUTIVE_FAIL:
+            _tg_alert(f"🚨 [온채널 발주 halt]\n연속 {consec}회 실패 — 수동 확인 필요\n상품: {raw_code}")
+        return {"ok": False, "error": "JWT 발급 실패", "halt": consec >= MAX_CONSECUTIVE_FAIL,
+                "daily_count": state.get("daily_count", 0), "order_code": "", "point_after": None}
+
+    # ── 5. 발주 API ────────────────────────────────────────────────────
+    payload = json.dumps({
+        "prd_code": raw_code,
+        "options": [{"option_nm": option_nm, "qty": qty}],
+        "delivery_type": delivery_type,
+        "order_name": order_name,
+        "order_phone": order_phone,
+        "zipcode": zipcode,
+        "order_address": address,
+        "order_memo": memo,
+        "sale_code": sale_code,
+        "address_id": 3,
+    }, ensure_ascii=False).encode("utf-8")
+
+    order_code = ""
+    try:
+        req = urllib.request.Request(
+            f"{_API_BASE}/api/v1/order/regist",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {jwt}",
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": "Mozilla/5.0",
+            },
+            method="POST",
+        )
+        resp = urllib.request.urlopen(req, timeout=15)
+        result = json.loads(resp.read())
+    except Exception as e:
+        print(f"[ONCH3] 발주 API 예외: {e}", flush=True)
+        _record_order_fail()
+        state = _load_order_state()
+        consec = state.get("consecutive_fail", 0)
+        halt = consec >= MAX_CONSECUTIVE_FAIL
+        if halt:
+            _tg_alert(f"🚨 [온채널 발주 halt]\n연속 {consec}회 예외 실패 — 수동 확인 필요\n상품: {raw_code}")
+        return {"ok": False, "error": str(e), "halt": halt,
+                "daily_count": state.get("daily_count", 0), "order_code": "", "point_after": None}
+
+    # ── 6. 결과 분기 ───────────────────────────────────────────────────
+    if result.get("isSuccess"):
+        order_code = result.get("order_code", "")
+        _record_order_success()
+        state = _load_order_state()
+        point_after = get_point_balance()
+
+        # 발주 후 포인트 재체크
+        if point_after is not None and point_after < LOW_POINT_THRESHOLD:
+            _tg_alert(
+                f"⚠️ [온채널 포인트 부족]\n"
+                f"발주 후 잔액: {point_after:,}P\n"
+                f"충전 필요: https://www.onch3.co.kr/mypage.php"
+            )
+        print(
+            f"[ONCH3] ✅ 발주 성공: order_code={order_code} "
+            f"일일={state.get('daily_count')}/{DAILY_ORDER_LIMIT} 포인트={point_after}P",
+            flush=True,
+        )
+        return {
+            "ok": True, "order_code": order_code, "error": "",
+            "halt": False, "daily_count": state.get("daily_count", 0),
+            "point_after": point_after,
+        }
+    else:
+        err = result.get("message", str(result))
+        print(f"[ONCH3] ❌ 발주 실패: {err}", flush=True)
+        _record_order_fail()
+        state = _load_order_state()
+        consec = state.get("consecutive_fail", 0)
+        halt = consec >= MAX_CONSECUTIVE_FAIL
+        if halt:
+            _tg_alert(
+                f"🚨 [온채널 발주 halt]\n연속 {consec}회 실패 — 수동 확인 필요\n"
+                f"오류: {err[:120]}"
+            )
+        return {
+            "ok": False, "order_code": "", "error": err,
+            "halt": halt, "daily_count": state.get("daily_count", 0),
+            "point_after": None,
+        }
