@@ -26,6 +26,7 @@ from typing import Optional, List
 import anthropic
 import bcrypt
 import httpx
+import onch3_sourcing
 import openpyxl
 from dotenv import load_dotenv
 
@@ -4007,7 +4008,14 @@ async def pipeline_register_from_domeggook(
         min_price=min_price, max_price=max_price, start_page=start_page
     )
     if not products:
-        return {"status": "error", "message": "도매꾹 상품 없음 — API 키/키워드 확인"}
+        print("[도매꾹파이프라인] DG 응답 없음 → 온채널 폴백 소싱 시도", flush=True)
+        _onch3_kws = keywords or _DG_KEYWORDS
+        products = await onch3_sourcing.fetch_onch3_products(
+            _onch3_kws, pool_size=limit * 3,
+            min_price=min_price, max_price=max_price,
+        )
+        if not products:
+            return {"status": "error", "message": "도매꾹+온채널 모두 상품 없음 — DG IP차단 여부 및 ONCH3_ID/PW 확인"}
 
     # ② 소싱팀장 선별
     products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
