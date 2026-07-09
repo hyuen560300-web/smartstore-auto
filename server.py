@@ -2342,7 +2342,8 @@ async def _run_backfill_cost_prices():
         page += 1
         await asyncio.sleep(0.3)
 
-    results = {"ok": 0, "skip_no_code": 0, "skip_dg_fail": 0, "skip_already_set": 0, "fail": 0}
+    results = {"ok": 0, "skip_no_code": 0, "skip_dg_fail": 0, "skip_already_set": 0, "fail": 0,
+               "no_code_products": []}
     async with _hx.AsyncClient(timeout=15) as c:
         for prod in all_products:
             origin = prod.get("originProduct", {})
@@ -2358,21 +2359,26 @@ async def _run_backfill_cost_prices():
                               .get("sellerManagementCode", ""))
             if not dg_code:
                 results["skip_no_code"] += 1
+                results["no_code_products"].append({"product_no": product_no, "name": origin.get("name", "")[:40]})
+                print(f"[BACKFILL] no_code: {product_no} | {origin.get('name','')[:30]}", flush=True)
                 continue
             try:
-                params = f"ver=4.1&mode=getItemView&aid={DOMEGGOOK_API_KEY}&market=dome&om=json&no={dg_code}"
-                r = await c.get(f"{DOMEGGOOK_API_URL}?{params}")
+                # ver=4.5 (main.py 표준 형식) — ver=4.1 대비 응답 안정적
+                r = await c.get(DOMEGGOOK_API_URL, params={
+                    "ver": "4.5", "mode": "getItemView",
+                    "aid": DOMEGGOOK_API_KEY, "no": dg_code, "om": "json",
+                })
                 dg_data = r.json().get("domeggook", {})
                 price_raw = dg_data.get("basis", {}).get("price", "0")
                 wholesale = int(str(price_raw).replace(",", "") or "0")
             except Exception as e:
                 print(f"[BACKFILL] DG 조회 실패({dg_code}): {e}", flush=True)
                 results["skip_dg_fail"] += 1
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(3)
                 continue
             if wholesale <= 0:
                 results["skip_dg_fail"] += 1
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(1)
                 continue
             full_origin = dict(origin)
             full_origin["costPrice"] = wholesale
@@ -2383,7 +2389,7 @@ async def _run_backfill_cost_prices():
             else:
                 results["fail"] += 1
                 print(f"[BACKFILL] ❌ {product_no}: {err[:60]}", flush=True)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(3)  # DG rate limit 방지: 3초 간격
 
     try:
         async with _hx.AsyncClient(timeout=10) as c2:
