@@ -841,6 +841,35 @@ async def update_category(request: Request):
         return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
 
 
+@app.post("/update-name")
+async def update_product_name(request: Request):
+    """상품명(name) 수정. body: {product_no, name}"""
+    import httpx as _hx
+    from main import NAVER_BASE
+    data = await request.json()
+    no = str(data.get("product_no", "")).strip()
+    new_name = str(data.get("name", "")).strip()
+    if not no or not new_name:
+        return JSONResponse({"status": "error", "error": "product_no, name 필수"}, status_code=400)
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=30) as c:
+            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+        if rd.status_code != 200:
+            return JSONResponse({"status": "error", "error": f"상품 조회 실패 {rd.status_code}: {rd.text[:300]}"}, status_code=400)
+        origin = rd.json().get("originProduct", {})
+        old_name = origin.get("name", "")
+        payload = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+        payload["name"] = new_name
+        payload["statusType"] = "SALE"
+        ok, msg = await naver_api.update_product(no, payload)
+        return JSONResponse({"status": "ok" if ok else "error", "product_no": no,
+                             "old_name": old_name, "new_name": new_name, "error": msg})
+    except Exception as e:
+        import traceback
+        return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
+
+
 @app.get("/debug-update-test")
 async def debug_update_test(no: str, settest: int = 1):
     """reapply 스타일 merge-PUT 재현 — 전체 Naver 에러(invalidInputs) 반환(필드 진단용).
