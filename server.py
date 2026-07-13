@@ -6047,9 +6047,9 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
     # 2. 각 상품 DG 코드 조회 → 재고 확인 → 판매중지
     for prod in all_products:
         origin_no = str(prod.get("originProductNo", "") or "")
-        prod_name = str(prod.get("name", ""))[:40]
+        prod_name = ""
 
-        # origin-product 상세 (DG코드 + costPrice)
+        # origin-product 상세 (DG코드 + costPrice + 이름)
         dg_code = ""
         cost_price = None
         try:
@@ -6060,9 +6060,10 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
                 )
             if rd.status_code == 200:
                 od = rd.json().get("originProduct", {})
+                prod_name = str(od.get("name", ""))[:40]
                 cost_price = od.get("costPrice")
                 seller_info = od.get("detailAttribute", {}).get("sellerCodeInfo", {})
-                dg_code = str(seller_info.get("sellerManagementCode", "") or "")
+                dg_code = str(seller_info.get("sellerManagementCode", "") or "").strip()
         except Exception as e:
             _dg_stock_state["errors"].append(f"{origin_no} detail: {str(e)[:60]}")
 
@@ -6072,13 +6073,15 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
                 "origin_no": origin_no, "name": prod_name, "dg_code": dg_code,
             })
 
-        # DG 코드 없으면 스킵
-        if not dg_code.startswith("DG_"):
+        # DG 코드 파싱 ("DG_12345" 또는 "12345" 두 형식 모두 허용)
+        if dg_code.upper().startswith("DG_"):
+            item_no = dg_code[3:].strip()
+        elif dg_code.isdigit():
+            item_no = dg_code
+        else:
             _dg_stock_state["no_dg_code"] += 1
             _dg_stock_state["checked"] += 1
             continue
-
-        item_no = dg_code.replace("DG_", "")
 
         # DG 페이지 재고 확인
         try:
