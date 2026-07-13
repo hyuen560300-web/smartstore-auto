@@ -2354,71 +2354,112 @@ async def set_cost_price(product_no: str, cost_price: int):
 
 
 async def _run_backfill_cost_prices():
-    """백그라운드: SALE 상품 전체 costPrice 소급 저장 (DG API 조회). 결과 context_store에 저장."""
-    import httpx as _hx
-    from main import DOMEGGOOK_API_KEY, DOMEGGOOK_API_URL
-    print("[BACKFILL] costPrice 소급 저장 시작", flush=True)
-    all_products: list[dict] = []
+    """백그라운드: 전체 상품 costPrice 소급 저장 (DG 웹스크래핑). 결과 context_store에 저장."""
+    import httpx as _hx, re as _re, random as _rnd
+    from main import NAVER_BASE
+    print("[BACKFILL] costPrice 소급 저장 시작 (웹스크래핑 방식)", flush=True)
+
+    hdrs = await naver_api._headers()
+    dg_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
+    _SKIP = {"originProductNo", "channelProductNo", "regDate", "modDate",
+             "statusFrom", "totalSalesQuantity", "channelProducts"}
+
+    # 1. 전체 상품 origin_no 수집 (SALE + SUSPENSION + OUTOFSTOCK)
+    all_origin_nos: list[str] = []
     page = 1
     while True:
-        resp = await naver_api.list_products(page=page, size=50, days=3650)
-        contents = resp.get("contents", [])
-        if not contents:
+        try:
+            async with _hx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                    json={"productStatusTypes": ["SALE", "SUSPENSION", "OUTOFSTOCK"],
+                          "page": page, "size": 100, "orderType": "NO",
+                          "periodType": "PROD_REG_DAY",
+                          "fromDate": "2020-01-01", "toDate": "2030-12-31"},
+                )
+            contents = r.json().get("contents", [])
+            if not contents:
+                break
+            all_origin_nos.extend([str(p.get("originProductNo", "")) for p in contents])
+            if len(contents) < 100:
+                break
+            page += 1
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"[BACKFILL] 목록 조회 실패 page{page}: {e}", flush=True)
             break
-        all_products.extend(contents)
-        if len(contents) < 50:
-            break
-        page += 1
-        await asyncio.sleep(0.3)
 
-    results = {"ok": 0, "skip_no_code": 0, "skip_dg_fail": 0, "skip_already_set": 0, "fail": 0,
-               "no_code_products": []}
-    async with _hx.AsyncClient(timeout=15) as c:
-        for prod in all_products:
-            origin = prod.get("originProduct", {})
-            if origin.get("statusType") != "SALE":
+    results = {"ok": 0, "skip_no_code": 0, "skip_dg_fail": 0,
+               "skip_already_set": 0, "fail": 0, "total": len(all_origin_nos)}
+    print(f"[BACKFILL] 대상 {len(all_origin_nos)}개", flush=True)
+
+    # 2. 각 상품 처리
+    for origin_no in all_origin_nos:
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+            if rd.status_code != 200:
+                results["fail"] += 1
                 continue
-            existing_cost = int(origin.get("costPrice") or 0)
-            if existing_cost > 0:
+            od = rd.json().get("originProduct", {})
+
+            # costPrice 이미 있으면 스킵
+            if int(od.get("costPrice") or 0) > 0:
                 results["skip_already_set"] += 1
                 continue
-            product_no = str(prod.get("originProductNo", ""))
-            dg_code = (origin.get("detailAttribute", {})
-                              .get("sellerCodeInfo", {})
-                              .get("sellerManagementCode", ""))
-            if not dg_code:
+
+            # DG 코드 파싱 ("DG_12345" 또는 "12345" 두 형식)
+            dg_raw = str(od.get("detailAttribute", {}).get("sellerCodeInfo", {})
+                           .get("sellerManagementCode", "") or "").strip()
+            if dg_raw.upper().startswith("DG_"):
+                item_no = dg_raw[3:].strip()
+            elif dg_raw.isdigit():
+                item_no = dg_raw
+            else:
                 results["skip_no_code"] += 1
-                results["no_code_products"].append({"product_no": product_no, "name": origin.get("name", "")[:40]})
-                print(f"[BACKFILL] no_code: {product_no} | {origin.get('name','')[:30]}", flush=True)
                 continue
+
+            # DG 웹스크래핑으로 도매가 추출 (API 대신 — Railway IP 차단 우회)
+            await asyncio.sleep(_rnd.uniform(3.0, 5.0))
             try:
-                # ver=4.5 (main.py 표준 형식) — ver=4.1 대비 응답 안정적
-                r = await c.get(DOMEGGOOK_API_URL, params={
-                    "ver": "4.5", "mode": "getItemView",
-                    "aid": DOMEGGOOK_API_KEY, "no": dg_code, "om": "json",
-                })
-                dg_data = r.json().get("domeggook", {})
-                price_raw = dg_data.get("basis", {}).get("price", "0")
-                wholesale = int(str(price_raw).replace(",", "") or "0")
+                async with _hx.AsyncClient(timeout=12, follow_redirects=True) as c:
+                    r_dg = await c.get(
+                        f"https://domeggook.com/main/item/itemView.php?no={item_no}",
+                        headers=dg_headers,
+                    )
+                text = r_dg.text
+                m = (_re.search(r'["\']?baseAmtDome["\']?\s*[:=]\s*["\']?(\d+)', text)
+                     or _re.search(r'optionPrice["\']?\s*[:=]\s*["\']?(\d+)', text))
+                wholesale = int(m.group(1)) if m else 0
             except Exception as e:
-                print(f"[BACKFILL] DG 조회 실패({dg_code}): {e}", flush=True)
+                print(f"[BACKFILL] DG 스크래핑 실패({item_no}): {e}", flush=True)
                 results["skip_dg_fail"] += 1
-                await asyncio.sleep(3)
                 continue
+
             if wholesale <= 0:
                 results["skip_dg_fail"] += 1
-                await asyncio.sleep(1)
                 continue
-            full_origin = dict(origin)
-            full_origin["costPrice"] = wholesale
-            ok, err = await naver_api.update_product(product_no, full_origin)
-            if ok:
+
+            # read-modify-write로 costPrice 저장
+            payload = {k: v for k, v in od.items() if k not in _SKIP}
+            payload["costPrice"] = wholesale
+            async with _hx.AsyncClient(timeout=20) as c:
+                rp = await c.put(
+                    f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                    headers=hdrs, json={"originProduct": payload},
+                )
+            if rp.status_code == 200:
                 results["ok"] += 1
-                print(f"[BACKFILL] ✅ {origin.get('name','')[:25]} costPrice={wholesale:,}", flush=True)
+                print(f"[BACKFILL] ✅ {od.get('name','')[:25]} costPrice={wholesale:,}", flush=True)
             else:
                 results["fail"] += 1
-                print(f"[BACKFILL] ❌ {product_no}: {err[:60]}", flush=True)
-            await asyncio.sleep(3)  # DG rate limit 방지: 3초 간격
+                print(f"[BACKFILL] ❌ {origin_no}: {rp.text[:80]}", flush=True)
+        except Exception as e:
+            results["fail"] += 1
+            print(f"[BACKFILL] 오류 {origin_no}: {str(e)[:60]}", flush=True)
 
     try:
         async with _hx.AsyncClient(timeout=10) as c2:
