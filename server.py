@@ -5989,6 +5989,216 @@ async def debug_status_scan():
     })
 
 
+# ─── DG 재고 스캔 + 판매중지 ──────────────────────────────────────────────────
+_dg_stock_state: dict = {}
+
+
+async def _scan_dg_stock_bg(dry_run: bool = False):
+    import httpx as _hx, asyncio as _aio, random as _rnd, time as _time
+    from main import NAVER_BASE, _ctx_set as _mcs
+    global _dg_stock_state
+    _dg_stock_state = {
+        "status": "running", "dry_run": dry_run,
+        "total": 0, "checked": 0, "no_dg_code": 0,
+        "no_stock_found": 0, "suspended": 0,
+        "no_cost_price": [], "errors": [], "done": False,
+        "suspended_items": [], "start_ts": _time.time(),
+    }
+
+    hdrs = await naver_api._headers()
+    dg_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
+
+    # 1. 전체 SALE 상품 목록 수집 (100개씩 페이징)
+    all_products = []
+    page = 1
+    while True:
+        try:
+            async with _hx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=hdrs,
+                    json={
+                        "productStatusTypes": ["SALE"],
+                        "page": page, "size": 100,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": "2020-01-01",
+                        "toDate": "2030-12-31",
+                    }
+                )
+            data = r.json()
+            contents = data.get("contents", [])
+            if not contents:
+                break
+            all_products.extend(contents)
+            if len(contents) < 100:
+                break
+            page += 1
+            await _aio.sleep(1)
+        except Exception as e:
+            _dg_stock_state["errors"].append(f"list page{page}: {str(e)[:80]}")
+            break
+
+    _dg_stock_state["total"] = len(all_products)
+
+    # 2. 각 상품 DG 코드 조회 → 재고 확인 → 판매중지
+    for prod in all_products:
+        origin_no = str(prod.get("originProductNo", "") or "")
+        prod_name = str(prod.get("name", ""))[:40]
+
+        # origin-product 상세 (DG코드 + costPrice)
+        dg_code = ""
+        cost_price = None
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                rd = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                    headers=hdrs,
+                )
+            if rd.status_code == 200:
+                od = rd.json().get("originProduct", {})
+                cost_price = od.get("costPrice")
+                seller_info = od.get("detailAttribute", {}).get("sellerCodeInfo", {})
+                dg_code = str(seller_info.get("sellerManagementCode", "") or "")
+        except Exception as e:
+            _dg_stock_state["errors"].append(f"{origin_no} detail: {str(e)[:60]}")
+
+        # costPrice 미입력 목록
+        if not cost_price:
+            _dg_stock_state["no_cost_price"].append({
+                "origin_no": origin_no, "name": prod_name, "dg_code": dg_code,
+            })
+
+        # DG 코드 없으면 스킵
+        if not dg_code.startswith("DG_"):
+            _dg_stock_state["no_dg_code"] += 1
+            _dg_stock_state["checked"] += 1
+            continue
+
+        item_no = dg_code.replace("DG_", "")
+
+        # DG 페이지 재고 확인
+        try:
+            async with _hx.AsyncClient(timeout=12, follow_redirects=True) as c:
+                r_dg = await c.get(
+                    f"https://domeggook.com/main/item/itemView.php?no={item_no}",
+                    headers=dg_headers,
+                )
+            no_stock = (
+                "재고가 없는 상품" in r_dg.text
+                or r_dg.status_code == 404
+            )
+            if no_stock:
+                _dg_stock_state["no_stock_found"] += 1
+                if not dry_run:
+                    # read-modify-write 방식으로 판매중지 (단순 PUT은 실패 가능)
+                    try:
+                        async with _hx.AsyncClient(timeout=20) as c2:
+                            rg = await c2.get(
+                                f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                                headers=hdrs,
+                            )
+                            if rg.status_code == 200:
+                                _SKIP = {"originProductNo","channelProductNo","regDate","modDate",
+                                         "statusFrom","totalSalesQuantity","channelProducts"}
+                                payload = {k: v for k, v in rg.json().get("originProduct", {}).items()
+                                           if k not in _SKIP}
+                                payload["statusType"] = "SUSPENSION"
+                                rp = await c2.put(
+                                    f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                                    headers=hdrs, json={"originProduct": payload},
+                                )
+                                if rp.status_code == 200:
+                                    _dg_stock_state["suspended"] += 1
+                                    _dg_stock_state["suspended_items"].append({
+                                        "origin_no": origin_no, "name": prod_name, "dg_code": dg_code,
+                                    })
+                    except Exception as e2:
+                        _dg_stock_state["errors"].append(f"{origin_no} suspend: {str(e2)[:60]}")
+        except Exception as e:
+            _dg_stock_state["errors"].append(f"{dg_code} DG: {str(e)[:60]}")
+
+        _dg_stock_state["checked"] += 1
+
+        # 50개마다 중간 저장
+        if _dg_stock_state["checked"] % 50 == 0:
+            try:
+                _mcs("ss.dg_stock_scan.progress", {
+                    "checked": _dg_stock_state["checked"],
+                    "total": _dg_stock_state["total"],
+                    "suspended": _dg_stock_state["suspended"],
+                    "no_stock_found": _dg_stock_state["no_stock_found"],
+                })
+            except Exception:
+                pass
+
+        # DG 차단 방지 딜레이 (3~5초)
+        await _aio.sleep(_rnd.uniform(3.0, 5.0))
+
+    _dg_stock_state["done"] = True
+    _dg_stock_state["status"] = "done"
+    _dg_stock_state["elapsed_min"] = round((_time.time() - _dg_stock_state["start_ts"]) / 60, 1)
+
+    # 최종 결과 저장
+    try:
+        _mcs("ss.dg_stock_scan.result", {
+            "done": True,
+            "total": _dg_stock_state["total"],
+            "suspended": _dg_stock_state["suspended"],
+            "no_stock_found": _dg_stock_state["no_stock_found"],
+            "no_cost_count": len(_dg_stock_state["no_cost_price"]),
+            "elapsed_min": _dg_stock_state["elapsed_min"],
+            "suspended_items": _dg_stock_state["suspended_items"],
+        })
+    except Exception:
+        pass
+
+
+@app.post("/scan-dg-stock")
+async def scan_dg_stock_start(request: Request, background_tasks: BackgroundTasks):
+    """🔍 DG 재고 없는 상품 판매중지 (백그라운드, 3~5초 간격). dry_run=true면 중지 없이 목록만."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dry_run = bool(body.get("dry_run", False))
+    if _dg_stock_state.get("status") == "running":
+        return JSONResponse({
+            "status": "already_running",
+            "checked": _dg_stock_state.get("checked", 0),
+            "total": _dg_stock_state.get("total", 0),
+        })
+    background_tasks.add_task(_scan_dg_stock_bg, dry_run)
+    return JSONResponse({"status": "started", "dry_run": dry_run, "result_url": "/scan-dg-stock-result"})
+
+
+@app.get("/scan-dg-stock-result")
+async def scan_dg_stock_result():
+    """📊 DG 재고 스캔 진행상황 조회"""
+    s = _dg_stock_state
+    if not s:
+        return JSONResponse({"status": "not_started"})
+    return JSONResponse({
+        "status": s.get("status", "running"),
+        "done": s.get("done", False),
+        "dry_run": s.get("dry_run", False),
+        "total": s.get("total", 0),
+        "checked": s.get("checked", 0),
+        "no_dg_code": s.get("no_dg_code", 0),
+        "no_stock_found": s.get("no_stock_found", 0),
+        "suspended": s.get("suspended", 0),
+        "no_cost_price_count": len(s.get("no_cost_price", [])),
+        "no_cost_price_sample": s.get("no_cost_price", [])[:10],
+        "suspended_items_recent": s.get("suspended_items", [])[-20:],
+        "errors": s.get("errors", [])[-10:],
+        "elapsed_min": s.get("elapsed_min"),
+        "progress_pct": round(s.get("checked", 0) / max(s.get("total", 1), 1) * 100, 1),
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
