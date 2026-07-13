@@ -2359,7 +2359,9 @@ async def _run_backfill_cost_prices():
     from main import NAVER_BASE
     print("[BACKFILL] costPrice 소급 저장 시작 (웹스크래핑 방식)", flush=True)
 
+    # 헤더는 루프 내에서 50개마다 갱신 (Naver 토큰 1시간 만료 대비)
     hdrs = await naver_api._headers()
+    _hdr_refresh_counter = 0
     dg_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept-Language": "ko-KR,ko;q=0.9",
@@ -2398,6 +2400,10 @@ async def _run_backfill_cost_prices():
 
     # 2. 각 상품 처리
     for origin_no in all_origin_nos:
+        # 50개마다 토큰 갱신 (1시간 만료 대비)
+        _hdr_refresh_counter += 1
+        if _hdr_refresh_counter % 50 == 0:
+            hdrs = await naver_api._headers()
         try:
             async with _hx.AsyncClient(timeout=15) as c:
                 rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
