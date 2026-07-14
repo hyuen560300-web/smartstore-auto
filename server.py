@@ -1022,6 +1022,43 @@ async def get_product_html(no: str):
         return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
 
 
+@app.get("/product-info")
+async def get_product_info(no: str):
+    """상품 기본정보(도매가/판매가/DG코드) 조회 — Naver API IP 제한 우회용."""
+    import httpx as _hx, re as _re
+    from main import NAVER_BASE
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:300]}, status_code=400)
+        origin = r.json().get("originProduct", {})
+        dg_raw = str((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).strip()
+        # sellerCodeInfo is a dict; extract sellerManagementCode
+        seller_code_info = (origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}
+        mgmt_code = str(seller_code_info.get("sellerManagementCode") or "").strip()
+        sale_price = int(origin.get("salePrice") or 0)
+        cost_price = int(origin.get("costPrice") or 0)
+        floor_price = int(cost_price * 1.25) if cost_price > 0 else 0
+        margin = sale_price - floor_price if floor_price > 0 else None
+        return JSONResponse({
+            "no": no,
+            "name": (origin.get("name") or "")[:80],
+            "statusType": origin.get("statusType", ""),
+            "salePrice": sale_price,
+            "costPrice": cost_price,
+            "costPrice_saved": cost_price > 0,
+            "sellerManagementCode": mgmt_code,
+            "floor_price": floor_price,
+            "margin": margin,
+            "margin_ok": margin > 0 if margin is not None else None,
+        })
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
+
+
 # ─── Pinterest ───────────────────────────────────────────────────────────────
 @app.get("/pinterest/boards")
 async def pinterest_boards_list():
