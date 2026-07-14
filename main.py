@@ -4203,12 +4203,19 @@ async def pipeline_register_from_domeggook(
             # ─── STEP 3: HTML 생성 및 검증 ───
             print(f"[STEP3] ({_proc_n}/{_proc_total}) HTML 생성 및 검증", flush=True)
             _all_imgs = [naver_img_url] + (p.get("_dg_extra_naver_urls") or [])
-            claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+            try:
+                claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+            except Exception as _e_ss:
+                print(f"[STEP3] HTML 생성 예외 → build_detail_html 폴백: {_e_ss}", flush=True)
+                claude_html = ""
             _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
             if not _html_ok and claude_html:
                 _sec_cnt = _count_html_sections(claude_html)
                 print(f"[STEP3] HTML 재생성 시도 (길이:{len(claude_html)}, 섹션:{_sec_cnt}/17)", flush=True)
-                _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+                try:
+                    _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+                except Exception:
+                    _claude_html2 = ""
                 if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 6:
                     claude_html = _claude_html2
                     _html_ok = True
