@@ -6253,6 +6253,45 @@ async def scan_dg_stock_result():
     })
 
 
+@app.get("/product-status-counts")
+async def product_status_counts():
+    """📊 Naver API totalElements 기준 상태별 정확한 상품 수 집계"""
+    base = {
+        "page": 1, "size": 1,
+        "orderType": "NO",
+        "periodType": "PROD_REG_DAY",
+        "fromDate": "2020-01-01",
+        "toDate": "2099-12-31",
+    }
+    import httpx as _hx
+    hdrs = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=20) as c:
+        r_sale = await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                              json={**base, "productStatusTypes": ["SALE"]})
+        r_susp = await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                              json={**base, "productStatusTypes": ["SUSPENSION"]})
+        r_oos  = await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                              json={**base, "productStatusTypes": ["OUTOFSTOCK"]})
+        r_wait = await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                              json={**base, "productStatusTypes": ["WAIT"]})
+        r_close= await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                              json={**base, "productStatusTypes": ["CLOSE"]})
+    sale  = int(r_sale.json().get("totalElements", 0)) if r_sale.is_success else -1
+    susp  = int(r_susp.json().get("totalElements", 0)) if r_susp.is_success else -1
+    oos   = int(r_oos.json().get("totalElements",  0)) if r_oos.is_success  else -1
+    wait  = int(r_wait.json().get("totalElements", 0)) if r_wait.is_success else -1
+    close = int(r_close.json().get("totalElements",0)) if r_close.is_success else -1
+    total = sum(v for v in [sale, susp, oos, wait, close] if v >= 0)
+    return JSONResponse({
+        "SALE": sale,
+        "SUSPENSION": susp,
+        "OUTOFSTOCK": oos,
+        "WAIT": wait,
+        "CLOSE": close,
+        "total": total,
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
