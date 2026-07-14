@@ -67,6 +67,7 @@ from main import (
     _validate_copy_fields,
     _tg_notify,
     pipeline_reapply_claude_html,
+    _save_cost_price_async,
 )
 from employees import (
     employee_season_planner,
@@ -1988,6 +1989,9 @@ async def register_single_product(request: Request):
                          or (chans[0].get("channelProductNo", "") if chans else "") or "")
         store_url = (f"https://smartstore.naver.com/khww/products/{channel_no}"
                      if channel_no else (f"https://smartstore.naver.com/khww/products/{origin_no}" if origin_no else ""))
+        # ── costPrice 저장 (도매가 → Naver costPrice GET+PUT) ──
+        if origin_no:
+            asyncio.create_task(_save_cost_price_async(origin_no, int(p.get("price", 0) or 0)))
         # ── Vision HTML 강제적용 (등록 직후, 실패해도 등록은 성공 유지) ──
         if origin_no:
             try:
