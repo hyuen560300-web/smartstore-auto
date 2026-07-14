@@ -3984,6 +3984,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
+            payload["originProduct"].setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
 
             _reg1 = await naver_api.register_product(payload)
             _pid1 = str(_reg1.get("originProductNo", "")) if isinstance(_reg1, dict) else ""
@@ -4269,6 +4270,7 @@ async def pipeline_register_from_domeggook(
                 payload["originProduct"]["images"]["optionalImages"] = [{"url": u} for u in _extra_naver_urls[:9]]
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
+            payload["originProduct"].setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
 
             # ─── STEP 4: 등록 + Obsidian 저장 + 진행률 알림 ───
             print(f"[STEP4] ({_proc_n}/{_proc_total}) 등록 시작", flush=True)
