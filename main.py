@@ -2486,6 +2486,9 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         mo = re.search(r"<output_html>([\s\S]*?)</output_html>", raw, re.I)
         if mo:
             raw = mo.group(1).strip()
+        else:
+            # 닫힘 태그 없이 열림 태그만 있는 경우 제거 (Claude 출력 잘림 방어)
+            raw = re.sub(r"</?output_html>", "", raw, flags=re.I).strip()
         frag = _to_naver_fragment(raw)
         ok, why = _html_quality_ok(frag)
         if not ok:
