@@ -6045,7 +6045,7 @@ _dg_stock_state: dict = {}
 
 
 async def _scan_dg_stock_bg(dry_run: bool = False):
-    import httpx as _hx, asyncio as _aio, random as _rnd, time as _time
+    import httpx as _hx, asyncio as _aio, random as _rnd, time as _time, re as _re
     from main import NAVER_BASE, _ctx_set as _mcs
     global _dg_stock_state
     _dg_stock_state = {
@@ -6054,6 +6054,8 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
         "no_stock_found": 0, "suspended": 0,
         "no_cost_price": [], "errors": [], "done": False,
         "suspended_items": [], "start_ts": _time.time(),
+        # Phase 2: 재입고 감지
+        "susp_total": 0, "restocked": 0, "restock_skipped": 0, "restock_items": [],
     }
 
     hdrs = await naver_api._headers()
@@ -6192,6 +6194,156 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
         # DG 차단 방지 딜레이 (3~5초)
         await _aio.sleep(_rnd.uniform(3.0, 5.0))
 
+    # ── Phase 2: SUSPENSION → SALE 재입고 감지 ──────────────────────────────
+    _dg_stock_state["status"] = "restock_scan"
+    print("[RESTOCK] Phase2 시작 — SUSPENSION 상품 재입고 확인", flush=True)
+
+    # 토큰 갱신 (Phase1이 길었을 수 있음)
+    hdrs = await naver_api._headers()
+
+    susp_products: list = []
+    page = 1
+    while True:
+        try:
+            async with _hx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=hdrs,
+                    json={
+                        "productStatusTypes": ["SUSPENSION"],
+                        "page": page, "size": 100,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": "2020-01-01",
+                        "toDate": "2030-12-31",
+                    }
+                )
+            contents = r.json().get("contents", [])
+            if not contents:
+                break
+            susp_products.extend(contents)
+            if len(contents) < 100:
+                break
+            page += 1
+            await _aio.sleep(1)
+        except Exception as e:
+            _dg_stock_state["errors"].append(f"susp list p{page}: {str(e)[:80]}")
+            break
+
+    _dg_stock_state["susp_total"] = len(susp_products)
+    print(f"[RESTOCK] SUSPENSION 상품 {len(susp_products)}개 수집", flush=True)
+
+    _susp_checked = 0
+    for prod in susp_products:
+        origin_no = str(prod.get("originProductNo", "") or "")
+        prod_name = ""
+        dg_code = ""
+
+        # 50개마다 토큰 갱신
+        if _susp_checked > 0 and _susp_checked % 50 == 0:
+            hdrs = await naver_api._headers()
+
+        # origin-product 상세 조회 (DG코드)
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                rd = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                    headers=hdrs,
+                )
+            if rd.status_code == 200:
+                od = rd.json().get("originProduct", {})
+                prod_name = str(od.get("name", ""))[:40]
+                seller_info = od.get("detailAttribute", {}).get("sellerCodeInfo", {})
+                dg_code = str(seller_info.get("sellerManagementCode", "") or "").strip()
+        except Exception as e:
+            _dg_stock_state["errors"].append(f"{origin_no} susp_detail: {str(e)[:60]}")
+
+        # DG 코드 파싱
+        if dg_code.upper().startswith("DG_"):
+            item_no = dg_code[3:].strip()
+        elif dg_code.isdigit():
+            item_no = dg_code
+        else:
+            _dg_stock_state["restock_skipped"] += 1
+            _susp_checked += 1
+            continue
+
+        # DG 재고 확인
+        try:
+            async with _hx.AsyncClient(timeout=12, follow_redirects=True) as c:
+                r_dg = await c.get(
+                    f"https://domeggook.com/main/item/itemView.php?no={item_no}",
+                    headers=dg_headers,
+                )
+            no_stock = ("재고가 없는 상품" in r_dg.text or r_dg.status_code == 404)
+            if not no_stock:
+                # 재입고 감지 — 새 도매가 파싱
+                text = r_dg.text
+                m = (_re.search(r'["\']?baseAmtDome["\']?\s*[:=]\s*["\']?(\d+)', text)
+                     or _re.search(r'optionPrice["\']?\s*[:=]\s*["\']?(\d+)', text))
+                new_wholesale = int(m.group(1)) if m else 0
+
+                if new_wholesale <= 0:
+                    _dg_stock_state["restock_skipped"] += 1
+                    _susp_checked += 1
+                    await _aio.sleep(_rnd.uniform(3.0, 5.0))
+                    continue
+
+                # 새 판매가: 기본 ×2.2, floor=도매가×1.15, 10원 단위
+                new_sale_price = round(max(new_wholesale * 2.2, new_wholesale * 1.15) / 10) * 10
+
+                if not dry_run:
+                    try:
+                        async with _hx.AsyncClient(timeout=15) as c2:
+                            rg = await c2.get(
+                                f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                                headers=hdrs,
+                            )
+                        if rg.status_code == 200:
+                            _SKIP2 = {"originProductNo","channelProductNo","regDate","modDate",
+                                      "statusFrom","totalSalesQuantity","channelProducts"}
+                            payload2 = {k: v for k, v in rg.json().get("originProduct", {}).items()
+                                        if k not in _SKIP2}
+                            payload2["statusType"] = "SALE"
+                            payload2["salePrice"] = new_sale_price
+                            payload2["costPrice"] = new_wholesale
+                            payload2.setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
+                            async with _hx.AsyncClient(timeout=20) as c2:
+                                rp = await c2.put(
+                                    f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                                    headers=hdrs, json={"originProduct": payload2},
+                                )
+                            if rp.status_code == 200:
+                                _dg_stock_state["restocked"] += 1
+                                _dg_stock_state["restock_items"].append({
+                                    "origin_no": origin_no, "name": prod_name,
+                                    "dg_code": dg_code,
+                                    "new_wholesale": new_wholesale,
+                                    "new_sale_price": new_sale_price,
+                                })
+                                print(f"[RESTOCK] ✅ {prod_name} 재개: 도매가={new_wholesale:,} 판매가={new_sale_price:,}", flush=True)
+                            else:
+                                _dg_stock_state["errors"].append(
+                                    f"{origin_no} restock PUT {rp.status_code}: {rp.text[:80]}")
+                    except Exception as e2:
+                        _dg_stock_state["errors"].append(f"{origin_no} restock: {str(e2)[:60]}")
+                else:
+                    # dry_run: 재입고 감지만 기록
+                    _dg_stock_state["restock_items"].append({
+                        "origin_no": origin_no, "name": prod_name, "dg_code": dg_code,
+                        "new_wholesale": new_wholesale, "new_sale_price": new_sale_price,
+                        "dry_run": True,
+                    })
+                    print(f"[RESTOCK][DRY] {prod_name} 재입고 감지: 도매가={new_wholesale:,} 판매가={new_sale_price:,}", flush=True)
+        except Exception as e:
+            _dg_stock_state["errors"].append(f"{dg_code} DG restock: {str(e)[:60]}")
+
+        _susp_checked += 1
+        await _aio.sleep(_rnd.uniform(3.0, 5.0))
+
+    print(f"[RESTOCK] Phase2 완료 — 재개:{_dg_stock_state['restocked']}개 / 스킵:{_dg_stock_state['restock_skipped']}개", flush=True)
+    # ── Phase 2 끝 ──────────────────────────────────────────────────────────
+
     _dg_stock_state["done"] = True
     _dg_stock_state["status"] = "done"
     _dg_stock_state["elapsed_min"] = round((_time.time() - _dg_stock_state["start_ts"]) / 60, 1)
@@ -6206,6 +6358,9 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
             "no_cost_count": len(_dg_stock_state["no_cost_price"]),
             "elapsed_min": _dg_stock_state["elapsed_min"],
             "suspended_items": _dg_stock_state["suspended_items"],
+            "susp_total": _dg_stock_state["susp_total"],
+            "restocked": _dg_stock_state["restocked"],
+            "restock_items": _dg_stock_state["restock_items"],
         })
     except Exception:
         pass
@@ -6247,6 +6402,10 @@ async def scan_dg_stock_result():
         "no_cost_price_count": len(s.get("no_cost_price", [])),
         "no_cost_price_sample": s.get("no_cost_price", [])[:10],
         "suspended_items_recent": s.get("suspended_items", [])[-20:],
+        "susp_total": s.get("susp_total", 0),
+        "restocked": s.get("restocked", 0),
+        "restock_skipped": s.get("restock_skipped", 0),
+        "restock_items": s.get("restock_items", []),
         "errors": s.get("errors", [])[-10:],
         "elapsed_min": s.get("elapsed_min"),
         "progress_pct": round(s.get("checked", 0) / max(s.get("total", 1), 1) * 100, 1),
