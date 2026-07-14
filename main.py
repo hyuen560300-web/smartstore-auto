@@ -4680,8 +4680,8 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None) 
         image_urls = [u for u in [main_img] + extra_imgs if u]
 
         product_dict = {"name": name, "category": category, "price": price}
-
-        print(f"[REAPPLY] [{idx}/{len(not_applied)}] {name[:40]}", flush=True)
+        _before_html_len = len((origin.get("detailContent") or ""))
+        print(f"[REAPPLY] [{idx}/{len(not_applied)}] {name[:40]} (기존:{_before_html_len}자)", flush=True)
 
         # AI copy 생성 — 실패 시 건너뛰고 계속
         try:
@@ -4750,7 +4750,7 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None) 
 
         consecutive_fail = 0
         results["success"] += 1
-        print(f"[REAPPLY] [{idx}/{len(not_applied)}] ✅ {name[:40]}", flush=True)
+        print(f"[REAPPLY] [{idx}/{len(not_applied)}] ✅ {name[:40]} ({_before_html_len}→{len(html)}자)", flush=True)
         await asyncio.sleep(2.5)
 
     # 4. 최종 요약
