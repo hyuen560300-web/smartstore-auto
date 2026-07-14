@@ -1763,6 +1763,30 @@ def get_category_id(product: dict, hot_trends: Optional[List[str]] = None) -> in
     return DEFAULT_CATEGORY_ID
 
 
+async def _save_cost_price_async(origin_no: str, wholesale: int) -> None:
+    """등록 직후 백그라운드: GET+PUT read-modify-write로 Naver costPrice 저장 (도매가)."""
+    if not origin_no or wholesale <= 0:
+        return
+    try:
+        import httpx as _hx2
+        _SKIP_CP = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                    "statusFrom", "totalSalesQuantity", "channelProducts"}
+        hdrs = await naver_api._headers()
+        async with _hx2.AsyncClient(timeout=15) as _c:
+            _rd = await _c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+        if _rd.status_code != 200:
+            return
+        _od = _rd.json().get("originProduct", {})
+        _pl = {k: v for k, v in _od.items() if k not in _SKIP_CP}
+        _pl["costPrice"] = wholesale
+        async with _hx2.AsyncClient(timeout=20) as _c:
+            _rp = await _c.put(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                               headers=hdrs, json={"originProduct": _pl})
+        print(f"[COST_PRICE] ✅ {origin_no} costPrice={wholesale:,} ({_rp.status_code})", flush=True)
+    except Exception as _e:
+        print(f"[COST_PRICE] ❌ {origin_no}: {_e}", flush=True)
+
+
 def build_product_payload(
     raw: dict,
     ai: dict,
@@ -3961,7 +3985,10 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
 
-            await naver_api.register_product(payload)
+            _reg1 = await naver_api.register_product(payload)
+            _pid1 = str(_reg1.get("originProductNo", "")) if isinstance(_reg1, dict) else ""
+            if _pid1:
+                asyncio.create_task(_save_cost_price_async(_pid1, int(p.get("price", 0) or 0)))
             save_registered_code(code)
             save_registered_name(ai.get("product_name") or p.get("name", ""))
             results["success"] += 1
@@ -4255,6 +4282,8 @@ async def pipeline_register_from_domeggook(
             _pid = (reg_result.get("originProductNo")
                     or reg_result.get("channelProducts", [{}])[0].get("channelProductNo", "")
                     if isinstance(reg_result, dict) else "")
+            if _pid:
+                asyncio.create_task(_save_cost_price_async(str(_pid), int(p.get("price", 0) or 0)))
             _product_url = (f"https://smartstore.naver.com/thehwmall/products/{_pid}"
                             if _pid else "https://smartstore.naver.com/thehwmall")
             print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원) → {_product_url}", flush=True)
@@ -5082,6 +5111,9 @@ async def _source_replacement_product() -> None:
         res   = await naver_api.register_product(pload)
         if res:
             save_registered_code(str(p.get("code", "")))
+            _cp_pid = str(res.get("originProductNo", "")) if isinstance(res, dict) else ""
+            if _cp_pid:
+                asyncio.create_task(_save_cost_price_async(_cp_pid, int(p.get("price", 0) or 0)))
             print("[PERF] 소싱대체 완료 ✅", flush=True)
     except Exception as e:
         print(f"[PERF] 소싱대체 실패(무시): {e}", flush=True)
