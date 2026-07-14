@@ -980,6 +980,48 @@ async def debug_gen_html(no: str):
         return JSONResponse({"status": "error", "error": str(e), "trace": traceback.format_exc()[-400:]}, status_code=500)
 
 
+@app.get("/get-product-html")
+async def get_product_html(no: str):
+    """저장된 상품 HTML(detailContent) 조회 — 재적용 전후 품질 비교용."""
+    import httpx as _hx, re as _re
+    from main import NAVER_BASE
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:300]}, status_code=400)
+        origin = r.json().get("originProduct", {})
+        html = origin.get("detailContent") or ""
+        no_style = _re.sub(r"<style[\s\S]*?</style>", "", html, flags=_re.I)
+        no_style = _re.sub(r"<script[\s\S]*?</script>", "", no_style, flags=_re.I)
+        text = _re.sub(r"<[^>]+>", "", no_style)
+        text = _re.sub(r"\s+", " ", text).strip()
+        section_kws = ["배너","히어로","후킹","수치","문제","해결","갤러리","상세","사용법","비교","후기","faq","스펙","배송","신뢰","cta","푸터"]
+        section_hits = [kw for kw in section_kws if kw in html.lower()]
+        img_count = len(_re.findall(r"<img\b", html, _re.I))
+        h2_count = len(_re.findall(r"<h[23]\b", html, _re.I))
+        section_count = len(_re.findall(r"<section\b", html, _re.I))
+        return JSONResponse({
+            "no": no,
+            "name": (origin.get("name") or "")[:50],
+            "html_len": len(html),
+            "has_noto": "Noto Sans KR" in html,
+            "section_tag_count": section_count,
+            "h2_h3_count": h2_count,
+            "img_count": img_count,
+            "section_kw_hits": section_hits,
+            "section_kw_count": len(section_hits),
+            "text_len": len(text),
+            "text_preview": text[:300],
+            "html_head_200": html[:200],
+            "html_tail_200": html[-200:],
+        })
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
+
+
 # ─── Pinterest ───────────────────────────────────────────────────────────────
 @app.get("/pinterest/boards")
 async def pinterest_boards_list():
