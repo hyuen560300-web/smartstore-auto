@@ -2627,27 +2627,35 @@ async def _run_sale_products_scan():
     now = _dt.now(_tz.utc)
     sale_nos: list = []
 
-    # Phase 1: 전체 상품 ID + statusType만 수집 (detail 없이 — 빠름)
+    # Phase 1: SALE 상품 ID만 수집 (toDate=2099-12-31 — 오늘날짜 버그 우회)
     async with _hx.AsyncClient(timeout=30) as c:
         page = 1
         while True:
             r = await c.post(
                 f"{NAVER_BASE}/v1/products/search", headers=headers,
                 json={
-                    "productStatusTypes": ["SALE", "SUSPENSION"],
+                    "productStatusTypes": ["SALE"],
                     "page": page, "size": 50,
                     "orderType": "NO",
                     "periodType": "PROD_REG_DAY",
                     "fromDate": "2020-01-01",
-                    "toDate": now.strftime("%Y-%m-%d"),
+                    "toDate": "2099-12-31",
                 }
             )
-            contents = r.json().get("contents", []) if r.status_code == 200 else []
+            if r.status_code != 200:
+                print(f"[SALE_SCAN] 검색 실패 {r.status_code}: {r.text[:200]}", flush=True)
+                break
+            data = r.json()
+            contents = data.get("contents", [])
+            total_els = data.get("totalElements", 0)
+            if page == 1:
+                print(f"[SALE_SCAN] totalElements={total_els}", flush=True)
             if not contents:
                 break
             for item in contents:
-                if item.get("statusType") == "SALE":
-                    sale_nos.append(item.get("originProductNo"))
+                no = item.get("originProductNo")
+                if no:
+                    sale_nos.append(no)
             if len(contents) < 50:
                 break
             page += 1
