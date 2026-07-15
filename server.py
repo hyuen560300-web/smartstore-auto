@@ -2436,10 +2436,31 @@ async def set_cost_price(product_no: str, cost_price: int):
     return JSONResponse({"ok": False, "error": err})
 
 
+_backfill_running = False  # 중복 실행 방지 플래그
+
+
+async def _cs_save(key: str, value: dict):
+    """context_store에 저장 (실패 시 로그)"""
+    import httpx as _hx2
+    try:
+        async with _hx2.AsyncClient(timeout=10) as c2:
+            await c2.post(
+                "https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": key, "value": json.dumps(value), "category": "audit"},
+            )
+    except Exception as _e2:
+        print(f"[BACKFILL] context_store 저장 실패 key={key}: {_e2}", flush=True)
+
+
 async def _run_backfill_cost_prices():
     """백그라운드: 전체 상품 costPrice 소급 저장 (DG 웹스크래핑). 결과 context_store에 저장."""
+    global _backfill_running
+    if _backfill_running:
+        print("[BACKFILL] 이미 실행 중 — 중복 실행 방지", flush=True)
+        return
+    _backfill_running = True
+
     import httpx as _hx, re as _re, random as _rnd
-    from main import NAVER_BASE
     print("[BACKFILL] costPrice 소급 저장 시작 (웹스크래핑 방식)", flush=True)
 
     # 헤더는 루프 내에서 50개마다 갱신 (Naver 토큰 1시간 만료 대비)
@@ -2477,12 +2498,13 @@ async def _run_backfill_cost_prices():
             print(f"[BACKFILL] 목록 조회 실패 page{page}: {e}", flush=True)
             break
 
-    results = {"ok": 0, "skip_no_code": 0, "skip_dg_fail": 0,
-               "skip_already_set": 0, "fail": 0, "total": len(all_origin_nos)}
+    results = {"done": False, "ok": 0, "skip_no_code": 0, "skip_dg_fail": 0,
+               "skip_already_set": 0, "fail": 0, "total": len(all_origin_nos), "processed": 0}
     print(f"[BACKFILL] 대상 {len(all_origin_nos)}개", flush=True)
+    await _cs_save("ss.backfill_cost_prices.result", results)  # 시작 상태 저장
 
     # 2. 각 상품 처리
-    for origin_no in all_origin_nos:
+    for idx, origin_no in enumerate(all_origin_nos):
         # 50개마다 토큰 갱신 (1시간 만료 대비)
         _hdr_refresh_counter += 1
         if _hdr_refresh_counter % 50 == 0:
@@ -2521,7 +2543,9 @@ async def _run_backfill_cost_prices():
                     )
                 text = r_dg.text
                 m = (_re.search(r'["\']?baseAmtDome["\']?\s*[:=]\s*["\']?(\d+)', text)
-                     or _re.search(r'optionPrice["\']?\s*[:=]\s*["\']?(\d+)', text))
+                     or _re.search(r'optionPrice["\']?\s*[:=]\s*["\']?(\d+)', text)
+                     or _re.search(r'"price"\s*:\s*(\d+)', text)
+                     or _re.search(r'판매가[^0-9]*(\d{3,7})', text))
                 wholesale = int(m.group(1)) if m else 0
             except Exception as e:
                 print(f"[BACKFILL] DG 스크래핑 실패({item_no}): {e}", flush=True)
@@ -2550,20 +2574,24 @@ async def _run_backfill_cost_prices():
             results["fail"] += 1
             print(f"[BACKFILL] 오류 {origin_no}: {str(e)[:60]}", flush=True)
 
-    try:
-        async with _hx.AsyncClient(timeout=10) as c2:
-            await c2.post(
-                "https://loving-serenity-production-2635.up.railway.app/context",
-                json={"key": "ss.backfill_cost_prices.result", "value": json.dumps(results), "category": "audit"},
-            )
-    except Exception:
-        pass
+        results["processed"] = idx + 1
+        # 50개마다 중간 결과 저장
+        if (idx + 1) % 50 == 0:
+            print(f"[BACKFILL] 진행 {idx+1}/{len(all_origin_nos)} — ok={results['ok']} "
+                  f"skip_set={results['skip_already_set']} skip_dg={results['skip_dg_fail']}", flush=True)
+            await _cs_save("ss.backfill_cost_prices.result", results)
+
+    results["done"] = True
+    await _cs_save("ss.backfill_cost_prices.result", results)
+    _backfill_running = False
     print(f"[BACKFILL] 완료 — {results}", flush=True)
 
 
 @app.post("/backfill-cost-prices")
 async def backfill_cost_prices():
     """SALE 상품 전체 costPrice 소급 저장 (DG API 활용, 백그라운드). 결과: /backfill-cost-prices-result"""
+    if _backfill_running:
+        return JSONResponse({"status": "already_running", "message": "이미 실행 중. /backfill-cost-prices-result 에서 진행상황 확인"})
     asyncio.create_task(_run_backfill_cost_prices())
     return JSONResponse({"status": "started", "message": "결과는 /backfill-cost-prices-result 에서 조회"})
 
