@@ -2615,6 +2615,105 @@ async def backfill_cost_prices_result():
     return JSONResponse(json.loads(val) if isinstance(val, str) else val)
 
 
+_SALE_SCAN_CACHE: dict = {}
+
+async def _run_sale_products_scan():
+    global _SALE_SCAN_CACHE
+    _SALE_SCAN_CACHE = {"status": "running", "phase": 1, "found": 0}
+    import httpx as _hx
+    from datetime import datetime as _dt, timezone as _tz
+
+    headers = await naver_api._headers()
+    now = _dt.now(_tz.utc)
+    sale_nos: list = []
+
+    # Phase 1: 전체 상품 ID + statusType만 수집 (detail 없이 — 빠름)
+    async with _hx.AsyncClient(timeout=30) as c:
+        page = 1
+        while True:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/products/search", headers=headers,
+                json={
+                    "productStatusTypes": ["SALE", "SUSPENSION"],
+                    "page": page, "size": 50,
+                    "orderType": "NO",
+                    "periodType": "PROD_REG_DAY",
+                    "fromDate": "2020-01-01",
+                    "toDate": now.strftime("%Y-%m-%d"),
+                }
+            )
+            contents = r.json().get("contents", []) if r.status_code == 200 else []
+            if not contents:
+                break
+            for item in contents:
+                if item.get("statusType") == "SALE":
+                    sale_nos.append(item.get("originProductNo"))
+            if len(contents) < 50:
+                break
+            page += 1
+            await asyncio.sleep(0.2)
+
+    _SALE_SCAN_CACHE.update({"phase": 2, "found": len(sale_nos)})
+    print(f"[SALE_SCAN] Phase1 완료 — SALE 상품 {len(sale_nos)}개", flush=True)
+
+    # Phase 2: SALE 상품만 detail 조회 (costPrice 포함)
+    results: list[dict] = []
+    async with _hx.AsyncClient(timeout=30) as c:
+        async def _fetch(no):
+            try:
+                dr = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers, timeout=15)
+                if dr.status_code != 200:
+                    return None
+                origin = dr.json().get("originProduct", {}) or {}
+                img = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
+                dg = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+                return {
+                    "origin_no": str(no),
+                    "name": (origin.get("name") or "")[:60],
+                    "sale_price": int(origin.get("salePrice") or 0),
+                    "cost_price": int(origin.get("costPrice") or 0),
+                    "status": origin.get("statusType", "SALE"),
+                    "dg_code": dg,
+                    "image": img,
+                }
+            except Exception:
+                return None
+
+        for i in range(0, len(sale_nos), 5):
+            chunk = sale_nos[i:i+5]
+            chunk_res = await asyncio.gather(*[_fetch(no) for no in chunk])
+            results.extend([r for r in chunk_res if r])
+            await asyncio.sleep(0.3)
+
+    await _cs_save("ss.sale_products_with_cost", results)
+    _SALE_SCAN_CACHE = {"status": "done", "count": len(results)}
+    print(f"[SALE_SCAN] 완료 — {len(results)}개 저장", flush=True)
+
+
+@app.post("/sale-products-scan")
+async def sale_products_scan(background_tasks: BackgroundTasks):
+    """SALE 상품 전체 + costPrice 스캔 (백그라운드). 결과: /sale-products-scan-result"""
+    if _SALE_SCAN_CACHE.get("status") == "running":
+        return JSONResponse({"status": "already_running", **_SALE_SCAN_CACHE})
+    background_tasks.add_task(_run_sale_products_scan)
+    return JSONResponse({"status": "started", "result_url": "/sale-products-scan-result"})
+
+
+@app.get("/sale-products-scan-result")
+async def sale_products_scan_result():
+    """sale-products-scan 결과 반환. done 전엔 status 반환."""
+    if _SALE_SCAN_CACHE.get("status") != "done":
+        return JSONResponse(_SALE_SCAN_CACHE or {"status": "not_started"})
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=10) as c:
+        r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.sale_products_with_cost")
+    if r.status_code != 200:
+        return JSONResponse({"status": "no_data"})
+    raw = r.json()
+    val = raw.get("value", "[]")
+    return JSONResponse({"status": "done", "products": json.loads(val) if isinstance(val, str) else val})
+
+
 @app.get("/price-ratio-scan")
 async def price_ratio_scan(ratio_min: float = 2.0, ratio_max: float = 2.3, check_market: bool = False):
     """가격 비율 스캔 (읽기 전용). 가격/원가 비율이 ratio_min~ratio_max 인 상품 목록 반환.
