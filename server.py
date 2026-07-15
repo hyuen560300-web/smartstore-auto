@@ -2536,17 +2536,24 @@ async def _run_backfill_cost_prices():
             # DG 웹스크래핑으로 도매가 추출 (API 대신 — Railway IP 차단 우회)
             await asyncio.sleep(_rnd.uniform(3.0, 5.0))
             try:
-                async with _hx.AsyncClient(timeout=12, follow_redirects=True) as c:
-                    r_dg = await c.get(
-                        f"https://domeggook.com/main/item/itemView.php?no={item_no}",
-                        headers=dg_headers,
-                    )
+                _item_no_cap = item_no  # 클로저 캡처 고정
+                async def _dg_get(_no=_item_no_cap):
+                    async with _hx.AsyncClient(timeout=12, follow_redirects=True) as _c:
+                        return await _c.get(
+                            f"https://domeggook.com/main/item/itemView.php?no={_no}",
+                            headers=dg_headers,
+                        )
+                r_dg = await asyncio.wait_for(_dg_get(), timeout=20)
                 text = r_dg.text
                 m = (_re.search(r'["\']?baseAmtDome["\']?\s*[:=]\s*["\']?(\d+)', text)
                      or _re.search(r'optionPrice["\']?\s*[:=]\s*["\']?(\d+)', text)
                      or _re.search(r'"price"\s*:\s*(\d+)', text)
                      or _re.search(r'판매가[^0-9]*(\d{3,7})', text))
                 wholesale = int(m.group(1)) if m else 0
+            except asyncio.TimeoutError:
+                print(f"[BACKFILL] DG 20초 타임아웃({item_no}) — 스킵", flush=True)
+                results["skip_dg_fail"] += 1
+                continue
             except Exception as e:
                 print(f"[BACKFILL] DG 스크래핑 실패({item_no}): {e}", flush=True)
                 results["skip_dg_fail"] += 1
