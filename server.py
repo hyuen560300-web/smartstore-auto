@@ -5204,6 +5204,44 @@ async def startup_event():
     # registered_codes.json 동기화를 백그라운드로 실행 (healthcheck 응답 차단 방지)
     _asyncio.create_task(_sync_registered_codes())
 
+    # DG 재고 스캔 미완료 자동 재개 (배포 재시작으로 끊긴 경우)
+    async def _resume_dg_scan_if_needed():
+        import json as _jj3
+        await _asyncio.sleep(15)  # 서버 완전 초기화 + 스케줄러 기동 대기
+        try:
+            async with httpx.AsyncClient(timeout=8) as _c3:
+                _r3 = await _c3.get(
+                    "https://loving-serenity-production-2635.up.railway.app/context/ss.dg_stock_scan.progress"
+                )
+            if _r3.status_code != 200:
+                return
+            _val3 = _r3.json().get("value", {})
+            prog = _jj3.loads(_val3) if isinstance(_val3, str) else _val3
+            if prog.get("done"):
+                return  # 이미 완료된 스캔
+            _all_nos = prog.get("all_nos", [])
+            _last_idx = int(prog.get("last_index", -1))
+            _total = int(prog.get("total", 0))
+            if not _all_nos or _last_idx + 1 >= _total:
+                return  # 재개할 항목 없음
+            if _dg_stock_state.get("status") == "running":
+                return  # 이미 실행 중
+            _resume_from = _last_idx + 1
+            _dry_run = bool(prog.get("dry_run", False))
+            _counts = {
+                "checked": prog.get("checked", 0),
+                "no_stock_found": prog.get("no_stock_found", 0),
+                "suspended": prog.get("suspended", 0),
+            }
+            print(f"[STARTUP] DG 재고 스캔 미완료 감지 → {_resume_from}/{_total}번째부터 자동 재개", flush=True)
+            _asyncio.create_task(_scan_dg_stock_bg(
+                dry_run=_dry_run, resume_from=_resume_from,
+                resume_nos=_all_nos, resume_counts=_counts,
+            ))
+        except Exception as _e3:
+            print(f"[STARTUP] DG 스캔 재개 체크 실패: {_e3}", flush=True)
+    _asyncio.create_task(_resume_dg_scan_if_needed())
+
     # 오늘 알림된 주문 ID 복원 (재배포 후 중복 알림 방지)
     global _notified_order_ids
     try:
@@ -6279,7 +6317,9 @@ async def debug_status_scan():
 _dg_stock_state: dict = {}
 
 
-async def _scan_dg_stock_bg(dry_run: bool = False):
+async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
+                             resume_nos: list | None = None,
+                             resume_counts: dict | None = None):
     import httpx as _hx, asyncio as _aio, random as _rnd, time as _time, re as _re
     from main import NAVER_BASE, _ctx_set as _mcs
     global _dg_stock_state
@@ -6292,6 +6332,13 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
         # Phase 2: 재입고 감지
         "susp_total": 0, "restocked": 0, "restock_skipped": 0, "restock_items": [],
     }
+    # resume 시 이전 카운터 복원
+    if resume_counts:
+        _dg_stock_state.update({
+            "checked":       resume_counts.get("checked", 0),
+            "no_stock_found": resume_counts.get("no_stock_found", 0),
+            "suspended":     resume_counts.get("suspended", 0),
+        })
 
     hdrs = await naver_api._headers()
     dg_headers = {
@@ -6299,42 +6346,48 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
         "Accept-Language": "ko-KR,ko;q=0.9",
     }
 
-    # 1. 전체 SALE 상품 목록 수집 (100개씩 페이징)
-    all_products = []
-    page = 1
-    while True:
-        try:
-            async with _hx.AsyncClient(timeout=20) as c:
-                r = await c.post(
-                    f"{NAVER_BASE}/v1/products/search",
-                    headers=hdrs,
-                    json={
-                        "productStatusTypes": ["SALE"],
-                        "page": page, "size": 100,
-                        "orderType": "NO",
-                        "periodType": "PROD_REG_DAY",
-                        "fromDate": "2020-01-01",
-                        "toDate": "2030-12-31",
-                    }
-                )
-            data = r.json()
-            contents = data.get("contents", [])
-            if not contents:
+    # 1. 전체 SALE 상품 목록 수집 (resume 시 기존 목록 재사용)
+    if resume_nos:
+        all_nos = list(resume_nos)
+        print(f"[DG_SCAN] 재개 모드: {resume_from}번째부터 / 전체 {len(all_nos)}개", flush=True)
+    else:
+        _raw_products = []
+        page = 1
+        while True:
+            try:
+                async with _hx.AsyncClient(timeout=20) as c:
+                    r = await c.post(
+                        f"{NAVER_BASE}/v1/products/search",
+                        headers=hdrs,
+                        json={
+                            "productStatusTypes": ["SALE"],
+                            "page": page, "size": 100,
+                            "orderType": "NO",
+                            "periodType": "PROD_REG_DAY",
+                            "fromDate": "2020-01-01",
+                            "toDate": "2030-12-31",
+                        }
+                    )
+                data = r.json()
+                contents = data.get("contents", [])
+                if not contents:
+                    break
+                _raw_products.extend(contents)
+                if len(contents) < 100:
+                    break
+                page += 1
+                await _aio.sleep(1)
+            except Exception as e:
+                _dg_stock_state["errors"].append(f"list page{page}: {str(e)[:80]}")
                 break
-            all_products.extend(contents)
-            if len(contents) < 100:
-                break
-            page += 1
-            await _aio.sleep(1)
-        except Exception as e:
-            _dg_stock_state["errors"].append(f"list page{page}: {str(e)[:80]}")
-            break
+        all_nos = [str(p.get("originProductNo", "") or "") for p in _raw_products]
 
-    _dg_stock_state["total"] = len(all_products)
+    _dg_stock_state["total"] = len(all_nos)
 
-    # 2. 각 상품 DG 코드 조회 → 재고 확인 → 판매중지
-    for prod in all_products:
-        origin_no = str(prod.get("originProductNo", "") or "")
+    # 2. 각 origin_no 순회 → DG 재고 확인 → 판매중지 (resume_from 이전 인덱스 스킵)
+    for _scan_idx, origin_no in enumerate(all_nos):
+        if _scan_idx < resume_from:
+            continue
         prod_name = ""
 
         # origin-product 상세 (DG코드 + costPrice + 이름)
@@ -6414,7 +6467,7 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
 
         _dg_stock_state["checked"] += 1
 
-        # 50개마다 중간 저장
+        # 50개마다 중간 저장 (resume 재개를 위해 last_index + all_nos 포함)
         if _dg_stock_state["checked"] % 50 == 0:
             try:
                 _mcs("ss.dg_stock_scan.progress", {
@@ -6422,6 +6475,10 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
                     "total": _dg_stock_state["total"],
                     "suspended": _dg_stock_state["suspended"],
                     "no_stock_found": _dg_stock_state["no_stock_found"],
+                    "last_index": _scan_idx,
+                    "all_nos": all_nos,
+                    "dry_run": dry_run,
+                    "done": False,
                 })
             except Exception:
                 pass
@@ -6583,7 +6640,12 @@ async def _scan_dg_stock_bg(dry_run: bool = False):
     _dg_stock_state["status"] = "done"
     _dg_stock_state["elapsed_min"] = round((_time.time() - _dg_stock_state["start_ts"]) / 60, 1)
 
-    # 최종 결과 저장
+    # 최종 결과 저장 (progress에도 done=True → 재시작 시 resume 스킵)
+    try:
+        _mcs("ss.dg_stock_scan.progress", {"done": True, "total": _dg_stock_state["total"],
+                                            "checked": _dg_stock_state["checked"]})
+    except Exception:
+        pass
     try:
         _mcs("ss.dg_stock_scan.result", {
             "done": True,
