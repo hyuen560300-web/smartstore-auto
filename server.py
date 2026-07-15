@@ -5216,7 +5216,14 @@ async def startup_event():
             if _r3.status_code != 200:
                 return
             _val3 = _r3.json().get("value", {})
-            prog = _jj3.loads(_val3) if isinstance(_val3, str) else _val3
+            if isinstance(_val3, str):
+                try:
+                    prog = _jj3.loads(_val3)
+                except Exception:
+                    import ast as _ast3
+                    prog = _ast3.literal_eval(_val3)
+            else:
+                prog = _val3
             if prog.get("done"):
                 return  # 이미 완료된 스캔
             _all_nos = prog.get("all_nos", [])
