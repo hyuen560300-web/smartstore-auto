@@ -1897,10 +1897,16 @@ async def dg_item_detail(item_no: str):
             return s if s.startswith("http") else f"https://cdn1.domeggook.com/{s}"
         img_url = _to_full(thumb.get("original")) or _to_full(thumb.get("large", ""))
         basis = data.get("basis", {})
+        price_obj = data.get("price", {}) or {}
+        def _price_int(v):
+            s = _dg_s(v)
+            return int("".join(c for c in s if c.isdigit()) or "0")
+        dome_price = _price_int(price_obj.get("dome") or price_obj.get("domePrice") or 0)
         return JSONResponse({
             "item_no": item_no,
             "name": _dg_s(basis.get("title", "")),
             "img": img_url,
+            "wholesale_price": dome_price,
         })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
