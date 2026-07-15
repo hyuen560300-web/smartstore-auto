@@ -5479,6 +5479,14 @@ async def startup_event():
             print(f"[SCHED-SS] 일일가격비교 오류: {e}", flush=True)
     scheduler.add_job(_job_daily_price_check_ss, "cron", hour=9, minute=0, id="daily_price_check_ss", replace_existing=True)
 
+    # 매일 03:00 — DG 재고 양방향 동기화 (Phase1: SALE→중지 / Phase2: SUSPENSION→재개)
+    async def job_dg_stock_scan():
+        if _dg_stock_state.get("status") == "running":
+            print("[SCHED] DG 재고 스캔 이미 실행 중 — 스킵", flush=True)
+            return
+        asyncio.create_task(_scan_dg_stock_bg(dry_run=False))
+    scheduler.add_job(job_dg_stock_scan, "cron", hour=3, minute=0, id="dg_stock_scan")
+
     try:
         scheduler.start()
         print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
