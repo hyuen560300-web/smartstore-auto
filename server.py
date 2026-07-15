@@ -1059,6 +1059,49 @@ async def get_product_info(no: str):
         return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
 
 
+@app.get("/ip-scan")
+async def ip_scan_all():
+    """SALE 상품 전체를 DANGEROUS_KEYWORDS로 스캔 — IP 위반 상품 목록 반환."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    from employees import DANGEROUS_KEYWORDS
+    hits = []
+    scanned = 0
+    page = 1
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=60) as c:
+            while True:
+                r = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products",
+                    headers=headers,
+                    params={"page": page, "size": 100, "productStatusTypes": "SALE"},
+                )
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                items = data.get("contents", [])
+                if not items:
+                    break
+                for item in items:
+                    op = item.get("originProduct", {})
+                    name = op.get("name", "")
+                    pid = str(item.get("originProductNo", ""))
+                    name_lower = name.lower()
+                    for kw in DANGEROUS_KEYWORDS:
+                        if kw.lower() in name_lower:
+                            hits.append({"pid": pid, "name": name, "keyword": kw})
+                            break
+                scanned += len(items)
+                if len(items) < 100:
+                    break
+                page += 1
+        return JSONResponse({"scanned": scanned, "hit_count": len(hits), "hits": hits})
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-500:]}, status_code=500)
+
+
 # ─── Pinterest ───────────────────────────────────────────────────────────────
 @app.get("/pinterest/boards")
 async def pinterest_boards_list():
