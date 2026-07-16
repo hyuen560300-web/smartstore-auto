@@ -7387,11 +7387,19 @@ async def rereg_recover_dg(dg_item_no: str, prod_name: str = ""):
         stock = int(qty.get("inventory", 100) or 100)
         deli = int(price_info.get("deli", 0) or 0)
         selling_price = round(max(wholesale * 2.2, wholesale * 1.15) / 10) * 10
+        # DG 이미지 → Naver 업로드 (DG URL은 Naver API에서 직접 사용 불가)
+        naver_img_url = image
+        if image:
+            try:
+                naver_img_url = await naver_api.upload_image(image)
+            except Exception as _ie:
+                return {"ok": False, "reason": f"이미지 업로드 실패: {str(_ie)[:200]}"}
+
         raw = {
             "code": f"DG_{dg_item_no}",
             "name": title,
             "price": wholesale,
-            "image": image,
+            "image": naver_img_url,
             "stock": stock,
             "delivery_type": "무료배송" if not deli else "",
             "delivery_fee": deli or 3000,
