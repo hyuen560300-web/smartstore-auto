@@ -6828,6 +6828,47 @@ async def naver_category_raw(category_id: int):
     return JSONResponse({"status": r.status_code, "body": r.json()})
 
 
+@app.get("/category-debug")
+async def category_debug(limit: int = 5):
+    """SALE 상품의 DG basis.section vs Naver 등록 leafCategoryId 비교 (카테고리 매핑 진단)."""
+    import httpx as _hx
+    from main import NAVER_BASE, _dg_item_detail, get_category_id, DEFAULT_CATEGORY_ID
+    hdrs = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=30) as c:
+        r = await c.get(
+            f"{NAVER_BASE}/v2/products/origin-products",
+            headers=hdrs,
+            params={"originProductStatusType": "SALE", "page": 1, "size": min(limit, 20)},
+        )
+    items = r.json().get("originProducts", [])
+    results = []
+    for item in items[:limit]:
+        op = item.get("originProduct", {})
+        origin_no = str(item.get("originProductNo", ""))
+        name = op.get("name", "")
+        leaf_cat = op.get("leafCategoryId", 0)
+        seller_code = op.get("sellerManagementCode", "")
+        dg_section, computed_cat, detail_ok = "", DEFAULT_CATEGORY_ID, False
+        if seller_code.startswith("DG_"):
+            detail = await _dg_item_detail(seller_code[3:])
+            detail_ok = bool(detail)
+            basis = detail.get("basis", {})
+            dg_section = str(basis.get("section") or basis.get("keywords") or "")
+            cat_str = dg_section.split(">")[0].strip()
+            computed_cat = get_category_id({"category": cat_str, "name": name})
+        results.append({
+            "origin_no": origin_no, "name": name[:40],
+            "registered_leafCategoryId": leaf_cat,
+            "seller_code": seller_code,
+            "dg_detail_ok": detail_ok,
+            "dg_section": dg_section,
+            "category_first_part": dg_section.split(">")[0].strip() if dg_section else "",
+            "computed_get_category_id": computed_cat,
+            "would_change": leaf_cat != computed_cat,
+        })
+    return JSONResponse(results)
+
+
 @app.get("/category-attributes/{category_id}")
 async def get_category_attributes_endpoint(category_id: int):
     """카테고리 필수 속성 목록 조회 (Naver API)."""
