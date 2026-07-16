@@ -6816,6 +6816,18 @@ async def naver_raw_product(origin_no: str):
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+@app.get("/naver-category-raw/{category_id}")
+async def naver_category_raw(category_id: int):
+    """Naver 속성 API 원문 전체 반환 (디버깅용)."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    hdrs = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(f"{NAVER_BASE}/v1/product-attributes/attributes",
+                        headers=hdrs, params={"categoryId": category_id})
+    return JSONResponse({"status": r.status_code, "body": r.json()})
+
+
 @app.get("/category-attributes/{category_id}")
 async def get_category_attributes_endpoint(category_id: int):
     """카테고리 필수 속성 목록 조회 (Naver API)."""
