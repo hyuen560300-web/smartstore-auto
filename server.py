@@ -6791,6 +6791,324 @@ async def product_status_counts():
     })
 
 
+# ─── 속성(attributeInfo) 검증·채움 ────────────────────────────────────────────
+
+@app.get("/naver-raw/{origin_no}")
+async def naver_raw_product(origin_no: str):
+    """Naver API 원문 — attributeInfo 포함 전체 반환 (검증용)."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        hdrs = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:300]}, status_code=400)
+        op = r.json().get("originProduct", {})
+        return {
+            "origin_no": origin_no,
+            "name": op.get("name", ""),
+            "leafCategoryId": op.get("leafCategoryId"),
+            "statusType": op.get("statusType", ""),
+            "attributeInfo": op.get("attributeInfo"),
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/category-attributes/{category_id}")
+async def get_category_attributes_endpoint(category_id: int):
+    """카테고리 필수 속성 목록 조회 (Naver API)."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        hdrs = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                f"{NAVER_BASE}/v1/product-attributes/attributes",
+                headers=hdrs,
+                params={"categoryId": category_id},
+            )
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:400]}, status_code=400)
+        data = r.json()
+        attrs = []
+        for group in (data.get("productAttributeGroups") or []):
+            for attr in (group.get("attributes") or []):
+                attrs.append({
+                    "seq": attr.get("attributeSeq"),
+                    "name": attr.get("name"),
+                    "required": attr.get("required", False),
+                    "values": [
+                        {"seq": v.get("attributeValueSeq"), "name": v.get("name")}
+                        for v in (attr.get("attributeValues") or [])[:30]
+                    ],
+                })
+        return {"categoryId": category_id, "count": len(attrs), "attributes": attrs}
+    except Exception as e:
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+def _pick_attr_value_seq(attr: dict, product_name: str) -> int | None:
+    """속성 dict + 상품명 → 최적 attributeValueSeq. 없으면 None."""
+    attr_name = attr.get("name", "")
+    values = attr.get("attributeValues") or []
+    if not values:
+        return None
+
+    nl = product_name.lower()
+
+    if any(k in attr_name for k in ("색상", "컬러")):
+        COLOR_KW = [
+            ("블랙",  ["블랙","검정","black","dark"]),
+            ("화이트", ["화이트","흰","white"]),
+            ("그레이", ["그레이","회색","gray","grey","실버"]),
+            ("네이비", ["네이비","남색","navy"]),
+            ("베이지", ["베이지","크림","아이보리","beige"]),
+            ("카키",   ["카키","올리브","khaki"]),
+            ("브라운", ["브라운","갈색","brown","카멜"]),
+            ("핑크",   ["핑크","분홍","pink"]),
+            ("블루",   ["블루","파란","blue"]),
+            ("레드",   ["레드","빨간","red","버건디"]),
+            ("오렌지", ["오렌지","주황","orange"]),
+            ("그린",   ["그린","녹색","green","민트"]),
+            ("퍼플",   ["퍼플","보라","purple","라벤더"]),
+            ("옐로우", ["옐로우","노란","yellow"]),
+            ("멀티",   ["멀티","컬러풀","다색","무지개"]),
+        ]
+        for color_key, keywords in COLOR_KW:
+            for kw in keywords:
+                if kw in nl:
+                    for v in values:
+                        if color_key in v.get("name", ""):
+                            return v["attributeValueSeq"]
+        for v in values:
+            if v.get("name") in ("기타", "혼합색상", "해당없음", "멀티컬러", "기타색상"):
+                return v["attributeValueSeq"]
+
+    elif any(k in attr_name for k in ("소재", "재질", "원단")):
+        MATERIAL_KW = [
+            ("면",       ["면", "코튼", "cotton"]),
+            ("폴리에스터", ["폴리", "나일론", "화섬"]),
+            ("스테인리스", ["스테인리스", "스틸", "steel"]),
+            ("실리콘",   ["실리콘", "silicon"]),
+            ("플라스틱", ["플라스틱", "abs", "pp", "pvc"]),
+            ("가죽",     ["가죽", "양피", "leather"]),
+            ("대나무",   ["대나무", "bamboo"]),
+            ("알루미늄", ["알루미늄", "aluminum"]),
+            ("스판",     ["스판", "스판덱스", "신축"]),
+            ("린넨",     ["린넨", "linen"]),
+        ]
+        for mat_key, keywords in MATERIAL_KW:
+            for kw in keywords:
+                if kw in nl:
+                    for v in values:
+                        if mat_key in v.get("name", ""):
+                            return v["attributeValueSeq"]
+
+    elif any(k in attr_name for k in ("사이즈", "크기", "치수")):
+        for v in values:
+            if v.get("name") in ("FREE", "기타", "해당없음", "ONE SIZE", "F", "프리", "FREE SIZE"):
+                return v["attributeValueSeq"]
+
+    elif any(k in attr_name for k in ("제조국", "원산지", "생산지")):
+        for v in values:
+            if v.get("name") in ("중국", "중국산", "China"):
+                return v["attributeValueSeq"]
+
+    elif any(k in attr_name for k in ("성별", "대상")):
+        for v in values:
+            if v.get("name") in ("공용", "유니섹스", "남녀공용"):
+                return v["attributeValueSeq"]
+
+    # 공통 폴백: 기타/해당없음
+    for v in values:
+        if v.get("name") in ("기타", "해당없음", "없음", "해당 없음"):
+            return v["attributeValueSeq"]
+
+    return values[0].get("attributeValueSeq")  # 최후 수단: 첫 번째 값
+
+
+_fill_attr_state: dict = {"running": False, "done": 0, "total": 0, "ok": 0, "skip": 0, "errors": 0, "log": []}
+
+
+@app.get("/fill-attributes-result")
+async def fill_attributes_result():
+    return _fill_attr_state
+
+
+@app.post("/fill-attributes")
+async def fill_attributes(
+    background_tasks: BackgroundTasks,
+    limit: int = 0,
+    dry_run: bool = False,
+):
+    """기존 SALE 상품 전체 attributeInfo 채움 (백그라운드)."""
+    global _fill_attr_state
+    if _fill_attr_state.get("running"):
+        return JSONResponse({"error": "이미 실행 중"}, status_code=409)
+    _fill_attr_state = {"running": True, "done": 0, "total": 0, "ok": 0, "skip": 0, "errors": 0, "log": [], "dry_run": dry_run}
+    background_tasks.add_task(_fill_attributes_job, limit=limit, dry_run=dry_run)
+    return {"status": "started", "dry_run": dry_run}
+
+
+async def _fill_attributes_job(limit: int = 0, dry_run: bool = False):
+    global _fill_attr_state
+    import httpx as _hx
+    from main import NAVER_BASE
+    import asyncio as _ai
+
+    SKIP_KEYS = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                 "statusFrom", "totalSalesQuantity", "channelProducts"}
+
+    try:
+        hdrs = await naver_api._headers()
+
+        # 1. SALE 상품 전체 수집
+        all_products = []
+        page = 1
+        async with _hx.AsyncClient(timeout=25) as c:
+            while True:
+                r = await c.get(f"{NAVER_BASE}/v2/products", headers=hdrs,
+                                params={"page": page, "size": 50, "productStatusTypes": "SALE"})
+                if r.status_code != 200:
+                    break
+                items = r.json().get("contents", [])
+                if not items:
+                    break
+                all_products.extend(items)
+                if len(items) < 50:
+                    break
+                page += 1
+
+        if limit > 0:
+            all_products = all_products[:limit]
+
+        _fill_attr_state["total"] = len(all_products)
+        _fill_attr_state["log"].append(f"SALE 상품 {len(all_products)}개 대상")
+
+        # 2. 카테고리 속성 캐시
+        cat_cache: dict[int, list] = {}
+
+        async def _get_cat_attrs(cat_id: int) -> list:
+            if cat_id in cat_cache:
+                return cat_cache[cat_id]
+            async with _hx.AsyncClient(timeout=20) as c2:
+                r2 = await c2.get(
+                    f"{NAVER_BASE}/v1/product-attributes/attributes",
+                    headers=hdrs,
+                    params={"categoryId": cat_id},
+                )
+            if r2.status_code != 200:
+                cat_cache[cat_id] = []
+                return []
+            attrs = []
+            for group in (r2.json().get("productAttributeGroups") or []):
+                for attr in (group.get("attributes") or []):
+                    attrs.append(attr)
+            cat_cache[cat_id] = attrs
+            return attrs
+
+        # 3. 상품별 처리
+        for item in all_products:
+            origin_no = str(item.get("originProductNo", ""))
+            try:
+                async with _hx.AsyncClient(timeout=20) as c:
+                    rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+                if rd.status_code != 200:
+                    _fill_attr_state["errors"] += 1
+                    _fill_attr_state["log"].append(f"[ERR] {origin_no}: GET {rd.status_code}")
+                    _fill_attr_state["done"] += 1
+                    continue
+
+                full = rd.json()
+                op = full.get("originProduct", {})
+                product_name = op.get("name", "")
+                cat_id = op.get("leafCategoryId")
+                existing = op.get("attributeInfo")
+
+                if existing and existing.get("values"):
+                    _fill_attr_state["log"].append(f"[SKIP-기존] {origin_no} {product_name[:20]}")
+                    _fill_attr_state["skip"] += 1
+                    _fill_attr_state["done"] += 1
+                    continue
+
+                if not cat_id:
+                    _fill_attr_state["log"].append(f"[SKIP-카테고리없음] {origin_no}")
+                    _fill_attr_state["skip"] += 1
+                    _fill_attr_state["done"] += 1
+                    continue
+
+                cat_attrs = await _get_cat_attrs(cat_id)
+                if not cat_attrs:
+                    _fill_attr_state["log"].append(f"[SKIP-속성없음] {origin_no} cat={cat_id}")
+                    _fill_attr_state["skip"] += 1
+                    _fill_attr_state["done"] += 1
+                    continue
+
+                attr_values = []
+                for attr in cat_attrs:
+                    seq = _pick_attr_value_seq(attr, product_name)
+                    if seq is not None:
+                        attr_values.append({
+                            "attributeSeq": attr["attributeSeq"],
+                            "attributeValueSeq": seq,
+                        })
+
+                if not attr_values:
+                    _fill_attr_state["log"].append(f"[SKIP-값없음] {origin_no} {product_name[:20]}")
+                    _fill_attr_state["skip"] += 1
+                    _fill_attr_state["done"] += 1
+                    continue
+
+                if dry_run:
+                    _fill_attr_state["log"].append(
+                        f"[DRY] {origin_no} {product_name[:20]} cat={cat_id} → {len(attr_values)}개"
+                    )
+                    _fill_attr_state["ok"] += 1
+                    _fill_attr_state["done"] += 1
+                    continue
+
+                # PUT — 읽기전용 키 제거 후 attributeInfo 추가
+                payload = {k: v for k, v in op.items() if k not in SKIP_KEYS}
+                payload["attributeInfo"] = {"values": attr_values}
+
+                async with _hx.AsyncClient(timeout=25) as c:
+                    rp = await c.put(
+                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                        headers=hdrs,
+                        json={"originProduct": payload},
+                    )
+
+                if rp.status_code in (200, 201):
+                    _fill_attr_state["ok"] += 1
+                    _fill_attr_state["log"].append(
+                        f"[OK] {origin_no} {product_name[:20]} → {len(attr_values)}개 속성"
+                    )
+                else:
+                    _fill_attr_state["errors"] += 1
+                    _fill_attr_state["log"].append(
+                        f"[ERR] {origin_no}: PUT {rp.status_code} {rp.text[:100]}"
+                    )
+
+                _fill_attr_state["done"] += 1
+                await _ai.sleep(0.4)  # rate limit
+
+            except Exception as e:
+                _fill_attr_state["errors"] += 1
+                _fill_attr_state["log"].append(f"[ERR] {origin_no}: {str(e)[:100]}")
+                _fill_attr_state["done"] += 1
+
+        _fill_attr_state["running"] = False
+        _fill_attr_state["log"].append(
+            f"완료: OK={_fill_attr_state['ok']} SKIP={_fill_attr_state['skip']} ERR={_fill_attr_state['errors']}"
+        )
+
+    except Exception as e:
+        _fill_attr_state["running"] = False
+        _fill_attr_state["log"].append(f"[FATAL] {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))

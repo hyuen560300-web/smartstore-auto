@@ -1795,6 +1795,118 @@ async def _save_cost_price_async(origin_no: str, wholesale: int) -> None:
         print(f"[COST_PRICE] ❌ {origin_no}: {_e}", flush=True)
 
 
+def _pick_attr_seq(attr_name: str, values: list, name_lower: str) -> int | None:
+    """속성명 + 상품명(소문자) → attributeValueSeq. 없으면 None."""
+    if any(k in attr_name for k in ("색상", "컬러")):
+        COLOR_KW = [
+            ("블랙", ["블랙","검정","black","dark"]),
+            ("화이트", ["화이트","흰","white"]),
+            ("그레이", ["그레이","회색","gray","grey","실버"]),
+            ("네이비", ["네이비","남색","navy"]),
+            ("베이지", ["베이지","크림","아이보리","beige"]),
+            ("카키",   ["카키","올리브","khaki"]),
+            ("브라운", ["브라운","갈색","brown","카멜"]),
+            ("핑크",   ["핑크","분홍","pink"]),
+            ("블루",   ["블루","파란","blue"]),
+            ("레드",   ["레드","빨간","red","버건디"]),
+            ("그린",   ["그린","녹색","green","민트"]),
+            ("멀티",   ["멀티","컬러풀","다색","무지개"]),
+        ]
+        for ck, kws in COLOR_KW:
+            if any(kw in name_lower for kw in kws):
+                for v in values:
+                    if ck in v.get("name", ""):
+                        return v["attributeValueSeq"]
+        for v in values:
+            if v.get("name") in ("기타", "혼합색상", "해당없음", "멀티컬러", "기타색상"):
+                return v["attributeValueSeq"]
+    elif any(k in attr_name for k in ("소재", "재질", "원단")):
+        MATERIAL_KW = [
+            ("면",        ["면", "코튼", "cotton"]),
+            ("폴리에스터", ["폴리", "나일론", "화섬"]),
+            ("스테인리스", ["스테인리스", "스틸", "steel"]),
+            ("실리콘",    ["실리콘", "silicon"]),
+            ("플라스틱",  ["플라스틱", "abs", "pp", "pvc"]),
+            ("가죽",      ["가죽", "양피", "leather"]),
+            ("대나무",    ["대나무", "bamboo"]),
+            ("알루미늄",  ["알루미늄", "aluminum"]),
+            ("스판",      ["스판", "스판덱스", "신축"]),
+            ("린넨",      ["린넨", "linen"]),
+        ]
+        for mk, kws in MATERIAL_KW:
+            if any(kw in name_lower for kw in kws):
+                for v in values:
+                    if mk in v.get("name", ""):
+                        return v["attributeValueSeq"]
+    elif any(k in attr_name for k in ("사이즈", "크기", "치수")):
+        for v in values:
+            if v.get("name") in ("FREE", "기타", "해당없음", "ONE SIZE", "F", "프리", "FREE SIZE"):
+                return v["attributeValueSeq"]
+    elif any(k in attr_name for k in ("제조국", "원산지", "생산지")):
+        for v in values:
+            if v.get("name") in ("중국", "중국산", "China"):
+                return v["attributeValueSeq"]
+    elif any(k in attr_name for k in ("성별", "대상")):
+        for v in values:
+            if v.get("name") in ("공용", "유니섹스", "남녀공용"):
+                return v["attributeValueSeq"]
+    for v in values:
+        if v.get("name") in ("기타", "해당없음", "없음", "해당 없음"):
+            return v["attributeValueSeq"]
+    return values[0].get("attributeValueSeq") if values else None
+
+
+async def fill_product_attributes(origin_no: str, category_id: int, product_name: str) -> bool:
+    """등록 직후 attributeInfo 채움 — 카테고리 필수 속성 자동 선택 후 PUT."""
+    _SKIP = {"originProductNo", "channelProductNo", "regDate", "modDate",
+             "statusFrom", "totalSalesQuantity", "channelProducts"}
+    try:
+        hdrs = await naver_api._headers()
+        async with httpx.AsyncClient(timeout=20) as c:
+            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+        if rd.status_code != 200:
+            return False
+        op = rd.json().get("originProduct", {})
+        if op.get("attributeInfo", {}).get("values"):
+            return True  # 이미 채워짐
+
+        async with httpx.AsyncClient(timeout=20) as c:
+            ra = await c.get(
+                f"{NAVER_BASE}/v1/product-attributes/attributes",
+                headers=hdrs,
+                params={"categoryId": category_id},
+            )
+        if ra.status_code != 200:
+            return False
+
+        nl = product_name.lower()
+        attr_values = []
+        for group in (ra.json().get("productAttributeGroups") or []):
+            for attr in (group.get("attributes") or []):
+                avs = attr.get("attributeValues") or []
+                seq = _pick_attr_seq(attr.get("name", ""), avs, nl)
+                if seq:
+                    attr_values.append({"attributeSeq": attr["attributeSeq"], "attributeValueSeq": seq})
+
+        if not attr_values:
+            return False
+
+        payload = {k: v for k, v in op.items() if k not in _SKIP}
+        payload["attributeInfo"] = {"values": attr_values}
+        async with httpx.AsyncClient(timeout=25) as c:
+            rp = await c.put(
+                f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                headers=hdrs,
+                json={"originProduct": payload},
+            )
+        ok = rp.status_code in (200, 201)
+        print(f"[ATTR] {origin_no} {product_name[:20]} → {len(attr_values)}개 {'✅' if ok else '❌ '+rp.text[:60]}", flush=True)
+        return ok
+    except Exception as e:
+        print(f"[ATTR] {origin_no} 속성 채움 예외: {e}", flush=True)
+        return False
+
+
 def build_product_payload(
     raw: dict,
     ai: dict,
@@ -4013,6 +4125,9 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             _pid1 = str(_reg1.get("originProductNo", "")) if isinstance(_reg1, dict) else ""
             if _pid1:
                 asyncio.create_task(_save_cost_price_async(_pid1, int(p.get("price", 0) or 0)))
+                _leaf_cat = payload["originProduct"].get("leafCategoryId", 0)
+                if _leaf_cat:
+                    asyncio.create_task(fill_product_attributes(_pid1, _leaf_cat, p.get("name", "")))
             save_registered_code(code)
             save_registered_name(ai.get("product_name") or p.get("name", ""))
             results["success"] += 1
@@ -4316,6 +4431,9 @@ async def pipeline_register_from_domeggook(
                     if isinstance(reg_result, dict) else "")
             if _pid:
                 asyncio.create_task(_save_cost_price_async(str(_pid), int(p.get("price", 0) or 0)))
+                _lcat = payload["originProduct"].get("leafCategoryId", 0)
+                if _lcat:
+                    asyncio.create_task(fill_product_attributes(str(_pid), _lcat, p.get("name", "")))
             _product_url = (f"https://smartstore.naver.com/thehwmall/products/{_pid}"
                             if _pid else "https://smartstore.naver.com/thehwmall")
             print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원) → {_product_url}", flush=True)
@@ -5146,6 +5264,9 @@ async def _source_replacement_product() -> None:
             _cp_pid = str(res.get("originProductNo", "")) if isinstance(res, dict) else ""
             if _cp_pid:
                 asyncio.create_task(_save_cost_price_async(_cp_pid, int(p.get("price", 0) or 0)))
+                _cp_lcat = pload["originProduct"].get("leafCategoryId", 0)
+                if _cp_lcat:
+                    asyncio.create_task(fill_product_attributes(_cp_pid, _cp_lcat, p.get("name", "")))
             print("[PERF] 소싱대체 완료 ✅", flush=True)
     except Exception as e:
         print(f"[PERF] 소싱대체 실패(무시): {e}", flush=True)
