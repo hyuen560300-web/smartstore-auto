@@ -7619,25 +7619,67 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
                     await _aio.sleep(2.5)
                     continue
 
-                # ── 실제 처리: SUSPENSION → DELETE → 재등록 ──
-                # 1) SUSPENSION (삭제 전 안전 처리)
-                susp_payload = {k: v for k, v in op.items() if k not in _SKIP_KEYS}
-                susp_payload["statusType"] = "SUSPENSION"
-                async with _hx.AsyncClient(timeout=15) as c:
-                    await c.put(
-                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
-                        headers=hdrs, json={"originProduct": susp_payload},
-                    )
+                # ── 안전 순서: 신규 SUSPENSION 등록 → 성공 확인 → DELETE 기존 → SALE 활성화 ──
+                # (DELETE 먼저 하면 REGISTER 실패 시 상품 소멸 위험)
+
+                # 1) 신규 상품 SUSPENSION 상태로 먼저 등록 (기존 상품 유지 상태)
+                new_payload["originProduct"]["statusType"] = "SUSPENSION"
+                try:
+                    new_no_raw = await naver_api.register_product(new_payload)
+                except Exception as _reg_err:
+                    err_msg = str(_reg_err)
+                    # KC 인증 필수 카테고리 → SKIP (기존 상품 유지)
+                    if "productCertificationInfos" in err_msg or "certificationInfos" in err_msg:
+                        item_log["status"] = "SKIP-KC인증필수카테고리"
+                        _rereg_state["skip"] += 1
+                    else:
+                        item_log["status"] = f"ERR-등록실패(기존유지): {err_msg[:150]}"
+                        _rereg_state["errors"].append(f"{origin_no}: {err_msg[:300]}")
+                        _rereg_state["err"] += 1
+                        if stop_on_error:
+                            _rereg_state["items"].append(item_log)
+                            _rereg_state["processed"] += 1
+                            _rereg_state["stopped_reason"] = f"등록실패 at {origin_no}: {err_msg[:100]}"
+                            break
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(2.5)
+                    continue
+
+                # 등록 성공 → new_no 추출
+                new_no_int = (new_no_raw.get("originProductNo") if isinstance(new_no_raw, dict)
+                              else new_no_raw)
+                new_no_str = str(new_no_int) if new_no_int else ""
+                if not new_no_str:
+                    item_log["status"] = "ERR-등록실패no없음(기존유지)"
+                    _rereg_state["err"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    if stop_on_error:
+                        _rereg_state["stopped_reason"] = f"new_no없음 at {origin_no}"
+                        break
+                    await _aio.sleep(2.5)
+                    continue
+
                 await _aio.sleep(0.8)
 
-                # 2) DELETE
+                # 2) 기존 상품 DELETE
                 async with _hx.AsyncClient(timeout=15) as c:
                     r_del = await c.delete(
                         f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
                         headers=hdrs,
                     )
                 if r_del.status_code not in (200, 204):
-                    item_log["status"] = f"ERR-삭제실패({r_del.status_code})"
+                    # 삭제 실패 → 신규 상품도 삭제해서 중복 방지
+                    try:
+                        async with _hx.AsyncClient(timeout=10) as c2:
+                            await c2.delete(
+                                f"{NAVER_BASE}/v2/products/origin-products/{new_no_str}",
+                                headers=hdrs,
+                            )
+                    except Exception:
+                        pass
+                    item_log["status"] = f"ERR-삭제실패({r_del.status_code})(기존유지)"
                     _rereg_state["errors"].append(
                         f"{origin_no} DELETE {r_del.status_code}: {r_del.text[:80]}")
                     _rereg_state["err"] += 1
@@ -7651,8 +7693,18 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
 
                 await _aio.sleep(1.0)
 
-                # 3) 재등록
-                new_no = await naver_api.register_product(new_payload)
+                # 3) 신규 상품 SALE 활성화
+                act_payload = {k: v for k, v in new_payload["originProduct"].items()
+                               if k not in _SKIP_KEYS}
+                act_payload["statusType"] = "SALE"
+                async with _hx.AsyncClient(timeout=15) as c:
+                    await c.put(
+                        f"{NAVER_BASE}/v2/products/origin-products/{new_no_str}",
+                        headers=hdrs, json={"originProduct": act_payload},
+                    )
+                await _aio.sleep(1.0)
+
+                new_no = new_no_raw
                 if new_no:
                     # 4) 등록 후 카테고리 실측 검증
                     await _aio.sleep(1.5)
