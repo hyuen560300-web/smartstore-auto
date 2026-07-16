@@ -7362,6 +7362,51 @@ async def rereg_result():
     return _rereg_state
 
 
+@app.post("/rereg-recover-dg")
+async def rereg_recover_dg(dg_item_no: str, prod_name: str = ""):
+    """소멸된 상품을 DG item_no로 복구 등록 (재등록 실패 후 긴급 복구용)."""
+    import httpx as _hx
+    from main import (
+        _dg_item_detail as _dg_det,
+        build_product_payload,
+        calculate_selling_price,
+    )
+    try:
+        detail = await _dg_det(dg_item_no)
+        if not detail:
+            return {"ok": False, "reason": "DG 상세 없음(품절추정)"}
+        basis = detail.get("basis") or {}
+        price_info = detail.get("price") or {}
+        thumb = detail.get("thumb") or {}
+        qty = detail.get("qty") or {}
+        wholesale = int(price_info.get("dome", 0) or 0)
+        if wholesale <= 0:
+            return {"ok": False, "reason": "도매가 0"}
+        title = prod_name or basis.get("title", "") or f"DG_{dg_item_no}"
+        image = thumb.get("original", "") or thumb.get("large", "")
+        stock = int(qty.get("inventory", 100) or 100)
+        deli = int(price_info.get("deli", 0) or 0)
+        selling_price = round(max(wholesale * 2.2, wholesale * 1.15) / 10) * 10
+        raw = {
+            "code": f"DG_{dg_item_no}",
+            "name": title,
+            "price": wholesale,
+            "image": image,
+            "stock": stock,
+            "delivery_type": "무료배송" if not deli else "",
+            "delivery_fee": deli or 3000,
+        }
+        payload = build_product_payload(raw, {"product_name": title}, selling_price)
+        result = await naver_api.register_product(payload)
+        if result and isinstance(result, dict):
+            new_no = str(result.get("originProductNo", ""))
+            return {"ok": True, "new_no": new_no, "wholesale": wholesale,
+                    "selling_price": selling_price, "name": title}
+        return {"ok": False, "reason": "register_product 반환값 없음"}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)[:300]}
+
+
 @app.post("/rereg-batch")
 async def rereg_batch(
     background_tasks: BackgroundTasks,
@@ -7546,7 +7591,17 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
                 new_payload["originProduct"]["statusType"] = "SALE"
                 new_payload["originProduct"]["salePrice"] = new_sale_price
                 new_payload["originProduct"]["costPrice"] = new_wholesale
-                # detailContent는 op에 이미 포함돼 있으므로 별도 처리 불필요
+
+                # KC 인증 필드 정리: kindType=null인 항목 제거
+                # (기존 op에 잘못된 productCertificationInfos가 있으면 카테고리 변경 시 Naver 400)
+                _da = new_payload["originProduct"].get("detailAttribute") or {}
+                _certs = _da.get("productCertificationInfos") or []
+                _valid = [c for c in _certs if (c.get("kindType") or c.get("certificationKindType"))]
+                if _valid:
+                    _da["productCertificationInfos"] = _valid
+                else:
+                    _da.pop("productCertificationInfos", None)
+                new_payload["originProduct"]["detailAttribute"] = _da
 
                 if dry_run:
                     item_log["status"] = "DRY-재등록예정"
