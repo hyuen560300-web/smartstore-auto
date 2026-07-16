@@ -6835,10 +6835,12 @@ async def category_debug(limit: int = 5):
     from main import NAVER_BASE, _dg_item_detail, get_category_id, DEFAULT_CATEGORY_ID
     hdrs = await naver_api._headers()
     async with _hx.AsyncClient(timeout=30) as c:
-        r = await c.get(
-            f"{NAVER_BASE}/v2/products",
+        r = await c.post(
+            f"{NAVER_BASE}/v1/products/search",
             headers=hdrs,
-            params={"productStatusTypes": "SALE", "page": 1, "size": min(limit, 20)},
+            json={"productStatusTypes": ["SALE"], "page": 1, "size": min(limit, 20),
+                  "orderType": "NO", "periodType": "PROD_REG_DAY",
+                  "fromDate": "2020-01-01", "toDate": "2030-12-31"},
         )
     items = r.json().get("contents", [])
     results = []
@@ -7028,13 +7030,17 @@ async def _fill_attributes_job(limit: int = 0, dry_run: bool = False):
     try:
         hdrs = await naver_api._headers()
 
-        # 1. SALE 상품 전체 수집
+        # 1. SALE 상품 전체 수집 (POST /v1/products/search)
         all_products = []
         page = 1
         async with _hx.AsyncClient(timeout=25) as c:
             while True:
-                r = await c.get(f"{NAVER_BASE}/v2/products", headers=hdrs,
-                                params={"page": page, "size": 50, "productStatusTypes": "SALE"})
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                          "orderType": "NO", "periodType": "PROD_REG_DAY",
+                          "fromDate": "2020-01-01", "toDate": "2030-12-31"},
+                )
                 if r.status_code != 200:
                     break
                 items = r.json().get("contents", [])
