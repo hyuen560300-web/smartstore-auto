@@ -4254,6 +4254,22 @@ async def pipeline_register_from_domeggook(
                 results["ip_blocked"] += 1
                 continue
 
+            # ─── 네이버 경쟁가 사전 게이트: 도매가 ≥ 최저가×0.70 → 마진 불가 ───
+            competitor_prices = await search_naver_shopping(str(p.get("name", "")))
+            if competitor_prices:
+                _gate_min = min(
+                    (c["price"] for c in competitor_prices if c.get("price", 0) > 0),
+                    default=None,
+                )
+                if _gate_min and _ss_wholesale >= _gate_min * 0.70:
+                    print(
+                        f"[소싱게이트] ⛔ 차단: {p.get('name','')[:25]} — "
+                        f"도매가₩{_ss_wholesale:,} ≥ 최저가₩{_gate_min:,}×0.70=₩{int(_gate_min*0.70):,}",
+                        flush=True,
+                    )
+                    results["skip"] += 1
+                    continue
+
             review = await employee_review_analyst(str(p.get("name", "")), ANTHROPIC_API_KEY)
             context = {
                 "season": season_info,
@@ -4284,8 +4300,8 @@ async def pipeline_register_from_domeggook(
                 ai["tags"] = _tags[:10]
                 print(f"[STEP2] 태그 기본값 보완 → {len(ai['tags'])}개", flush=True)
 
-            competitor_prices = await search_naver_shopping(str(p.get("name", "")))
-            # ② 네이버쇼핑 신뢰도 체크: 최저가가 도매가의 50% 미만이면 부품/단품 매칭 → 폴백
+            # competitor_prices: 소싱게이트에서 이미 수집 — 중복 API 호출 없음
+            # ② 신뢰도 체크: 최저가 < 도매가×0.50 → 부품/단품 매칭 → 폴백
             if competitor_prices:
                 _ss_naver_min = min((c["price"] for c in competitor_prices if c.get("price", 0) > 0), default=None)
                 if _ss_naver_min and _ss_naver_min < _ss_wholesale * 0.5:
