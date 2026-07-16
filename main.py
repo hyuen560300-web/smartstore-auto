@@ -331,8 +331,16 @@ class _SeasonInfoProxy:
 _SEASON_INFO = _SeasonInfoProxy()
 
 def _is_season_excluded(name: str) -> bool:
-    """상품명에 현재 계절과 맞지 않는 키워드 포함 시 True."""
-    return any(kw in name for kw in _SEASON_INFO["blocked"])
+    """상품명에 현재 계절과 맞지 않는 키워드 포함 시 True (단어 경계 체크)."""
+    for kw in _SEASON_INFO["blocked"]:
+        idx = name.find(kw)
+        while idx != -1:
+            before_ok = idx == 0 or not ('가' <= name[idx - 1] <= '힣')
+            after_ok  = (idx + len(kw)) >= len(name) or not ('가' <= name[idx + len(kw)] <= '힣')
+            if before_ok and after_ok:
+                return True
+            idx = name.find(kw, idx + 1)
+    return False
 
 def _get_rotating_keywords(n: int = 15) -> list[str]:
     """날짜 시드 기반으로 매일 다른 키워드 n개 선택. 계절/이벤트 키워드 우선 포함."""
@@ -2566,7 +2574,8 @@ async def _save_to_obsidian(product_name: str, category: str, detail_html: str,
         date_str  = _dt.now().strftime("%Y-%m-%d")
         now_str   = _dt.now().strftime("%Y-%m-%d %H:%M")
         safe_name = re.sub(r'[\\/:*?"<>|]', '_', product_name[:30])
-        path      = f"Products/{category or 'General'}/{date_str}_{safe_name}.md"
+        _cat_folder = category if category and category not in ('직접판매',) else 'General'
+        path      = f"Products/{_cat_folder}/{date_str}_{safe_name}.md"
         tag_str   = ", ".join(str(t) for t in tags[:10])
         channel_lines = "\n".join(f"- {k}: {v}" for k, v in (channels or {}).items() if v)
         md = (
@@ -2601,6 +2610,17 @@ async def _save_to_obsidian(product_name: str, category: str, detail_html: str,
                 )
                 if r.status_code in (200, 204):
                     print(f"[OBSIDIAN] ✅ {path}", flush=True)
+                elif r.status_code == 403 and _cat_folder != 'General':
+                    fallback_path = f"Products/General/{date_str}_{safe_name}.md"
+                    r2 = await _oc.put(
+                        f"{_obs_url}/vault/{fallback_path}",
+                        headers={"Authorization": f"Bearer {_obs_key}", "Content-Type": "text/markdown"},
+                        content=md.encode("utf-8"),
+                    )
+                    if r2.status_code in (200, 204):
+                        print(f"[OBSIDIAN] ✅ 폴백 저장 {fallback_path}", flush=True)
+                    else:
+                        print(f"[OBSIDIAN] ⚠️ 폴백 실패 {r2.status_code}", flush=True)
                 else:
                     print(f"[OBSIDIAN] ⚠️ {r.status_code} {path}", flush=True)
         except Exception as _oe:
