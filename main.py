@@ -1050,11 +1050,9 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     raw_img_use = str(basis.get("img_use", "Y") or "Y").strip().upper()
     img_use_ok  = raw_img_use in ("Y", "1", "YES", "TRUE")
 
-    # 재고: qty.inventory (기본 100 캡) — 0이면 _stock_raw=0 보존
-    qty      = detail.get("qty", {}) if detail else {}
-    _inv_raw = qty.get("inventory")
-    stock_raw = _to_int(str(_inv_raw)) if _inv_raw is not None else 100
-    stock    = min(max(stock_raw or 0, 0), 100)
+    # 재고: qty.inventory (기본 100 캡)
+    qty   = detail.get("qty", {}) if detail else {}
+    stock = min(_to_int(str(qty.get("inventory", 100))) or 100, 100)
 
     # 상세 설명 HTML (공급사 상세페이지 이미지 포함)
     content = str(detail.get("content", "") or "") if detail else ""
@@ -1070,7 +1068,6 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
         "image":            image,
         "category":         category,
         "stock":            stock,
-        "_stock_raw":       stock_raw,
         "source":           "domeggook",
         "_dg_no":           no,
         "_dg_content":      content,
@@ -4051,13 +4048,7 @@ async def pipeline_register_from_domeggook(
         if not products:
             return {"status": "error", "message": "도매꾹+온채널 모두 상품 없음 — DG IP차단 여부 및 ONCH3_ID/PW 확인"}
 
-    # ② 재고 0 사전 필터 (DG qty.inventory=0이면 소싱 제외)
-    _before_stock = len(products)
-    products = [p for p in products if (p.get("_stock_raw", 100) or 0) > 0]
-    if _before_stock != len(products):
-        print(f"[FILTER-STOCK] 재고0 제외: {_before_stock - len(products)}개", flush=True)
-
-    # ③ 소싱팀장 선별
+    # ② 소싱팀장 선별
     products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
     print(f"[소싱팀장] {len(products)}개 선별", flush=True)
 
