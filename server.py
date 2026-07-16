@@ -6836,36 +6836,41 @@ async def category_debug(limit: int = 5):
     hdrs = await naver_api._headers()
     async with _hx.AsyncClient(timeout=30) as c:
         r = await c.get(
-            f"{NAVER_BASE}/v2/products/origin-products",
+            f"{NAVER_BASE}/v2/products",
             headers=hdrs,
-            params={"originProductStatusType": "SALE", "page": 1, "size": min(limit, 20)},
+            params={"productStatusTypes": "SALE", "page": 1, "size": min(limit, 20)},
         )
-    items = r.json().get("originProducts", [])
+    items = r.json().get("contents", [])
     results = []
-    for item in items[:limit]:
-        op = item.get("originProduct", {})
-        origin_no = str(item.get("originProductNo", ""))
-        name = op.get("name", "")
-        leaf_cat = op.get("leafCategoryId", 0)
-        seller_code = op.get("sellerManagementCode", "")
-        dg_section, computed_cat, detail_ok = "", DEFAULT_CATEGORY_ID, False
-        if seller_code.startswith("DG_"):
-            detail = await _dg_item_detail(seller_code[3:])
-            detail_ok = bool(detail)
-            basis = detail.get("basis", {})
-            dg_section = str(basis.get("section") or basis.get("keywords") or "")
-            cat_str = dg_section.split(">")[0].strip()
-            computed_cat = get_category_id({"category": cat_str, "name": name})
-        results.append({
-            "origin_no": origin_no, "name": name[:40],
-            "registered_leafCategoryId": leaf_cat,
-            "seller_code": seller_code,
-            "dg_detail_ok": detail_ok,
-            "dg_section": dg_section,
-            "category_first_part": dg_section.split(">")[0].strip() if dg_section else "",
-            "computed_get_category_id": computed_cat,
-            "would_change": leaf_cat != computed_cat,
-        })
+    async with _hx.AsyncClient(timeout=30) as c:
+        for item in items[:limit]:
+            origin_no = str(item.get("originProductNo", ""))
+            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+            if rd.status_code != 200:
+                results.append({"origin_no": origin_no, "error": rd.status_code})
+                continue
+            op = rd.json().get("originProduct", {})
+            name = op.get("name", "")
+            leaf_cat = op.get("leafCategoryId", 0)
+            seller_code = op.get("sellerManagementCode", "")
+            dg_section, computed_cat, detail_ok = "", DEFAULT_CATEGORY_ID, False
+            if seller_code.startswith("DG_"):
+                detail = await _dg_item_detail(seller_code[3:])
+                detail_ok = bool(detail)
+                basis = detail.get("basis", {})
+                dg_section = str(basis.get("section") or basis.get("keywords") or "")
+                cat_str = dg_section.split(">")[0].strip()
+                computed_cat = get_category_id({"category": cat_str, "name": name})
+            results.append({
+                "origin_no": origin_no, "name": name[:40],
+                "registered_leafCategoryId": leaf_cat,
+                "seller_code": seller_code,
+                "dg_detail_ok": detail_ok,
+                "dg_section": dg_section,
+                "category_first_part": dg_section.split(">")[0].strip() if dg_section else "",
+                "computed_get_category_id": computed_cat,
+                "would_change": leaf_cat != computed_cat,
+            })
     return JSONResponse(results)
 
 
