@@ -7593,6 +7593,14 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
                 new_cat = _get_cat({"name": prod_name, "category": dg_section})
                 item_log["dg_code"] = dg_code  # 복구 추적용
                 item_log["new_cat"] = new_cat
+                # 카테고리 매핑 실패(DEFAULT_CAT 반환) → 재등록 불필요, 기존 상품 유지
+                if new_cat == _DEF_CAT:
+                    item_log["status"] = "SKIP-카테고리매핑실패"
+                    _rereg_state["skip"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1)
+                    continue
                 item_log["dg_section"] = dg_section[:30] if dg_section else ""
                 item_log["new_wholesale"] = new_wholesale
                 item_log["new_sale_price"] = new_sale_price
