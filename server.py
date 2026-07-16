@@ -7500,14 +7500,17 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
                         headers=hdrs,
                     )
                 if rg.status_code == 429:
-                    # 429 → 8초 대기 후 1회 재시도
-                    await _aio.sleep(8.0)
-                    hdrs = await naver_api._headers()
-                    async with _hx.AsyncClient(timeout=15) as c:
-                        rg = await c.get(
-                            f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
-                            headers=hdrs,
-                        )
+                    # 429 → 최대 3회 재시도 (12s/20s/30s)
+                    for _wait in (12, 20, 30):
+                        await _aio.sleep(_wait)
+                        hdrs = await naver_api._headers()
+                        async with _hx.AsyncClient(timeout=15) as c:
+                            rg = await c.get(
+                                f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                                headers=hdrs,
+                            )
+                        if rg.status_code != 429:
+                            break
                 if rg.status_code != 200:
                     item_log.update({"status": f"ERR-GET{rg.status_code}"})
                     _rereg_state["err"] += 1
@@ -7526,6 +7529,15 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
                 old_cost = op.get("costPrice") or 0
                 item_log["name"] = prod_name
                 item_log["old_cat"] = cur_cat
+
+                # 이미 올바른 카테고리면 SKIP (DEFAULT_CAT 50002480이 아닌 경우)
+                if str(cur_cat) != str(_DEF_CAT):
+                    item_log["status"] = "SKIP-이미올바른카테고리"
+                    _rereg_state["skip"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.0)
+                    continue
 
                 # DG 코드 추출
                 seller_info = (op.get("detailAttribute") or {}).get("sellerCodeInfo") or {}
