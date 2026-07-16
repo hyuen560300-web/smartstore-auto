@@ -7368,9 +7368,11 @@ async def rereg_batch(
     offset: int = 0,
     size: int = 5,
     dry_run: bool = True,
+    stop_on_error: bool = True,
 ):
     """SALE 상품 배치 삭제+재등록 (카테고리 교정).
-    dry_run=true(기본)로 먼저 미리보기 확인 후 dry_run=false로 실행."""
+    dry_run=true(기본)로 먼저 미리보기 확인 후 dry_run=false로 실행.
+    stop_on_error=true(기본): 에러 1건 발생 시 즉시 중단."""
     global _rereg_state
     if _rereg_state.get("running"):
         return JSONResponse({"error": "이미 실행 중"}, status_code=409)
@@ -7379,11 +7381,13 @@ async def rereg_batch(
         "total_sale": 0, "processed": 0, "ok": 0, "skip": 0, "err": 0,
         "items": [], "errors": [],
     }
-    background_tasks.add_task(_rereg_batch_job, offset=offset, size=size, dry_run=dry_run)
-    return {"status": "started", "dry_run": dry_run, "offset": offset, "size": size}
+    background_tasks.add_task(_rereg_batch_job, offset=offset, size=size,
+                              dry_run=dry_run, stop_on_error=stop_on_error)
+    return {"status": "started", "dry_run": dry_run, "offset": offset,
+            "size": size, "stop_on_error": stop_on_error}
 
 
-async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
+async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error: bool = True):
     global _rereg_state
     import httpx as _hx, asyncio as _aio
     from main import (
@@ -7443,8 +7447,8 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                         headers=hdrs,
                     )
                 if rg.status_code == 429:
-                    # 429 → 5초 대기 후 1회 재시도
-                    await _aio.sleep(5.0)
+                    # 429 → 8초 대기 후 1회 재시도
+                    await _aio.sleep(8.0)
                     hdrs = await naver_api._headers()
                     async with _hx.AsyncClient(timeout=15) as c:
                         rg = await c.get(
@@ -7456,6 +7460,9 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["err"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
+                    if stop_on_error:
+                        _rereg_state["stopped_reason"] = f"ERR-GET{rg.status_code} at {origin_no}"
+                        break
                     await _aio.sleep(2.5)
                     continue
 
@@ -7586,7 +7593,10 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["err"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    if stop_on_error:
+                        _rereg_state["stopped_reason"] = f"삭제실패({r_del.status_code}) at {origin_no}"
+                        break
+                    await _aio.sleep(2.5)
                     continue
 
                 await _aio.sleep(1.0)
@@ -7616,6 +7626,13 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     item_log["status"] = "ERR-등록실패(상품삭제됨)"
                     _rereg_state["errors"].append(f"{origin_no} register_product 실패 — 상품 소멸")
                     _rereg_state["err"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    if stop_on_error:
+                        _rereg_state["stopped_reason"] = f"등록실패(상품소멸) at {origin_no}"
+                        break
+                    await _aio.sleep(3.0)
+                    continue
 
                 _rereg_state["items"].append(item_log)
                 _rereg_state["processed"] += 1
@@ -7627,6 +7644,9 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                 _rereg_state["err"] += 1
                 _rereg_state["items"].append(item_log)
                 _rereg_state["processed"] += 1
+                if stop_on_error:
+                    _rereg_state["stopped_reason"] = f"예외 at {origin_no}: {str(e)[:60]}"
+                    break
                 await _aio.sleep(2.5)
 
     except Exception as e:
