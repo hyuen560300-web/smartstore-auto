@@ -6843,10 +6843,12 @@ async def category_debug(limit: int = 5):
                   "fromDate": "2020-01-01", "toDate": "2030-12-31"},
         )
     items = r.json().get("contents", [])
+    import asyncio as _asyncio
     results = []
     async with _hx.AsyncClient(timeout=30) as c:
         for item in items[:limit]:
             origin_no = str(item.get("originProductNo", ""))
+            await _asyncio.sleep(0.4)
             rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
             if rd.status_code != 200:
                 results.append({"origin_no": origin_no, "error": rd.status_code})
@@ -6854,7 +6856,7 @@ async def category_debug(limit: int = 5):
             op = rd.json().get("originProduct", {})
             name = op.get("name", "")
             leaf_cat = op.get("leafCategoryId", 0)
-            seller_code = op.get("sellerManagementCode", "")
+            seller_code = (op.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
             dg_section, computed_cat, detail_ok = "", DEFAULT_CATEGORY_ID, False
             if seller_code.startswith("DG_"):
                 detail = await _dg_item_detail(seller_code[3:])
