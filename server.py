@@ -7442,12 +7442,21 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                         f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
                         headers=hdrs,
                     )
+                if rg.status_code == 429:
+                    # 429 → 5초 대기 후 1회 재시도
+                    await _aio.sleep(5.0)
+                    hdrs = await naver_api._headers()
+                    async with _hx.AsyncClient(timeout=15) as c:
+                        rg = await c.get(
+                            f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                            headers=hdrs,
+                        )
                 if rg.status_code != 200:
                     item_log.update({"status": f"ERR-GET{rg.status_code}"})
                     _rereg_state["err"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    await _aio.sleep(2.5)
                     continue
 
                 op = rg.json().get("originProduct", {})
@@ -7467,7 +7476,7 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["skip"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    await _aio.sleep(2.5)
                     continue
 
                 if dg_code.upper().startswith("DG_"):
@@ -7479,7 +7488,7 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["skip"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    await _aio.sleep(2.5)
                     continue
 
                 # DG 최신 상세 조회
@@ -7489,7 +7498,7 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["skip"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    await _aio.sleep(2.5)
                     continue
 
                 # 새 도매가 파싱 (DG 현재가 우선, 없으면 기존 costPrice)
@@ -7501,16 +7510,17 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["skip"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    await _aio.sleep(2.5)
                     continue
 
                 # 판매가: floor=×1.15, target=×2.2, 10원 단위
                 new_sale_price = round(max(new_wholesale * 2.2, new_wholesale * 1.15) / 10) * 10
 
-                # _dg_to_product으로 새 payload 생성 (get_category_id step4 자동 적용)
+                # _dg_to_product으로 새 payload 생성
+                # title에 Naver 등록명 사용 → step4 키워드 매칭이 한국어 기준으로 동작
                 item_stub = {
                     "no": item_no,
-                    "title": (dg_detail.get("basis") or {}).get("title") or prod_name,
+                    "title": prod_name,  # DG title 대신 Naver 상품명 우선
                     "thumb": ((dg_detail.get("thumb") or {}).get("original", "")),
                     "price": new_wholesale,
                     "deli": 0,
@@ -7521,11 +7531,17 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["skip"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    await _aio.sleep(2.5)
                     continue
 
-                new_cat = new_payload.get("leafCategoryId", _DEF_CAT)
+                # 카테고리 직접 재판정: Naver 상품명 + DG 섹션 둘 다 참조
+                # (_dg_to_product 반환값은 내부 dict — leafCategoryId 없음)
+                dg_section = (dg_detail.get("basis") or {}).get("section", "")
+                new_cat = _get_cat({"name": prod_name, "category": dg_section})
+                # category_id 주입 → register_product 내 get_category_id step1에서 즉시 적용
+                new_payload["category_id"] = new_cat
                 item_log["new_cat"] = new_cat
+                item_log["dg_section"] = dg_section[:30] if dg_section else ""
                 item_log["new_wholesale"] = new_wholesale
                 item_log["new_sale_price"] = new_sale_price
 
@@ -7543,7 +7559,7 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                     _rereg_state["ok"] += 1
                     _rereg_state["items"].append(item_log)
                     _rereg_state["processed"] += 1
-                    await _aio.sleep(1.2)
+                    await _aio.sleep(2.5)
                     continue
 
                 # ── 실제 처리: SUSPENSION → DELETE → 재등록 ──
@@ -7603,7 +7619,7 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
 
                 _rereg_state["items"].append(item_log)
                 _rereg_state["processed"] += 1
-                await _aio.sleep(2.0)
+                await _aio.sleep(3.0)
 
             except Exception as e:
                 item_log["status"] = f"ERR-예외: {str(e)[:60]}"
@@ -7611,7 +7627,7 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
                 _rereg_state["err"] += 1
                 _rereg_state["items"].append(item_log)
                 _rereg_state["processed"] += 1
-                await _aio.sleep(1.2)
+                await _aio.sleep(2.5)
 
     except Exception as e:
         _rereg_state["errors"].append(f"[FATAL] {str(e)}")
