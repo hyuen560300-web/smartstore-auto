@@ -6627,6 +6627,15 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
                 # 새 판매가: 기본 ×2.2, floor=도매가×1.15, 10원 단위
                 new_sale_price = round(max(new_wholesale * 2.2, new_wholesale * 1.15) / 10) * 10
 
+                from main import (
+                    get_category_id as _get_cat_id,
+                    _dg_to_product as _dg_to_prod_fn,
+                    _dg_item_detail as _dg_detail_fn,
+                    DEFAULT_CATEGORY_ID as _DEFAULT_CAT,
+                )
+                _SKIP2 = {"originProductNo","channelProductNo","regDate","modDate",
+                          "statusFrom","totalSalesQuantity","channelProducts"}
+
                 if not dry_run:
                     try:
                         async with _hx.AsyncClient(timeout=15) as c2:
@@ -6635,41 +6644,86 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
                                 headers=hdrs,
                             )
                         if rg.status_code == 200:
-                            _SKIP2 = {"originProductNo","channelProductNo","regDate","modDate",
-                                      "statusFrom","totalSalesQuantity","channelProducts"}
-                            payload2 = {k: v for k, v in rg.json().get("originProduct", {}).items()
-                                        if k not in _SKIP2}
-                            payload2["statusType"] = "SALE"
-                            payload2["salePrice"] = new_sale_price
-                            payload2["costPrice"] = new_wholesale
-                            payload2.setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
-                            async with _hx.AsyncClient(timeout=20) as c2:
-                                rp = await c2.put(
-                                    f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
-                                    headers=hdrs, json={"originProduct": payload2},
-                                )
-                            if rp.status_code == 200:
-                                _dg_stock_state["restocked"] += 1
-                                _dg_stock_state["restock_items"].append({
-                                    "origin_no": origin_no, "name": prod_name,
-                                    "dg_code": dg_code,
-                                    "new_wholesale": new_wholesale,
-                                    "new_sale_price": new_sale_price,
-                                })
-                                print(f"[RESTOCK] ✅ {prod_name} 재개: 도매가={new_wholesale:,} 판매가={new_sale_price:,}", flush=True)
-                            else:
-                                _dg_stock_state["errors"].append(
-                                    f"{origin_no} restock PUT {rp.status_code}: {rp.text[:80]}")
+                            _rg_op = rg.json().get("originProduct", {})
+                            cur_cat = _rg_op.get("leafCategoryId", _DEFAULT_CAT)
+                            _reregistered = False
+
+                            # ── 카테고리 재판정: 잘못된 기본값(50002480)이면 삭제+재등록 ──
+                            if cur_cat == _DEFAULT_CAT:
+                                new_cat = _get_cat_id({"name": prod_name})
+                                if new_cat != _DEFAULT_CAT:
+                                    print(f"[RESTOCK] 카테고리 재판정 {prod_name[:20]}: {cur_cat}→{new_cat}, 삭제+재등록", flush=True)
+                                    try:
+                                        _dg_det = await _dg_detail_fn(item_no)
+                                        if _dg_det:
+                                            _item_stub = {
+                                                "no": item_no,
+                                                "title": _dg_det.get("basis", {}).get("title") or prod_name,
+                                                "thumb": (_dg_det.get("thumb") or {}).get("original", ""),
+                                                "price": (_dg_det.get("price") or {}).get("dome", 0),
+                                                "deli": 0,
+                                            }
+                                            _new_payload = _dg_to_prod_fn(_item_stub, _dg_det)
+                                            if _new_payload:
+                                                _new_payload["salePrice"] = new_sale_price
+                                                _new_payload["costPrice"] = new_wholesale
+                                                _new_payload["statusType"] = "SALE"
+                                                async with _hx.AsyncClient(timeout=15) as c_del:
+                                                    await c_del.delete(
+                                                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                                                        headers=hdrs,
+                                                    )
+                                                _new_no = await naver_api.register_product(_new_payload)
+                                                if _new_no:
+                                                    _reregistered = True
+                                                    _dg_stock_state["restocked"] += 1
+                                                    _dg_stock_state["restock_items"].append({
+                                                        "origin_no": _new_no, "name": prod_name,
+                                                        "dg_code": dg_code,
+                                                        "new_wholesale": new_wholesale,
+                                                        "new_sale_price": new_sale_price,
+                                                        "category_fixed": f"{cur_cat}→{new_cat}",
+                                                    })
+                                                    print(f"[RESTOCK] ✅ {prod_name[:20]} 카테고리교정+재등록: cat={new_cat}", flush=True)
+                                    except Exception as e_rr:
+                                        _dg_stock_state["errors"].append(f"{origin_no} re-register: {str(e_rr)[:80]}")
+
+                            # ── 재등록 미실행이면 일반 판매재개 PUT ──
+                            if not _reregistered:
+                                payload2 = {k: v for k, v in _rg_op.items() if k not in _SKIP2}
+                                payload2["statusType"] = "SALE"
+                                payload2["salePrice"] = new_sale_price
+                                payload2["costPrice"] = new_wholesale
+                                payload2.setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
+                                async with _hx.AsyncClient(timeout=20) as c2:
+                                    rp = await c2.put(
+                                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                                        headers=hdrs, json={"originProduct": payload2},
+                                    )
+                                if rp.status_code == 200:
+                                    _dg_stock_state["restocked"] += 1
+                                    _dg_stock_state["restock_items"].append({
+                                        "origin_no": origin_no, "name": prod_name,
+                                        "dg_code": dg_code,
+                                        "new_wholesale": new_wholesale,
+                                        "new_sale_price": new_sale_price,
+                                    })
+                                    print(f"[RESTOCK] ✅ {prod_name} 재개: 도매가={new_wholesale:,} 판매가={new_sale_price:,}", flush=True)
+                                else:
+                                    _dg_stock_state["errors"].append(
+                                        f"{origin_no} restock PUT {rp.status_code}: {rp.text[:80]}")
                     except Exception as e2:
                         _dg_stock_state["errors"].append(f"{origin_no} restock: {str(e2)[:60]}")
                 else:
-                    # dry_run: 재입고 감지만 기록
+                    # dry_run: 상품명 기반 카테고리 재판정 결과만 기록 (API 호출 없음)
+                    _dry_new_cat = _get_cat_id({"name": prod_name})
+                    _cat_note = f"재등록예정({_DEFAULT_CAT}→{_dry_new_cat})" if _dry_new_cat != _DEFAULT_CAT else "카테고리정상→재개만"
                     _dg_stock_state["restock_items"].append({
                         "origin_no": origin_no, "name": prod_name, "dg_code": dg_code,
                         "new_wholesale": new_wholesale, "new_sale_price": new_sale_price,
-                        "dry_run": True,
+                        "dry_run": True, "category_note": _cat_note,
                     })
-                    print(f"[RESTOCK][DRY] {prod_name} 재입고 감지: 도매가={new_wholesale:,} 판매가={new_sale_price:,}", flush=True)
+                    print(f"[RESTOCK][DRY] {prod_name} 재입고 감지: 도매가={new_wholesale:,} 판매가={new_sale_price:,} cat={_cat_note}", flush=True)
         except Exception as e:
             _dg_stock_state["errors"].append(f"{dg_code} DG restock: {str(e)[:60]}")
 
