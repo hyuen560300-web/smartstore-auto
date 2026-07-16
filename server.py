@@ -6123,6 +6123,22 @@ async def suspend_excess_products(background_tasks: BackgroundTasks, keep: int =
     })
 
 
+@app.post("/batch-suspend")
+async def batch_suspend(nos: list[str]):
+    """특정 originProductNo 목록을 SUSPENSION 처리 (1개씩 순차, 동기 응답)."""
+    ok_list, fail_list = [], []
+    for pid in nos:
+        ok = await naver_api.set_product_status(pid, "SUSPENSION")
+        if ok:
+            ok_list.append(pid)
+            print(f"[BATCH-SUSPEND] ✅ {pid}", flush=True)
+        else:
+            fail_list.append(pid)
+            print(f"[BATCH-SUSPEND] ❌ {pid}", flush=True)
+        await asyncio.sleep(0.4)
+    return JSONResponse({"ok": ok_list, "fail": fail_list, "done": True})
+
+
 async def _run_restore_all_sale() -> None:
     """판매중지(SUSPENSION) 상품 전체를 판매중(SALE)으로 복구."""
     print("[RESTORE-SALE] 전체 복구 시작", flush=True)
