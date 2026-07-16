@@ -7059,8 +7059,11 @@ async def _fix_categories_job(limit: int, dry_run: bool):
         async with _hx.AsyncClient(timeout=25) as c:
             for item in all_products:
                 origin_no = str(item.get("originProductNo", ""))
-                await _ai.sleep(0.5)
+                await _ai.sleep(1.2)
                 rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+                if rd.status_code == 429:
+                    await _ai.sleep(3.0)
+                    rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
                 if rd.status_code != 200:
                     _fix_cat_state["errors"] += 1
                     _fix_cat_state["log"].append(f"[ERR] GET {origin_no}: {rd.status_code}")
