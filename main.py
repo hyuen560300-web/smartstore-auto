@@ -1881,12 +1881,15 @@ async def fill_product_attributes(origin_no: str, category_id: int, product_name
 
         nl = product_name.lower()
         attr_values = []
-        for group in (ra.json().get("productAttributeGroups") or []):
-            for attr in (group.get("attributes") or []):
-                avs = attr.get("attributeValues") or []
-                seq = _pick_attr_seq(attr.get("name", ""), avs, nl)
-                if seq:
-                    attr_values.append({"attributeSeq": attr["attributeSeq"], "attributeValueSeq": seq})
+        ra_data = ra.json()
+        raw_attrs: list = ra_data if isinstance(ra_data, list) else [
+            a for g in (ra_data.get("productAttributeGroups") or []) for a in (g.get("attributes") or [])
+        ]
+        for attr in raw_attrs:
+            avs = attr.get("attributeValues") or []
+            seq = _pick_attr_seq(attr.get("name", ""), avs, nl)
+            if seq:
+                attr_values.append({"attributeSeq": attr["attributeSeq"], "attributeValueSeq": seq})
 
         if not attr_values:
             return False

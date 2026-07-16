@@ -6832,19 +6832,25 @@ async def get_category_attributes_endpoint(category_id: int):
         if r.status_code != 200:
             return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:400]}, status_code=400)
         data = r.json()
+        # Naver API 응답 두 가지 형태 처리: list 또는 {productAttributeGroups:[...]}
+        raw_list: list = []
+        if isinstance(data, list):
+            raw_list = data
+        elif isinstance(data, dict):
+            for group in (data.get("productAttributeGroups") or []):
+                raw_list.extend(group.get("attributes") or [])
         attrs = []
-        for group in (data.get("productAttributeGroups") or []):
-            for attr in (group.get("attributes") or []):
-                attrs.append({
-                    "seq": attr.get("attributeSeq"),
-                    "name": attr.get("name"),
-                    "required": attr.get("required", False),
-                    "values": [
-                        {"seq": v.get("attributeValueSeq"), "name": v.get("name")}
-                        for v in (attr.get("attributeValues") or [])[:30]
-                    ],
-                })
-        return {"categoryId": category_id, "count": len(attrs), "attributes": attrs}
+        for attr in raw_list:
+            attrs.append({
+                "seq": attr.get("attributeSeq"),
+                "name": attr.get("name"),
+                "required": attr.get("required", False),
+                "values": [
+                    {"seq": v.get("attributeValueSeq"), "name": v.get("name")}
+                    for v in (attr.get("attributeValues") or [])[:30]
+                ],
+            })
+        return {"categoryId": category_id, "raw_format": type(data).__name__, "count": len(attrs), "attributes": attrs}
     except Exception as e:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
@@ -7002,10 +7008,13 @@ async def _fill_attributes_job(limit: int = 0, dry_run: bool = False):
             if r2.status_code != 200:
                 cat_cache[cat_id] = []
                 return []
+            d2 = r2.json()
             attrs = []
-            for group in (r2.json().get("productAttributeGroups") or []):
-                for attr in (group.get("attributes") or []):
-                    attrs.append(attr)
+            if isinstance(d2, list):
+                attrs = d2
+            elif isinstance(d2, dict):
+                for group in (d2.get("productAttributeGroups") or []):
+                    attrs.extend(group.get("attributes") or [])
             cat_cache[cat_id] = attrs
             return attrs
 
