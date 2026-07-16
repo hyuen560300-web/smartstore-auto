@@ -7523,43 +7523,30 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
                 # 판매가: floor=×1.15, target=×2.2, 10원 단위
                 new_sale_price = round(max(new_wholesale * 2.2, new_wholesale * 1.15) / 10) * 10
 
-                # _dg_to_product으로 새 payload 생성
-                # title에 Naver 등록명 사용 → step4 키워드 매칭이 한국어 기준으로 동작
-                item_stub = {
-                    "no": item_no,
-                    "title": prod_name,  # DG title 대신 Naver 상품명 우선
-                    "thumb": ((dg_detail.get("thumb") or {}).get("original", "")),
-                    "price": new_wholesale,
-                    "deli": 0,
-                }
-                new_payload = _dg_prod(item_stub, dg_detail)
-                if not new_payload:
-                    item_log["status"] = "SKIP-payload생성실패"
-                    _rereg_state["skip"] += 1
-                    _rereg_state["items"].append(item_log)
-                    _rereg_state["processed"] += 1
-                    await _aio.sleep(2.5)
-                    continue
-
-                # 카테고리 직접 재판정: Naver 상품명 + DG 섹션 둘 다 참조
-                # (_dg_to_product 반환값은 내부 dict — leafCategoryId 없음)
+                # 카테고리 재판정: Naver 상품명 + DG 섹션 참조
                 dg_section = (dg_detail.get("basis") or {}).get("section", "")
                 new_cat = _get_cat({"name": prod_name, "category": dg_section})
-                # category_id 주입 → register_product 내 get_category_id step1에서 즉시 적용
-                new_payload["category_id"] = new_cat
+                item_log["dg_code"] = dg_code  # 복구 추적용
                 item_log["new_cat"] = new_cat
                 item_log["dg_section"] = dg_section[:30] if dg_section else ""
                 item_log["new_wholesale"] = new_wholesale
                 item_log["new_sale_price"] = new_sale_price
 
-                # 가격·상태 오버라이드
-                new_payload["salePrice"] = new_sale_price
-                new_payload["costPrice"] = new_wholesale
-                new_payload["statusType"] = "SALE"
-
-                # 기존 HTML 이식 (Claude 재생성 비용 절약)
-                if old_html:
-                    new_payload["detailContent"] = old_html
+                # 재등록 payload: 기존 Naver op 필드 그대로 재활용 → Naver API 포맷 유지
+                # ⚠️ _dg_to_product 내부 dict를 직접 register_product에 넘기면 Naver 400 발생
+                #    (register_product는 json=payload 그대로 POST — Naver 포맷 필요)
+                new_payload = {
+                    "originProduct": {k: v for k, v in op.items() if k not in _SKIP_KEYS},
+                    "smartstoreChannelProduct": {
+                        "naverShoppingRegistration": True,
+                        "channelProductDisplayStatusType": "ON",
+                    },
+                }
+                new_payload["originProduct"]["leafCategoryId"] = new_cat
+                new_payload["originProduct"]["statusType"] = "SALE"
+                new_payload["originProduct"]["salePrice"] = new_sale_price
+                new_payload["originProduct"]["costPrice"] = new_wholesale
+                # detailContent는 op에 이미 포함돼 있으므로 별도 처리 불필요
 
                 if dry_run:
                     item_log["status"] = "DRY-재등록예정"
@@ -7639,13 +7626,13 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
                 await _aio.sleep(3.0)
 
             except Exception as e:
-                item_log["status"] = f"ERR-예외: {str(e)[:60]}"
-                _rereg_state["errors"].append(f"{origin_no}: {str(e)[:80]}")
+                item_log["status"] = f"ERR-예외: {str(e)[:200]}"
+                _rereg_state["errors"].append(f"{origin_no}: {str(e)[:500]}")
                 _rereg_state["err"] += 1
                 _rereg_state["items"].append(item_log)
                 _rereg_state["processed"] += 1
                 if stop_on_error:
-                    _rereg_state["stopped_reason"] = f"예외 at {origin_no}: {str(e)[:60]}"
+                    _rereg_state["stopped_reason"] = f"예외 at {origin_no}: {str(e)[:200]}"
                     break
                 await _aio.sleep(2.5)
 
