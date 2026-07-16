@@ -7353,6 +7353,272 @@ async def _fill_attributes_job(limit: int = 0, dry_run: bool = False):
         _fill_attr_state["log"].append(f"[FATAL] {str(e)}")
 
 
+# ── SALE 상품 배치 삭제+재등록 (카테고리 교정) ─────────────────────────────
+_rereg_state: dict = {"running": False}
+
+
+@app.get("/rereg-result")
+async def rereg_result():
+    return _rereg_state
+
+
+@app.post("/rereg-batch")
+async def rereg_batch(
+    background_tasks: BackgroundTasks,
+    offset: int = 0,
+    size: int = 5,
+    dry_run: bool = True,
+):
+    """SALE 상품 배치 삭제+재등록 (카테고리 교정).
+    dry_run=true(기본)로 먼저 미리보기 확인 후 dry_run=false로 실행."""
+    global _rereg_state
+    if _rereg_state.get("running"):
+        return JSONResponse({"error": "이미 실행 중"}, status_code=409)
+    _rereg_state = {
+        "running": True, "dry_run": dry_run, "offset": offset, "size": size,
+        "total_sale": 0, "processed": 0, "ok": 0, "skip": 0, "err": 0,
+        "items": [], "errors": [],
+    }
+    background_tasks.add_task(_rereg_batch_job, offset=offset, size=size, dry_run=dry_run)
+    return {"status": "started", "dry_run": dry_run, "offset": offset, "size": size}
+
+
+async def _rereg_batch_job(offset: int, size: int, dry_run: bool):
+    global _rereg_state
+    import httpx as _hx, asyncio as _aio
+    from main import (
+        NAVER_BASE,
+        get_category_id as _get_cat,
+        _dg_to_product as _dg_prod,
+        _dg_item_detail as _dg_det,
+        DEFAULT_CATEGORY_ID as _DEF_CAT,
+    )
+
+    _SKIP_KEYS = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                  "statusFrom", "totalSalesQuantity", "channelProducts"}
+
+    try:
+        hdrs = await naver_api._headers()
+
+        # 1. 전체 SALE 상품 수집
+        all_products = []
+        page = 1
+        while True:
+            try:
+                async with _hx.AsyncClient(timeout=20) as c:
+                    r = await c.post(
+                        f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                        json={"productStatusTypes": ["SALE"], "page": page, "size": 100,
+                              "orderType": "NO", "periodType": "PROD_REG_DAY",
+                              "fromDate": "2020-01-01", "toDate": "2030-12-31"},
+                    )
+                items_page = r.json().get("contents", [])
+                if not items_page:
+                    break
+                all_products.extend(items_page)
+                if len(items_page) < 100:
+                    break
+                page += 1
+                await _aio.sleep(0.8)
+            except Exception as e_list:
+                _rereg_state["errors"].append(f"list p{page}: {str(e_list)[:60]}")
+                break
+
+        _rereg_state["total_sale"] = len(all_products)
+        batch = all_products[offset: offset + size]
+        _rereg_state["batch_range"] = f"{offset}~{offset + len(batch) - 1} / 전체{len(all_products)}"
+
+        # 2. 배치 처리
+        for item in batch:
+            origin_no = str(item.get("originProductNo", "") or "")
+            item_log: dict = {"origin_no": origin_no}
+
+            try:
+                hdrs = await naver_api._headers()
+
+                # GET 상품 상세
+                async with _hx.AsyncClient(timeout=15) as c:
+                    rg = await c.get(
+                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                        headers=hdrs,
+                    )
+                if rg.status_code != 200:
+                    item_log.update({"status": f"ERR-GET{rg.status_code}"})
+                    _rereg_state["err"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                op = rg.json().get("originProduct", {})
+                prod_name = str(op.get("name", ""))[:50]
+                cur_cat = op.get("leafCategoryId", _DEF_CAT)
+                old_html = op.get("detailContent")  # 기존 HTML 보존
+                old_cost = op.get("costPrice") or 0
+                item_log["name"] = prod_name
+                item_log["old_cat"] = cur_cat
+
+                # DG 코드 추출
+                seller_info = (op.get("detailAttribute") or {}).get("sellerCodeInfo") or {}
+                dg_code = str(seller_info.get("sellerManagementCode", "") or "").strip()
+
+                if not dg_code:
+                    item_log["status"] = "SKIP-DG코드없음"
+                    _rereg_state["skip"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                if dg_code.upper().startswith("DG_"):
+                    item_no = dg_code[3:].strip()
+                elif dg_code.isdigit():
+                    item_no = dg_code
+                else:
+                    item_log["status"] = "SKIP-DG코드형식오류"
+                    _rereg_state["skip"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                # DG 최신 상세 조회
+                dg_detail = await _dg_det(item_no)
+                if not dg_detail:
+                    item_log["status"] = "SKIP-DG상세없음(품절추정)"
+                    _rereg_state["skip"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                # 새 도매가 파싱 (DG 현재가 우선, 없으면 기존 costPrice)
+                dg_price_raw = (dg_detail.get("price") or {}).get("dome", 0)
+                new_wholesale = int(dg_price_raw) if dg_price_raw else old_cost
+
+                if new_wholesale <= 0:
+                    item_log["status"] = "SKIP-도매가0"
+                    _rereg_state["skip"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                # 판매가: floor=×1.15, target=×2.2, 10원 단위
+                new_sale_price = round(max(new_wholesale * 2.2, new_wholesale * 1.15) / 10) * 10
+
+                # _dg_to_product으로 새 payload 생성 (get_category_id step4 자동 적용)
+                item_stub = {
+                    "no": item_no,
+                    "title": (dg_detail.get("basis") or {}).get("title") or prod_name,
+                    "thumb": ((dg_detail.get("thumb") or {}).get("original", "")),
+                    "price": new_wholesale,
+                    "deli": 0,
+                }
+                new_payload = _dg_prod(item_stub, dg_detail)
+                if not new_payload:
+                    item_log["status"] = "SKIP-payload생성실패"
+                    _rereg_state["skip"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                new_cat = new_payload.get("leafCategoryId", _DEF_CAT)
+                item_log["new_cat"] = new_cat
+                item_log["new_wholesale"] = new_wholesale
+                item_log["new_sale_price"] = new_sale_price
+
+                # 가격·상태 오버라이드
+                new_payload["salePrice"] = new_sale_price
+                new_payload["costPrice"] = new_wholesale
+                new_payload["statusType"] = "SALE"
+
+                # 기존 HTML 이식 (Claude 재생성 비용 절약)
+                if old_html:
+                    new_payload["detailContent"] = old_html
+
+                if dry_run:
+                    item_log["status"] = "DRY-재등록예정"
+                    _rereg_state["ok"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                # ── 실제 처리: SUSPENSION → DELETE → 재등록 ──
+                # 1) SUSPENSION (삭제 전 안전 처리)
+                susp_payload = {k: v for k, v in op.items() if k not in _SKIP_KEYS}
+                susp_payload["statusType"] = "SUSPENSION"
+                async with _hx.AsyncClient(timeout=15) as c:
+                    await c.put(
+                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                        headers=hdrs, json={"originProduct": susp_payload},
+                    )
+                await _aio.sleep(0.8)
+
+                # 2) DELETE
+                async with _hx.AsyncClient(timeout=15) as c:
+                    r_del = await c.delete(
+                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                        headers=hdrs,
+                    )
+                if r_del.status_code not in (200, 204):
+                    item_log["status"] = f"ERR-삭제실패({r_del.status_code})"
+                    _rereg_state["errors"].append(
+                        f"{origin_no} DELETE {r_del.status_code}: {r_del.text[:80]}")
+                    _rereg_state["err"] += 1
+                    _rereg_state["items"].append(item_log)
+                    _rereg_state["processed"] += 1
+                    await _aio.sleep(1.2)
+                    continue
+
+                await _aio.sleep(1.0)
+
+                # 3) 재등록
+                new_no = await naver_api.register_product(new_payload)
+                if new_no:
+                    # 4) 등록 후 카테고리 실측 검증
+                    await _aio.sleep(1.5)
+                    try:
+                        async with _hx.AsyncClient(timeout=15) as c:
+                            rv = await c.get(
+                                f"{NAVER_BASE}/v2/products/origin-products/{new_no}",
+                                headers=hdrs,
+                            )
+                        verified_cat = rv.json().get("originProduct", {}).get("leafCategoryId", "?")
+                        item_log["verified_cat"] = verified_cat
+                        item_log["cat_ok"] = (verified_cat == new_cat)
+                    except Exception:
+                        item_log["verified_cat"] = "검증실패"
+                        item_log["cat_ok"] = False
+
+                    item_log["new_no"] = new_no
+                    item_log["status"] = "OK"
+                    _rereg_state["ok"] += 1
+                else:
+                    item_log["status"] = "ERR-등록실패(상품삭제됨)"
+                    _rereg_state["errors"].append(f"{origin_no} register_product 실패 — 상품 소멸")
+                    _rereg_state["err"] += 1
+
+                _rereg_state["items"].append(item_log)
+                _rereg_state["processed"] += 1
+                await _aio.sleep(2.0)
+
+            except Exception as e:
+                item_log["status"] = f"ERR-예외: {str(e)[:60]}"
+                _rereg_state["errors"].append(f"{origin_no}: {str(e)[:80]}")
+                _rereg_state["err"] += 1
+                _rereg_state["items"].append(item_log)
+                _rereg_state["processed"] += 1
+                await _aio.sleep(1.2)
+
+    except Exception as e:
+        _rereg_state["errors"].append(f"[FATAL] {str(e)}")
+    finally:
+        _rereg_state["running"] = False
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
