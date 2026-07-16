@@ -6997,6 +6997,118 @@ def _pick_attr_value_seq(attr: dict, product_name: str) -> int | None:
     return values[0].get("attributeValueSeq")  # 최후 수단: 첫 번째 값
 
 
+_fix_cat_state: dict = {"running": False, "done": 0, "total": 0, "ok": 0, "skip": 0, "errors": 0, "log": []}
+
+
+@app.get("/fix-categories-result")
+async def fix_categories_result():
+    return _fix_cat_state
+
+
+@app.post("/fix-categories")
+async def fix_categories_endpoint(
+    background_tasks: BackgroundTasks,
+    limit: int = 0,
+    dry_run: bool = True,
+):
+    """상품명 기반으로 leafCategoryId를 올바른 카테고리로 교정.
+    dry_run=true: 변경 대상만 보고, 실제 PUT 없음.
+    limit=0: 전체 SALE 상품."""
+    if _fix_cat_state["running"]:
+        return JSONResponse({"status": "already_running"})
+    _fix_cat_state.update({"running": True, "done": 0, "total": 0, "ok": 0, "skip": 0, "errors": 0, "log": []})
+    background_tasks.add_task(_fix_categories_job, limit, dry_run)
+    return {"status": "started", "dry_run": dry_run, "limit": limit}
+
+
+async def _fix_categories_job(limit: int, dry_run: bool):
+    import httpx as _hx
+    import asyncio as _ai
+    from main import NAVER_BASE, get_category_id, DEFAULT_CATEGORY_ID
+
+    SKIP_KEYS = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                 "statusFrom", "totalSalesQuantity", "channelProducts"}
+    try:
+        hdrs = await naver_api._headers()
+        all_products = []
+        page = 1
+        async with _hx.AsyncClient(timeout=25) as c:
+            while True:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                          "orderType": "NO", "periodType": "PROD_REG_DAY",
+                          "fromDate": "2020-01-01", "toDate": "2030-12-31"},
+                )
+                if r.status_code != 200:
+                    _fix_cat_state["log"].append(f"[ERR] search {r.status_code}: {r.text[:200]}")
+                    break
+                items = r.json().get("contents", [])
+                if not items:
+                    break
+                all_products.extend(items)
+                if len(items) < 50:
+                    break
+                page += 1
+
+        if limit > 0:
+            all_products = all_products[:limit]
+        _fix_cat_state["total"] = len(all_products)
+        _fix_cat_state["log"].append(f"SALE 상품 {len(all_products)}개 대상 (dry_run={dry_run})")
+
+        async with _hx.AsyncClient(timeout=25) as c:
+            for item in all_products:
+                origin_no = str(item.get("originProductNo", ""))
+                await _ai.sleep(0.5)
+                rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs)
+                if rd.status_code != 200:
+                    _fix_cat_state["errors"] += 1
+                    _fix_cat_state["log"].append(f"[ERR] GET {origin_no}: {rd.status_code}")
+                    _fix_cat_state["done"] += 1
+                    continue
+
+                op = rd.json().get("originProduct", {})
+                name = op.get("name", "")
+                cur_cat = op.get("leafCategoryId", 0)
+
+                # 현재 이미 올바른 카테고리면 건너뜀
+                if str(cur_cat) != str(DEFAULT_CATEGORY_ID):
+                    _fix_cat_state["log"].append(f"[SKIP-OK] {origin_no} '{name[:25]}' cat={cur_cat}")
+                    _fix_cat_state["skip"] += 1
+                    _fix_cat_state["done"] += 1
+                    continue
+
+                new_cat = get_category_id({"name": name})
+                if new_cat == DEFAULT_CATEGORY_ID:
+                    _fix_cat_state["log"].append(f"[SKIP-NOMATCH] {origin_no} '{name[:25]}'")
+                    _fix_cat_state["skip"] += 1
+                    _fix_cat_state["done"] += 1
+                    continue
+
+                _fix_cat_state["log"].append(f"[{'DRY' if dry_run else 'PUT'}] {origin_no} '{name[:25]}' {cur_cat}→{new_cat}")
+                if not dry_run:
+                    payload = {k: v for k, v in op.items() if k not in SKIP_KEYS}
+                    payload["leafCategoryId"] = new_cat
+                    await _ai.sleep(0.5)
+                    rp = await c.put(
+                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}",
+                        headers=hdrs, json={"originProduct": payload},
+                    )
+                    if rp.status_code == 200:
+                        _fix_cat_state["ok"] += 1
+                    else:
+                        _fix_cat_state["errors"] += 1
+                        _fix_cat_state["log"].append(f"  └ PUT실패 {rp.status_code}: {rp.text[:150]}")
+                else:
+                    _fix_cat_state["ok"] += 1
+                _fix_cat_state["done"] += 1
+
+    except Exception as e:
+        _fix_cat_state["log"].append(f"[FATAL] {e}")
+    finally:
+        _fix_cat_state["running"] = False
+
+
 _fill_attr_state: dict = {"running": False, "done": 0, "total": 0, "ok": 0, "skip": 0, "errors": 0, "log": []}
 
 

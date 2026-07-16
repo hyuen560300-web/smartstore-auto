@@ -1734,6 +1734,8 @@ CATEGORY_ID_MAP = {
     "유아의류": 50000626, "장난감": 50004210,   "교육완구": 50004210, "아기용품": 50000626,
     # 자동차용품 세분화
     "차량용품": 50003970, "방향제": 50003970,   "세차용품": 50003970, "핸들커버": 50003970,
+    "자동차": 50003970,   "시트커버": 50003970,  "카시트": 50003970,   "카매트": 50003970,
+    "대시보드": 50003970, "자동차용": 50003970,
     # 여행/캐리어 세분화
     "캐리어": 50007808,  "여행파우치": 50007808, "목베개": 50007808, "안대": 50007808,
     "트래블키트": 50007808,
@@ -1768,6 +1770,12 @@ def get_category_id(product: dict, hot_trends: Optional[List[str]] = None) -> in
             mapped = CATEGORY_ID_MAP.get(kw)
             if mapped and kw in prod_name:
                 return mapped
+    # 4. 상품명 키워드로 매핑 (DG category 비어있을 때 백업 — 기존 category 매핑 실패 시 사용)
+    prod_name = str(product.get("name", ""))
+    if prod_name:
+        for k, v in CATEGORY_ID_MAP.items():
+            if v != DEFAULT_CATEGORY_ID and k in prod_name:
+                return v
     return DEFAULT_CATEGORY_ID
 
 
