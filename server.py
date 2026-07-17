@@ -5688,6 +5688,113 @@ async def startup_event():
         asyncio.create_task(_scan_dg_stock_bg(dry_run=False))
     scheduler.add_job(job_dg_stock_scan, "cron", hour=3, minute=0, id="dg_stock_scan")
 
+    # ── 01:30 KST 과적가 재검증 + 판매중지/가격조정 ─────────────────────────
+    async def _job_overpriced_scan_and_fix():
+        """매일 01:30 KST — SALE 상품 경쟁가 재검증 → 판매중지(>3x) / 가격조정(1.5~3x)."""
+        from main import search_naver_shopping
+        import math as _math
+        import httpx as _hx
+        print("[OVERPRICED-FIX] 01:30 스캔+처리 시작", flush=True)
+
+        all_products: list[dict] = []
+        page = 1
+        while True:
+            resp = await naver_api.list_products(page=page, size=50)
+            contents = resp.get("contents", [])
+            if not contents:
+                break
+            all_products.extend(contents)
+            if len(contents) < 50:
+                break
+            page += 1
+            await asyncio.sleep(0.3)
+
+        sale_products = [p for p in all_products if p.get("originProduct", {}).get("statusType") == "SALE"]
+        print(f"[OVERPRICED-FIX] SALE 상품 {len(sale_products)}개 검사", flush=True)
+
+        suspended = 0; adjusted = 0; skipped = 0; errors: list[str] = []
+        _READONLY = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                     "statusFrom", "totalSalesQuantity", "channelProducts"}
+
+        for prod in sale_products:
+            name = ""
+            try:
+                origin     = prod.get("originProduct", {})
+                product_no = str(prod.get("originProductNo", ""))
+                sale_price = int(origin.get("salePrice") or 0)
+                cost_price = int(origin.get("costPrice") or 0)
+                name       = origin.get("name", "")
+                if sale_price <= 0 or not product_no:
+                    continue
+
+                items  = await search_naver_shopping(name[:20], display=10)
+                prices = [it["price"] for it in (items or []) if it.get("price", 0) > 0]
+                if cost_price > 0:
+                    prices = [p for p in prices if p >= cost_price * 0.5]
+                if not prices:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                market_min = min(prices)
+                ratio      = sale_price / market_min if market_min > 0 else 999.0
+                floor_p    = _math.ceil(cost_price * 1.15 / 10) * 10 if cost_price > 0 else 0
+
+                if ratio <= 1.5:
+                    skipped += 1
+                    await asyncio.sleep(0.3)
+                    continue
+
+                # 경쟁불가(>3x)이고 floor도 최저가 1.5x 초과 → 판매중지
+                if ratio > 3.0 and (floor_p == 0 or (floor_p / market_min) > 1.5):
+                    ok = await naver_api.set_product_status(product_no, "SUSPENSION")
+                    if ok:
+                        suspended += 1
+                        print(f"[OVERPRICED-FIX] ⛔ 판매중지 {name[:20]} {sale_price:,}원 ratio={ratio:.1f}x", flush=True)
+                    else:
+                        errors.append(f"{name[:15]}: 판매중지 실패")
+                else:
+                    # 가격 조정 (1.5~3x 또는 >3x이지만 floor로 커버 가능)
+                    if ratio > 3.0:
+                        new_price = max(floor_p, _math.ceil(market_min * 1.2 / 10) * 10)
+                    else:
+                        target    = _math.ceil(market_min * 1.2 / 10) * 10
+                        new_price = max(target, floor_p) if floor_p > 0 else target
+
+                    if new_price <= 0 or new_price >= sale_price:
+                        skipped += 1
+                        await asyncio.sleep(0.3)
+                        continue
+
+                    headers = await naver_api._headers()
+                    url = f"https://api.commerce.naver.com/external/v2/products/origin-products/{product_no}"
+                    async with _hx.AsyncClient(timeout=20) as c:
+                        r = await c.get(url, headers=headers)
+                        if r.status_code != 200:
+                            errors.append(f"{name[:15]}: GET{r.status_code}")
+                            await asyncio.sleep(0.5)
+                            continue
+                        payload = {k: v for k, v in r.json().get("originProduct", {}).items()
+                                   if k not in _READONLY}
+                        payload["salePrice"] = new_price
+                        r2 = await c.put(url, headers=headers, json={"originProduct": payload})
+                    if r2.status_code == 200:
+                        adjusted += 1
+                        print(f"[OVERPRICED-FIX] ✅ {name[:20]} {sale_price:,}→{new_price:,}원 (ratio={ratio:.1f}x)", flush=True)
+                    else:
+                        errors.append(f"{name[:15]}: PUT{r2.status_code}")
+            except Exception as ex:
+                errors.append(f"{name[:15] or '?'}: {ex}")
+            await asyncio.sleep(0.5)
+
+        print(f"[OVERPRICED-FIX] 완료: 판매중지={suspended} 가격조정={adjusted} 유지={skipped} 오류={len(errors)}", flush=True)
+        if errors:
+            print(f"[OVERPRICED-FIX] 오류목록: {errors[:5]}", flush=True)
+
+    scheduler.add_job(_job_overpriced_scan_and_fix, "cron", hour=1, minute=30,
+                      id="overpriced_scan_fix", replace_existing=True,
+                      misfire_grace_time=3600, coalesce=True)
+    print("[SERVER] 스케줄러 등록: 과적가 재검증+처리 01:30 KST", flush=True)
+
     try:
         scheduler.start()
         print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
