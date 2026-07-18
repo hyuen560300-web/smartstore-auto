@@ -1039,20 +1039,23 @@ async def get_product_info(no: str):
         seller_code_info = (origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}
         mgmt_code = str(seller_code_info.get("sellerManagementCode") or "").strip()
         sale_price = int(origin.get("salePrice") or 0)
-        cost_price = int(origin.get("costPrice") or 0)
-        floor_price = int(cost_price * 1.25) if cost_price > 0 else 0
+
+        # DG 코드 있으면 실시간 도매가 조회 (costPrice 필드는 Naver read-only라 무용)
+        from main import _get_dg_wholesale
+        wholesale = await _get_dg_wholesale(mgmt_code) if mgmt_code.startswith("DG_") else 0
+        floor_price = int(wholesale * 1.15) if wholesale > 0 else 0
         margin = sale_price - floor_price if floor_price > 0 else None
         return JSONResponse({
             "no": no,
             "name": (origin.get("name") or "")[:80],
             "statusType": origin.get("statusType", ""),
             "salePrice": sale_price,
-            "costPrice": cost_price,
-            "costPrice_saved": cost_price > 0,
-            "sellerManagementCode": mgmt_code,
+            "wholesale": wholesale,
+            "wholesale_source": "dg_api" if wholesale > 0 else "none",
             "floor_price": floor_price,
             "margin": margin,
             "margin_ok": margin > 0 if margin is not None else None,
+            "sellerManagementCode": mgmt_code,
         })
     except Exception as e:
         import traceback
@@ -5817,10 +5820,15 @@ async def startup_event():
                 origin     = prod.get("originProduct", {})
                 product_no = str(prod.get("originProductNo", ""))
                 sale_price = int(origin.get("salePrice") or 0)
-                cost_price = int(origin.get("costPrice") or 0)
                 name       = origin.get("name", "")
                 if sale_price <= 0 or not product_no:
                     continue
+
+                # DG 코드 → 실시간 도매가 (costPrice 필드 대체)
+                from main import _get_dg_wholesale
+                dg_code = str(((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
+                               .get("sellerManagementCode") or "").strip()
+                cost_price = await _get_dg_wholesale(dg_code) if dg_code else 0
 
                 items  = await search_naver_shopping(name[:20], display=10)
                 prices = [it["price"] for it in (items or []) if it.get("price", 0) > 0]

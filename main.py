@@ -5371,8 +5371,44 @@ async def _run_advanced_performance_cleanup() -> dict:
 
 # ─── ④ 가격 경쟁 자동 조정 ──────────────────────────────────────────────────
 
+# DG 도매가 인메모리 캐시: {dg_code: (wholesale, timestamp)}
+_DG_WHOLESALE_CACHE: dict = {}
+_DG_CACHE_TTL = 3600  # 1시간
+
+
+async def _get_dg_wholesale(dg_code: str) -> int:
+    """DG 코드로 도매가 실시간 조회 (1시간 캐시). costPrice 필드 대체."""
+    if not dg_code or not dg_code.startswith("DG_"):
+        return 0
+    import time as _time, httpx as _hx
+    now = _time.time()
+    cached = _DG_WHOLESALE_CACHE.get(dg_code)
+    if cached and (now - cached[1]) < _DG_CACHE_TTL:
+        return cached[0]
+    item_no = dg_code.replace("DG_", "").strip()
+    if not item_no or not DOMEGGOOK_API_KEY:
+        return 0
+    try:
+        async with _hx.AsyncClient(timeout=12) as c:
+            r = await c.get(DOMEGGOOK_API_URL, params={
+                "ver": "4.1", "mode": "getItemList", "aid": DOMEGGOOK_API_KEY,
+                "market": "dome", "kw": item_no, "om": "json", "sz": "1",
+            })
+        raw = r.json().get("domeggook", {})
+        items = raw.get("list", {}).get("item", []) or []
+        if not isinstance(items, list):
+            items = [items]
+        wholesale = int(items[0].get("price", 0) or 0) if items else 0
+    except Exception as _e:
+        print(f"[DG_WHOLESALE] 조회 실패 {dg_code}: {_e}", flush=True)
+        return 0
+    _DG_WHOLESALE_CACHE[dg_code] = (wholesale, now)
+    print(f"[DG_WHOLESALE] {dg_code} → {wholesale:,}원 (캐시저장)", flush=True)
+    return wholesale
+
+
 async def _run_price_competition_update(limit: int = 30) -> dict:
-    """경쟁 최저가 × 1.10 초과 시 최저가 × 1.05 로 자동 인하 (원가 × 1.15 바닥)."""
+    """경쟁 최저가 × 1.10 초과 시 최저가 × 1.05 로 자동 인하 (DG 도매가 × 1.15 바닥)."""
     print("[PRICE] 가격 경쟁 자동 조정 시작", flush=True)
     results = {"checked": 0, "adjusted": 0, "skipped": 0, "errors": []}
 
@@ -5397,12 +5433,16 @@ async def _run_price_competition_update(limit: int = 30) -> dict:
             product_no = str(prod.get("originProductNo", ""))
             name       = origin.get("name", "")
             our_price  = int(origin.get("salePrice") or 0)
-            cost_price = int(origin.get("costPrice") or 0)
             if our_price <= 0:
                 continue
+
+            # DG 코드 → 실시간 도매가 (costPrice 필드 대체)
+            dg_code = str(((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
+                          .get("sellerManagementCode") or "").strip()
+            cost_price = await _get_dg_wholesale(dg_code) if dg_code else 0
             if cost_price <= 0:
                 results["skipped"] += 1
-                print(f"[PRICE] SKIP {name[:20]} — costPrice 미기입, price-audit 보류", flush=True)
+                print(f"[PRICE] SKIP {name[:20]} — DG코드 없거나 도매가 조회 실패", flush=True)
                 continue
             results["checked"] += 1
 
@@ -5418,7 +5458,7 @@ async def _run_price_competition_update(limit: int = 30) -> dict:
                 continue
 
             target    = round(min_price * 1.05 / 10) * 10
-            floor     = round(cost_price * 1.15 / 10) * 10 if cost_price > 0 else 0
+            floor     = round(cost_price * 1.15 / 10) * 10
             new_price = max(target, floor)
             if new_price <= 0 or new_price >= our_price:
                 results["skipped"] += 1
