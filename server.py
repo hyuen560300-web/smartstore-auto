@@ -2997,9 +2997,12 @@ async def _run_margin_scan_bg(
                     print(f"[MARGIN_SCAN] ⚠ 역마진 {prod_name} 판매{sale_price:,} 도매{wholesale:,} "
                           f"마진{margin:,} → 판매중지", flush=True)
                     try:
-                        ok = await naver_api.change_product_status(origin_no, "SUSPENSION")
+                        ok = await naver_api.set_product_status(origin_no, "SUSPENSION")
                         if ok:
                             _MARGIN_SCAN_STATE["suspended"] += 1
+                            print(f"[MARGIN_SCAN] 판매중지 완료 [{origin_no}]", flush=True)
+                        else:
+                            print(f"[MARGIN_SCAN] 판매중지 실패(non-200) [{origin_no}]", flush=True)
                     except Exception as e:
                         print(f"[MARGIN_SCAN] 판매중지 오류 {origin_no}: {e}", flush=True)
 
@@ -4060,13 +4063,33 @@ async def auto_cleanup_log(lines: int = 10):
 
 @app.post("/deactivate-product")
 async def deactivate_product(request: Request):
-    """🚫 상품 판매중지"""
+    """🚫 상품 판매중지 (전체 origin GET→statusType 수정→PUT)"""
+    import httpx as _hx
+    from main import NAVER_BASE
     body = await request.json()
     product_id = str(body.get("product_id", ""))
     if not product_id:
         return JSONResponse({"status": "error", "message": "product_id 필요"}, status_code=400)
-    ok = await naver_api.set_product_status(product_id, "SUSPENSION")
-    return JSONResponse({"status": "ok" if ok else "fail", "product_id": product_id})
+    try:
+        hdrs = await naver_api._headers()
+        # 1) 전체 origin 조회
+        async with _hx.AsyncClient(timeout=20) as c:
+            rg = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{product_id}", headers=hdrs)
+        if rg.status_code != 200:
+            return JSONResponse({"status": "fail", "step": "get", "http": rg.status_code,
+                                 "body": rg.text[:300]}, status_code=400)
+        origin = rg.json().get("originProduct", {})
+        # 2) statusType 수정 후 PUT
+        origin["statusType"] = "SUSPENSION"
+        async with _hx.AsyncClient(timeout=20) as c:
+            rp = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
+                             headers=hdrs, json={"originProduct": origin})
+        if rp.status_code == 200:
+            return JSONResponse({"status": "ok", "product_id": product_id})
+        return JSONResponse({"status": "fail", "step": "put", "http": rp.status_code,
+                             "body": rp.text[:500]})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
 @app.post("/activate-product")
