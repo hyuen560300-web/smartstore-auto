@@ -2790,7 +2790,7 @@ async def _run_sale_products_scan():
                     return None
                 origin = dr.json().get("originProduct", {}) or {}
                 img = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
-                dg = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+                dg = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
                 return {
                     "origin_no": str(no),
                     "name": (origin.get("name") or "")[:60],
