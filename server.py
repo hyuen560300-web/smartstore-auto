@@ -3790,6 +3790,30 @@ async def activate_product(request: Request):
     return JSONResponse({"status": "ok" if ok else "fail", "product_id": product_id})
 
 
+@app.post("/set-status-safe")
+async def set_status_safe(product_no: str, status: str):
+    """GET 전체 원본→statusType 수정→PUT 방식 안전한 상태 변경 (SALE/SUSPENSION/CLOSE).
+    set_product_status()의 partial-body 실패 문제 우회."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    if status not in ("SALE", "SUSPENSION", "CLOSE"):
+        return JSONResponse({"ok": False, "error": f"지원하지 않는 상태: {status}"})
+    headers = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=headers)
+    if r.status_code != 200:
+        return JSONResponse({"ok": False, "error": f"Naver 조회 실패: HTTP {r.status_code} {r.text[:200]}"})
+    data = r.json()
+    origin = dict(data.get("originProduct", {}))
+    old_status = origin.get("statusType", "")
+    origin["statusType"] = status
+    ok, err = await naver_api.update_product(product_no, origin)
+    if ok:
+        return JSONResponse({"ok": True, "product_no": product_no,
+                             "old_status": old_status, "new_status": status})
+    return JSONResponse({"ok": False, "error": err})
+
+
 @app.delete("/delete-product/{product_id}")
 async def delete_product(product_id: str):
     """🗑️ 상품 삭제"""
