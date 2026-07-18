@@ -2503,19 +2503,21 @@ async def set_dg_code(product_no: str, dg_code: str):
 
 @app.get("/dg-search")
 async def dg_search_keyword(keyword: str, limit: int = 10):
-    """도매꾹 itemList API 키워드 검색 — DG 상품번호/이름/도매가 반환."""
+    """도매꾹 getItemList API 키워드 검색 — DG 상품번호/이름/도매가 반환."""
     import httpx as _hx
+    from main import DOMEGGOOK_API_URL
     if not DOMEGGOOK_API_KEY:
         return JSONResponse({"ok": False, "error": "DOMEGGOOK_API_KEY 미설정"})
     try:
         async with _hx.AsyncClient(timeout=20) as c:
-            r = await c.get(
-                "https://domeggook.com/main/api/",
-                params={"mode": "itemList", "aid": DOMEGGOOK_API_KEY,
-                        "keyword": keyword, "outType": "json", "num": limit},
-            )
+            r = await c.get(DOMEGGOOK_API_URL, params={
+                "ver": "4.1", "mode": "getItemList", "aid": DOMEGGOOK_API_KEY,
+                "market": "dome", "kw": keyword, "om": "json", "sz": str(limit),
+            })
         raw = r.json().get("domeggook", {})
-        items = raw.get("list", []) or []
+        items = raw.get("list", {}).get("item", []) or []
+        if not isinstance(items, list):
+            items = [items]
         return {"ok": True, "keyword": keyword, "count": len(items),
                 "items": [{"item_no": it.get("no"), "name": it.get("name", ""),
                            "wholesale": int(it.get("price", 0) or 0)} for it in items]}
