@@ -2838,6 +2838,269 @@ async def sale_products_scan_result():
     return JSONResponse({"status": "done", "products": json.loads(val) if isinstance(val, str) else val})
 
 
+# ─── 전체 마진 스캔 (DG API 실시간 도매가 기반, resume 지원) ─────────────────
+
+_MARGIN_SCAN_STATE: dict = {"status": "idle"}
+_CS_MARGIN_KEY = "ss.margin_scan_checkpoint"
+_CS_MARGIN_RESULT = "ss.margin_scan_result"
+_CS_BASE = "https://loving-serenity-production-2635.up.railway.app"
+
+
+async def _margin_cs_get(key: str):
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{_CS_BASE}/context/{key}")
+        if r.status_code == 200:
+            val = r.json().get("value")
+            return json.loads(val) if isinstance(val, str) else val
+    except Exception:
+        pass
+    return None
+
+
+async def _margin_cs_save(key: str, value: dict):
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=10) as c:
+            await c.post(f"{_CS_BASE}/context",
+                         json={"key": key, "value": json.dumps(value), "category": "audit"})
+    except Exception as _e:
+        print(f"[MARGIN_SCAN] context_store 저장 실패 {key}: {_e}", flush=True)
+
+
+async def _run_margin_scan_bg(
+    resume_from: int = 0,
+    resume_nos: list | None = None,
+    resume_counts: dict | None = None,
+    resume_negative: list | None = None,
+):
+    """전체 SALE 상품 마진 스캔. DG API 실시간 도매가로 역마진 감지 → 즉시 판매중지."""
+    import httpx as _hx, asyncio as _aio, time as _time
+    from main import NAVER_BASE, _get_dg_wholesale
+    global _MARGIN_SCAN_STATE
+
+    _MARGIN_SCAN_STATE = {
+        "status": "running", "total": 0, "scanned": 0,
+        "margin_safe": 0, "negative_margin": 0, "no_dg_code": 0,
+        "errors": 0, "suspended": 0, "done": False,
+    }
+    if resume_counts:
+        _MARGIN_SCAN_STATE.update({k: resume_counts.get(k, 0) for k in
+            ("scanned", "margin_safe", "negative_margin", "no_dg_code", "errors", "suspended")})
+
+    hdrs = await naver_api._headers()
+
+    # Phase 1: SALE 상품 origin_no 전체 수집
+    if resume_nos:
+        all_nos = list(resume_nos)
+        print(f"[MARGIN_SCAN] 재개: {resume_from}/{len(all_nos)}번째부터", flush=True)
+    else:
+        all_nos = []
+        page = 1
+        while True:
+            try:
+                async with _hx.AsyncClient(timeout=20) as c:
+                    r = await c.post(
+                        f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                        json={
+                            "productStatusTypes": ["SALE"],
+                            "page": page, "size": 100,
+                            "orderType": "NO",
+                            "periodType": "PROD_REG_DAY",
+                            "fromDate": "2020-01-01",
+                            "toDate": "2030-12-31",
+                        }
+                    )
+                data = r.json()
+                contents = data.get("contents", [])
+                if page == 1:
+                    print(f"[MARGIN_SCAN] Phase1: totalElements={data.get('totalElements', 0)}", flush=True)
+                if not contents:
+                    break
+                all_nos.extend(str(p.get("originProductNo", "") or "") for p in contents)
+                if len(contents) < 100:
+                    break
+                page += 1
+                await _aio.sleep(0.5)
+            except Exception as e:
+                print(f"[MARGIN_SCAN] Phase1 오류 page={page}: {e}", flush=True)
+                break
+        print(f"[MARGIN_SCAN] Phase1 완료: {len(all_nos)}개 수집", flush=True)
+
+    _MARGIN_SCAN_STATE["total"] = len(all_nos)
+    negative_items: list = list(resume_negative or [])
+
+    # Phase 2: 상품별 도매가 조회 + 마진 판정
+    for scan_idx, origin_no in enumerate(all_nos):
+        if scan_idx < resume_from:
+            continue
+        if not origin_no:
+            _MARGIN_SCAN_STATE["errors"] += 1
+            continue
+
+        # Naver 상세 조회
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                rd = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs,
+                )
+            if rd.status_code == 429:
+                print(f"[MARGIN_SCAN] Naver 429 — 5분 대기", flush=True)
+                await _aio.sleep(300)
+                async with _hx.AsyncClient(timeout=15) as c:
+                    rd = await c.get(
+                        f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=hdrs,
+                    )
+            if rd.status_code != 200:
+                _MARGIN_SCAN_STATE["errors"] += 1
+                await _aio.sleep(1)
+                continue
+            origin = rd.json().get("originProduct", {}) or {}
+        except Exception as e:
+            print(f"[MARGIN_SCAN] Naver 조회 실패 {origin_no}: {e}", flush=True)
+            _MARGIN_SCAN_STATE["errors"] += 1
+            continue
+
+        sale_price = int(origin.get("salePrice") or 0)
+        prod_name = (origin.get("name") or "")[:50]
+        dg_code = str(((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
+                       .get("sellerManagementCode") or "").strip()
+
+        if not dg_code.startswith("DG_"):
+            _MARGIN_SCAN_STATE["no_dg_code"] += 1
+            _MARGIN_SCAN_STATE["scanned"] += 1
+            await _aio.sleep(0.3)
+        else:
+            wholesale = await _get_dg_wholesale(dg_code)
+            await _aio.sleep(3)  # DG API 차단 방지
+
+            if wholesale <= 0:
+                _MARGIN_SCAN_STATE["no_dg_code"] += 1
+                _MARGIN_SCAN_STATE["scanned"] += 1
+            else:
+                floor_price = int(wholesale * 1.15)
+                margin = sale_price - floor_price
+                if margin > 0:
+                    _MARGIN_SCAN_STATE["margin_safe"] += 1
+                    _MARGIN_SCAN_STATE["scanned"] += 1
+                    print(f"[MARGIN_SCAN] ✓ {prod_name} 판매{sale_price:,} 도매{wholesale:,} 마진+{margin:,}", flush=True)
+                else:
+                    _MARGIN_SCAN_STATE["negative_margin"] += 1
+                    _MARGIN_SCAN_STATE["scanned"] += 1
+                    neg_item = {
+                        "origin_no": origin_no, "name": prod_name,
+                        "sale_price": sale_price, "wholesale": wholesale,
+                        "floor_price": floor_price, "margin": margin,
+                    }
+                    negative_items.append(neg_item)
+                    print(f"[MARGIN_SCAN] ⚠ 역마진 {prod_name} 판매{sale_price:,} 도매{wholesale:,} "
+                          f"마진{margin:,} → 판매중지", flush=True)
+                    try:
+                        ok = await naver_api.change_product_status(origin_no, "SUSPENSION")
+                        if ok:
+                            _MARGIN_SCAN_STATE["suspended"] += 1
+                    except Exception as e:
+                        print(f"[MARGIN_SCAN] 판매중지 오류 {origin_no}: {e}", flush=True)
+
+        # 20개마다 체크포인트 저장
+        if (scan_idx + 1) % 20 == 0:
+            await _margin_cs_save(_CS_MARGIN_KEY, {
+                "last_idx": scan_idx, "all_nos": all_nos,
+                "counts": {k: _MARGIN_SCAN_STATE[k] for k in
+                           ("scanned","margin_safe","negative_margin","no_dg_code","errors","suspended")},
+                "negative_items": negative_items,
+            })
+            s = _MARGIN_SCAN_STATE
+            print(f"[MARGIN_SCAN] 체크포인트 {scan_idx+1}/{len(all_nos)} "
+                  f"안전:{s['margin_safe']} 역마진:{s['negative_margin']} "
+                  f"DG없음:{s['no_dg_code']}", flush=True)
+
+    # 완료 — 최종 결과 저장
+    dg_priced = _MARGIN_SCAN_STATE["margin_safe"] + _MARGIN_SCAN_STATE["negative_margin"]
+    margin_safe_pct = round(_MARGIN_SCAN_STATE["margin_safe"] / dg_priced * 100, 1) if dg_priced > 0 else 0
+    result = {
+        "total": _MARGIN_SCAN_STATE["total"],
+        "scanned": _MARGIN_SCAN_STATE["scanned"],
+        "margin_safe": _MARGIN_SCAN_STATE["margin_safe"],
+        "negative_margin": _MARGIN_SCAN_STATE["negative_margin"],
+        "no_dg_code": _MARGIN_SCAN_STATE["no_dg_code"],
+        "errors": _MARGIN_SCAN_STATE["errors"],
+        "suspended": _MARGIN_SCAN_STATE["suspended"],
+        "dg_with_price_count": dg_priced,
+        "margin_safe_pct": margin_safe_pct,
+        "negative_items": negative_items,
+    }
+    await _margin_cs_save(_CS_MARGIN_RESULT, result)
+    await _margin_cs_save(_CS_MARGIN_KEY, {"done": True})
+    _MARGIN_SCAN_STATE.update({"status": "done", "done": True, **result})
+    print(f"[MARGIN_SCAN] 완료 — 전체:{result['total']} 안전:{result['margin_safe']} "
+          f"역마진:{result['negative_margin']}(판매중지:{result['suspended']}) "
+          f"DG없음:{result['no_dg_code']} DG보유 마진안전율:{margin_safe_pct}%", flush=True)
+
+
+@app.post("/margin-scan")
+async def margin_scan_start(background_tasks: BackgroundTasks, force: bool = False):
+    """전체 SALE 상품 마진 스캔 시작 (백그라운드). 미완료 체크포인트 있으면 자동 재개.
+    ?force=true 시 체크포인트 무시하고 처음부터."""
+    if _MARGIN_SCAN_STATE.get("status") == "running" and not force:
+        s = _MARGIN_SCAN_STATE
+        return JSONResponse({"status": "already_running",
+                             "progress": f"{s.get('scanned',0)}/{s.get('total',0)}",
+                             "margin_safe": s.get("margin_safe", 0),
+                             "negative_margin": s.get("negative_margin", 0),
+                             "no_dg_code": s.get("no_dg_code", 0),
+                             "suspended": s.get("suspended", 0)})
+    ckpt = await _margin_cs_get(_CS_MARGIN_KEY)
+    if ckpt and not ckpt.get("done") and not force:
+        last_idx = ckpt.get("last_idx", 0)
+        background_tasks.add_task(
+            _run_margin_scan_bg,
+            resume_from=last_idx + 1,
+            resume_nos=ckpt.get("all_nos"),
+            resume_counts=ckpt.get("counts"),
+            resume_negative=ckpt.get("negative_items"),
+        )
+        return JSONResponse({"status": "resumed", "resume_from": last_idx + 1,
+                             "total_nos": len(ckpt.get("all_nos") or [])})
+    background_tasks.add_task(_run_margin_scan_bg)
+    return JSONResponse({"status": "started"})
+
+
+@app.get("/margin-scan-status")
+async def margin_scan_status():
+    """마진 스캔 진행 상황 (실시간)."""
+    s = _MARGIN_SCAN_STATE
+    status = s.get("status", "idle")
+    if status == "running":
+        total = s.get("total", 0)
+        scanned = s.get("scanned", 0)
+        pct = round(scanned / total * 100, 1) if total > 0 else 0
+        return JSONResponse({
+            "status": "running",
+            "progress": f"{scanned}/{total} ({pct}%)",
+            "margin_safe": s.get("margin_safe", 0),
+            "negative_margin": s.get("negative_margin", 0),
+            "no_dg_code": s.get("no_dg_code", 0),
+            "suspended": s.get("suspended", 0),
+            "errors": s.get("errors", 0),
+        })
+    if status == "done":
+        return JSONResponse({"status": "done", **{k: s.get(k) for k in
+            ("total","scanned","margin_safe","negative_margin","no_dg_code",
+             "suspended","errors","margin_safe_pct","dg_with_price_count")}})
+    return JSONResponse({"status": status})
+
+
+@app.get("/margin-scan-result")
+async def margin_scan_result_ep():
+    """마진 스캔 최종 결과 (context_store). 역마진 상품 목록 포함."""
+    data = await _margin_cs_get(_CS_MARGIN_RESULT)
+    if not data:
+        return JSONResponse({"status": "no_result"}, status_code=404)
+    return JSONResponse({"status": "done", **data})
+
+
 @app.get("/price-ratio-scan")
 async def price_ratio_scan(ratio_min: float = 2.0, ratio_max: float = 2.3, check_market: bool = False):
     """가격 비율 스캔 (읽기 전용). 가격/원가 비율이 ratio_min~ratio_max 인 상품 목록 반환.
