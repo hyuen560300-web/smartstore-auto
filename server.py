@@ -2478,6 +2478,51 @@ async def set_cost_price(product_no: str, cost_price: int):
     return JSONResponse({"ok": False, "error": err})
 
 
+@app.post("/set-dg-code")
+async def set_dg_code(product_no: str, dg_code: str):
+    """상품의 sellerManagementCode(DG 코드)를 Naver API로 직접 업데이트."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    headers = await naver_api._headers()
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=headers)
+    if r.status_code != 200:
+        return JSONResponse({"ok": False, "error": f"Naver 조회 실패: HTTP {r.status_code}"})
+    data = r.json()
+    origin = dict(data.get("originProduct", {}))
+    seller_code_info = dict(origin.get("sellerCodeInfo") or {})
+    old_code = seller_code_info.get("sellerManagementCode", "")
+    seller_code_info["sellerManagementCode"] = dg_code
+    origin["sellerCodeInfo"] = seller_code_info
+    ok, err = await naver_api.update_product(product_no, origin)
+    if ok:
+        return JSONResponse({"ok": True, "product_no": product_no,
+                             "old_dg_code": old_code, "new_dg_code": dg_code})
+    return JSONResponse({"ok": False, "error": err})
+
+
+@app.get("/dg-search")
+async def dg_search_keyword(keyword: str, limit: int = 10):
+    """도매꾹 itemList API 키워드 검색 — DG 상품번호/이름/도매가 반환."""
+    import httpx as _hx
+    if not DOMEGGOOK_API_KEY:
+        return JSONResponse({"ok": False, "error": "DOMEGGOOK_API_KEY 미설정"})
+    try:
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                "https://domeggook.com/main/api/",
+                params={"mode": "itemList", "aid": DOMEGGOOK_API_KEY,
+                        "keyword": keyword, "outType": "json", "num": limit},
+            )
+        raw = r.json().get("domeggook", {})
+        items = raw.get("list", []) or []
+        return {"ok": True, "keyword": keyword, "count": len(items),
+                "items": [{"item_no": it.get("no"), "name": it.get("name", ""),
+                           "wholesale": int(it.get("price", 0) or 0)} for it in items]}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:300]})
+
+
 _backfill_running = False  # 중복 실행 방지 플래그
 
 
