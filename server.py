@@ -1045,6 +1045,7 @@ async def get_product_info(no: str):
         wholesale = await _get_dg_wholesale(mgmt_code) if mgmt_code.startswith("DG_") else 0
         floor_price = int(wholesale * 1.15) if wholesale > 0 else 0
         margin = sale_price - floor_price if floor_price > 0 else None
+        rep_img = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
         return JSONResponse({
             "no": no,
             "name": (origin.get("name") or "")[:80],
@@ -1056,6 +1057,7 @@ async def get_product_info(no: str):
             "margin": margin,
             "margin_ok": margin > 0 if margin is not None else None,
             "sellerManagementCode": mgmt_code,
+            "representativeImage": rep_img,
         })
     except Exception as e:
         import traceback
