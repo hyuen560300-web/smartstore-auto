@@ -5391,14 +5391,13 @@ async def _get_dg_wholesale(dg_code: str) -> int:
     try:
         async with _hx.AsyncClient(timeout=12) as c:
             r = await c.get(DOMEGGOOK_API_URL, params={
-                "ver": "4.1", "mode": "getItemList", "aid": DOMEGGOOK_API_KEY,
-                "market": "dome", "kw": item_no, "om": "json", "sz": "1",
+                "ver": "4.5", "mode": "getItemView", "aid": DOMEGGOOK_API_KEY,
+                "no": item_no, "om": "json",
             })
         raw = r.json().get("domeggook", {})
-        items = raw.get("list", {}).get("item", []) or []
-        if not isinstance(items, list):
-            items = [items]
-        wholesale = int(items[0].get("price", 0) or 0) if items else 0
+        price_block = raw.get("price", {})
+        dome_price = price_block.get("dome", 0) if isinstance(price_block, dict) else 0
+        wholesale = int(dome_price or 0)
     except Exception as _e:
         print(f"[DG_WHOLESALE] 조회 실패 {dg_code}: {_e}", flush=True)
         return 0
