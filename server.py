@@ -2450,32 +2450,56 @@ async def price_audit_now(limit: int = 100):
 
 @app.post("/set-cost-price")
 async def set_cost_price(product_no: str, cost_price: int):
-    """단일 상품 costPrice 수동 저장 (테스트용). Naver API 직접 조회로 빠르게 처리."""
-    import httpx as _hx
+    """단일 상품 costPrice 수동 저장. PUT 응답 body에서 costPrice를 직접 확인."""
+    import httpx as _hx, asyncio as _aio
     from main import NAVER_BASE
     headers = await naver_api._headers()
     async with _hx.AsyncClient(timeout=20) as c:
         r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=headers)
     if r.status_code != 200:
-        return JSONResponse({"ok": False, "error": f"Naver 조회 실패: HTTP {r.status_code} {r.text[:200]}"})
+        return JSONResponse({"ok": False, "error": f"Naver GET 실패: HTTP {r.status_code} {r.text[:200]}"})
 
     data = r.json()
     origin = dict(data.get("originProduct", {}))
     old_cost = origin.get("costPrice", 0)
     origin["costPrice"] = cost_price
-    ok, err = await naver_api.update_product(product_no, origin)
-    if ok:
-        # 재조회로 실제 저장 확인
-        import asyncio as _aio
-        await _aio.sleep(1)
-        async with _hx.AsyncClient(timeout=20) as c2:
-            r2 = await c2.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}", headers=await naver_api._headers())
-        verified = r2.json().get("originProduct", {}).get("costPrice", -1) if r2.status_code == 200 else -1
-        return JSONResponse({"ok": True, "product_no": product_no,
-                             "old_cost_price": old_cost, "new_cost_price": cost_price,
-                             "verified_cost_price": verified,
-                             "verified_match": verified == cost_price})
-    return JSONResponse({"ok": False, "error": err})
+
+    # PUT 직접 실행 — 응답 body에서 저장 결과 확인
+    async with _hx.AsyncClient(timeout=30) as cp:
+        rp = await cp.put(
+            f"{NAVER_BASE}/v2/products/origin-products/{product_no}",
+            headers=await naver_api._headers(),
+            json={"originProduct": origin},
+        )
+
+    put_status = rp.status_code
+    if put_status != 200:
+        return JSONResponse({"ok": False, "error": f"Naver PUT 실패: HTTP {put_status} {rp.text[:300]}"})
+
+    # PUT 응답 body에서 costPrice 직접 읽기
+    put_body = rp.json() if rp.text else {}
+    put_cost = put_body.get("originProduct", {}).get("costPrice", -1)
+
+    # 5초 후 재조회 (429 방지)
+    await _aio.sleep(5)
+    async with _hx.AsyncClient(timeout=20) as c2:
+        r2 = await c2.get(f"{NAVER_BASE}/v2/products/origin-products/{product_no}",
+                          headers=await naver_api._headers())
+    recheck_cost = r2.json().get("originProduct", {}).get("costPrice", -1) if r2.status_code == 200 else -1
+    recheck_http = r2.status_code
+
+    return JSONResponse({
+        "ok": True,
+        "product_no": product_no,
+        "old_cost_price": old_cost,
+        "requested_cost_price": cost_price,
+        "put_http": put_status,
+        "put_body_cost_price": put_cost,       # PUT 응답 body 기준
+        "recheck_http": recheck_http,
+        "recheck_cost_price": recheck_cost,    # 5초 후 재조회 기준
+        "saved": recheck_cost == cost_price,
+        "note": "put_body_cost_price=-1이면 Naver가 costPrice 응답 미포함, recheck 기준으로 판단"
+    })
 
 
 @app.post("/set-dg-code")
