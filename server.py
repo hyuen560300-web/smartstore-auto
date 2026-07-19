@@ -1116,7 +1116,7 @@ async def naver_attr_values(attribute_seq: int):
             r = await c.get(
                 f"{NAVER_BASE}/v1/product-attributes/attribute-values",
                 headers=headers,
-                params={"attributeSeq": attribute_seq}
+                params={"attributeSeq": attribute_seq, "categoryId": 50000830}
             )
         if r.status_code != 200:
             return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:500]}, status_code=400)
