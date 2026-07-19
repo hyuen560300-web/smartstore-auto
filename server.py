@@ -1089,6 +1089,29 @@ async def get_product_raw(no: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/product-raw-keys")
+async def get_product_raw_keys(no: str):
+    """originProduct 최상위 키 전체 + detailAttribute 키 + attributeInfo 원문 반환 (디버그용)."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:500]}, status_code=400)
+        origin = r.json().get("originProduct", {})
+        da = origin.get("detailAttribute") or {}
+        return JSONResponse({
+            "origin_keys": list(origin.keys()),
+            "detailAttribute_keys": list(da.keys()),
+            "attributeInfo_top": origin.get("attributeInfo"),
+            "attributeInfo_in_da": da.get("attributeInfo"),
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/naver-category-attrs")
 async def naver_category_attrs(category_id: str):
     """Naver 카테고리 속성 목록 조회 — 필수/선택 구분 포함."""
