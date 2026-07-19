@@ -1064,6 +1064,31 @@ async def get_product_info(no: str):
         return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
 
 
+@app.get("/product-raw")
+async def get_product_raw(no: str):
+    """originProduct 원문 반환 — attributeInfo/leafCategoryId 등 전체 필드 진단용."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:500]}, status_code=400)
+        origin = r.json().get("originProduct", {})
+        return JSONResponse({
+            "leafCategoryId": origin.get("leafCategoryId"),
+            "salePrice": origin.get("salePrice"),
+            "name": (origin.get("name") or "")[:60],
+            "statusType": origin.get("statusType"),
+            "attributeInfo": origin.get("attributeInfo"),
+            "detailAttribute_keys": list((origin.get("detailAttribute") or {}).keys()),
+            "sellerManagementCode": ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", ""),
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/ip-scan")
 async def ip_scan_all():
     """SALE 상품 전체를 DANGEROUS_KEYWORDS로 스캔 — IP 위반 상품 목록 반환."""
