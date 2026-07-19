@@ -1097,7 +1097,7 @@ async def naver_category_attrs(category_id: str):
     try:
         headers = await naver_api._headers()
         async with _hx.AsyncClient(timeout=20) as c:
-            r = await c.get(f"{NAVER_BASE}/v2/categories/{category_id}/attributes", headers=headers)
+            r = await c.get(f"{NAVER_BASE}/v1/product-attributes/attributes", headers=headers, params={"categoryId": category_id})
         if r.status_code != 200:
             return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:500]}, status_code=400)
         return JSONResponse(r.json())
