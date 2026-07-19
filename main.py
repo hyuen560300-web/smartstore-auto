@@ -1805,6 +1805,9 @@ async def _save_cost_price_async(origin_no: str, wholesale: int) -> None:
 
 def _pick_attr_seq(attr_name: str, values: list, name_lower: str) -> int | None:
     """속성명 + 상품명(소문자) → attributeValueSeq. 없으면 None."""
+    def _vname(v: dict) -> str:
+        return v.get("minAttributeValue") or v.get("attributeValueName") or v.get("name", "")
+
     if any(k in attr_name for k in ("색상", "컬러")):
         COLOR_KW = [
             ("블랙", ["블랙","검정","black","dark"]),
@@ -1823,10 +1826,10 @@ def _pick_attr_seq(attr_name: str, values: list, name_lower: str) -> int | None:
         for ck, kws in COLOR_KW:
             if any(kw in name_lower for kw in kws):
                 for v in values:
-                    if ck in v.get("name", ""):
+                    if ck in _vname(v):
                         return v["attributeValueSeq"]
         for v in values:
-            if v.get("name") in ("기타", "혼합색상", "해당없음", "멀티컬러", "기타색상"):
+            if _vname(v) in ("기타", "혼합색상", "해당없음", "멀티컬러", "기타색상"):
                 return v["attributeValueSeq"]
     elif any(k in attr_name for k in ("소재", "재질", "원단")):
         MATERIAL_KW = [
@@ -1844,22 +1847,22 @@ def _pick_attr_seq(attr_name: str, values: list, name_lower: str) -> int | None:
         for mk, kws in MATERIAL_KW:
             if any(kw in name_lower for kw in kws):
                 for v in values:
-                    if mk in v.get("name", ""):
+                    if mk in _vname(v):
                         return v["attributeValueSeq"]
     elif any(k in attr_name for k in ("사이즈", "크기", "치수")):
         for v in values:
-            if v.get("name") in ("FREE", "기타", "해당없음", "ONE SIZE", "F", "프리", "FREE SIZE"):
+            if _vname(v) in ("FREE", "기타", "해당없음", "ONE SIZE", "F", "프리", "FREE SIZE"):
                 return v["attributeValueSeq"]
     elif any(k in attr_name for k in ("제조국", "원산지", "생산지")):
         for v in values:
-            if v.get("name") in ("중국", "중국산", "China"):
+            if _vname(v) in ("중국", "중국산", "China"):
                 return v["attributeValueSeq"]
     elif any(k in attr_name for k in ("성별", "대상")):
         for v in values:
-            if v.get("name") in ("공용", "유니섹스", "남녀공용"):
+            if _vname(v) in ("공용", "유니섹스", "남녀공용"):
                 return v["attributeValueSeq"]
     for v in values:
-        if v.get("name") in ("기타", "해당없음", "없음", "해당 없음"):
+        if _vname(v) in ("기타", "해당없음", "없음", "해당 없음"):
             return v["attributeValueSeq"]
     return values[0].get("attributeValueSeq") if values else None
 
@@ -1894,10 +1897,22 @@ async def fill_product_attributes(origin_no: str, category_id: int, product_name
             a for g in (ra_data.get("productAttributeGroups") or []) for a in (g.get("attributes") or [])
         ]
         for attr in raw_attrs:
-            avs = attr.get("attributeValues") or []
-            seq = _pick_attr_seq(attr.get("name", ""), avs, nl)
+            attr_seq = attr.get("attributeSeq")
+            attr_name = attr.get("attributeName") or attr.get("name", "")
+            # 속성값 목록은 별도 API 호출로 가져옴 (리스트 응답에 포함되지 않음)
+            try:
+                async with httpx.AsyncClient(timeout=10) as cv:
+                    rv = await cv.get(
+                        f"{NAVER_BASE}/v1/product-attributes/attribute-values",
+                        headers=hdrs,
+                        params={"attributeSeq": attr_seq, "categoryId": category_id},
+                    )
+                avs = rv.json() if rv.status_code == 200 and isinstance(rv.json(), list) else []
+            except Exception:
+                avs = []
+            seq = _pick_attr_seq(attr_name, avs, nl)
             if seq:
-                attr_values.append({"attributeSeq": attr["attributeSeq"], "attributeValueSeq": seq})
+                attr_values.append({"attributeSeq": attr_seq, "attributeValueSeq": seq})
 
         if not attr_values:
             return False

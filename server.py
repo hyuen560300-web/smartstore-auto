@@ -7548,10 +7548,13 @@ async def get_category_attributes_endpoint(category_id: int):
 
 def _pick_attr_value_seq(attr: dict, product_name: str) -> int | None:
     """속성 dict + 상품명 → 최적 attributeValueSeq. 없으면 None."""
-    attr_name = attr.get("name", "")
+    attr_name = attr.get("attributeName") or attr.get("name", "")
     values = attr.get("attributeValues") or []
     if not values:
         return None
+
+    def _vn(v: dict) -> str:
+        return v.get("minAttributeValue") or v.get("attributeValueName") or v.get("name", "")
 
     nl = product_name.lower()
 
@@ -7577,10 +7580,10 @@ def _pick_attr_value_seq(attr: dict, product_name: str) -> int | None:
             for kw in keywords:
                 if kw in nl:
                     for v in values:
-                        if color_key in v.get("name", ""):
+                        if color_key in _vn(v):
                             return v["attributeValueSeq"]
         for v in values:
-            if v.get("name") in ("기타", "혼합색상", "해당없음", "멀티컬러", "기타색상"):
+            if _vn(v) in ("기타", "혼합색상", "해당없음", "멀티컬러", "기타색상"):
                 return v["attributeValueSeq"]
 
     elif any(k in attr_name for k in ("소재", "재질", "원단")):
@@ -7600,27 +7603,27 @@ def _pick_attr_value_seq(attr: dict, product_name: str) -> int | None:
             for kw in keywords:
                 if kw in nl:
                     for v in values:
-                        if mat_key in v.get("name", ""):
+                        if mat_key in _vn(v):
                             return v["attributeValueSeq"]
 
     elif any(k in attr_name for k in ("사이즈", "크기", "치수")):
         for v in values:
-            if v.get("name") in ("FREE", "기타", "해당없음", "ONE SIZE", "F", "프리", "FREE SIZE"):
+            if _vn(v) in ("FREE", "기타", "해당없음", "ONE SIZE", "F", "프리", "FREE SIZE"):
                 return v["attributeValueSeq"]
 
     elif any(k in attr_name for k in ("제조국", "원산지", "생산지")):
         for v in values:
-            if v.get("name") in ("중국", "중국산", "China"):
+            if _vn(v) in ("중국", "중국산", "China"):
                 return v["attributeValueSeq"]
 
     elif any(k in attr_name for k in ("성별", "대상")):
         for v in values:
-            if v.get("name") in ("공용", "유니섹스", "남녀공용"):
+            if _vn(v) in ("공용", "유니섹스", "남녀공용"):
                 return v["attributeValueSeq"]
 
     # 공통 폴백: 기타/해당없음
     for v in values:
-        if v.get("name") in ("기타", "해당없음", "없음", "해당 없음"):
+        if _vn(v) in ("기타", "해당없음", "없음", "해당 없음"):
             return v["attributeValueSeq"]
 
     return values[0].get("attributeValueSeq")  # 최후 수단: 첫 번째 값
@@ -7825,6 +7828,21 @@ async def _fill_attributes_job(limit: int = 0, dry_run: bool = False):
             elif isinstance(d2, dict):
                 for group in (d2.get("productAttributeGroups") or []):
                     attrs.extend(group.get("attributes") or [])
+            # 각 속성의 값 목록을 별도 API로 조회 (attributeValues는 속성 목록에 포함 안 됨)
+            for attr in attrs:
+                attr_seq = attr.get("attributeSeq")
+                if not attr_seq:
+                    continue
+                try:
+                    async with _hx.AsyncClient(timeout=10) as cv:
+                        rv = await cv.get(
+                            f"{NAVER_BASE}/v1/product-attributes/attribute-values",
+                            headers=hdrs,
+                            params={"attributeSeq": attr_seq, "categoryId": cat_id},
+                        )
+                    attr["attributeValues"] = rv.json() if rv.status_code == 200 and isinstance(rv.json(), list) else []
+                except Exception:
+                    attr["attributeValues"] = []
             cat_cache[cat_id] = attrs
             return attrs
 
