@@ -7925,7 +7925,7 @@ async def _fill_attributes_job(limit: int = 0, dry_run: bool = False):
                 else:
                     _fill_attr_state["errors"] += 1
                     _fill_attr_state["log"].append(
-                        f"[ERR] {origin_no}: PUT {rp.status_code} {rp.text[:100]}"
+                        f"[ERR] {origin_no}: PUT {rp.status_code} {rp.text[:500]}"
                     )
 
                 _fill_attr_state["done"] += 1
