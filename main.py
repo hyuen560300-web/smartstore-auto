@@ -4152,8 +4152,6 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             if _pid1:
                 asyncio.create_task(_save_cost_price_async(_pid1, int(p.get("price", 0) or 0)))
                 _leaf_cat = payload["originProduct"].get("leafCategoryId", 0)
-                if _leaf_cat:
-                    asyncio.create_task(fill_product_attributes(_pid1, _leaf_cat, p.get("name", "")))
             save_registered_code(code)
             save_registered_name(ai.get("product_name") or p.get("name", ""))
             results["success"] += 1
@@ -4474,8 +4472,6 @@ async def pipeline_register_from_domeggook(
             if _pid:
                 asyncio.create_task(_save_cost_price_async(str(_pid), int(p.get("price", 0) or 0)))
                 _lcat = payload["originProduct"].get("leafCategoryId", 0)
-                if _lcat:
-                    asyncio.create_task(fill_product_attributes(str(_pid), _lcat, p.get("name", "")))
             _product_url = (f"https://smartstore.naver.com/thehwmall/products/{_pid}"
                             if _pid else "https://smartstore.naver.com/thehwmall")
             print(f"[도매꾹파이프라인] ✅ {final_name} ({price:,}원) → {_product_url}", flush=True)
@@ -5307,8 +5303,6 @@ async def _source_replacement_product() -> None:
             if _cp_pid:
                 asyncio.create_task(_save_cost_price_async(_cp_pid, int(p.get("price", 0) or 0)))
                 _cp_lcat = pload["originProduct"].get("leafCategoryId", 0)
-                if _cp_lcat:
-                    asyncio.create_task(fill_product_attributes(_cp_pid, _cp_lcat, p.get("name", "")))
             print("[PERF] 소싱대체 완료 ✅", flush=True)
     except Exception as e:
         print(f"[PERF] 소싱대체 실패(무시): {e}", flush=True)

@@ -1089,83 +1089,6 @@ async def get_product_raw(no: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@app.get("/product-raw-keys")
-async def get_product_raw_keys(no: str):
-    """originProduct 최상위 키 전체 + detailAttribute 키 + attributeInfo 원문 반환 (디버그용)."""
-    import httpx as _hx
-    from main import NAVER_BASE
-    try:
-        headers = await naver_api._headers()
-        async with _hx.AsyncClient(timeout=20) as c:
-            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
-        if r.status_code != 200:
-            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:500]}, status_code=400)
-        origin = r.json().get("originProduct", {})
-        da = origin.get("detailAttribute") or {}
-        return JSONResponse({
-            "origin_keys": list(origin.keys()),
-            "detailAttribute_keys": list(da.keys()),
-            "attributeInfo_top": origin.get("attributeInfo"),
-            "attributeInfo_in_da": da.get("attributeInfo"),
-        })
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@app.post("/test-attr-put")
-async def test_attr_put(no: str):
-    """속성 PUT 필드 위치 테스트 — attribute/attributeInfo를 여러 위치에 넣어 어디에 저장되는지 확인."""
-    import httpx as _hx
-    from main import NAVER_BASE
-    SKIP = {"originProductNo", "channelProductNo", "regDate", "modDate",
-            "statusFrom", "totalSalesQuantity", "channelProducts"}
-    try:
-        headers = await naver_api._headers()
-        async with _hx.AsyncClient(timeout=20) as c:
-            r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
-        if r.status_code != 200:
-            return JSONResponse({"error": f"GET {r.status_code}"}, status_code=400)
-        op = r.json().get("originProduct", {})
-        leaf_cat = op.get("leafCategoryId")
-
-        # test_value: 임의의 속성값 (첫 번째 카테고리 속성의 첫 번째 값)
-        async with _hx.AsyncClient(timeout=10) as c:
-            ra = await c.get(f"{NAVER_BASE}/v1/product-attributes/attributes",
-                             headers=headers, params={"categoryId": leaf_cat})
-        attrs = ra.json() if ra.status_code == 200 and isinstance(ra.json(), list) else []
-        test_vals = []
-        for attr in attrs[:2]:  # 첫 2개 속성만 테스트
-            attr_seq = attr.get("attributeSeq")
-            async with _hx.AsyncClient(timeout=10) as c:
-                rv = await c.get(f"{NAVER_BASE}/v1/product-attributes/attribute-values",
-                                 headers=headers, params={"attributeSeq": attr_seq, "categoryId": leaf_cat})
-            vals = rv.json() if rv.status_code == 200 and isinstance(rv.json(), list) else []
-            if vals:
-                test_vals.append({"attributeSeq": attr_seq, "attributeValueSeq": vals[0]["attributeValueSeq"]})
-
-        results = {}
-        # 시도 1: originProduct.attribute (top-level)
-        payload = {k: v for k, v in op.items() if k not in SKIP}
-        payload["attribute"] = {"values": test_vals}
-        async with _hx.AsyncClient(timeout=20) as c:
-            rp = await c.put(f"{NAVER_BASE}/v2/products/origin-products/{no}",
-                             headers=headers, json={"originProduct": payload})
-        results["try_attribute_top"] = f"PUT {rp.status_code}"
-        # 검증
-        async with _hx.AsyncClient(timeout=10) as c:
-            rg = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
-        op2 = rg.json().get("originProduct", {})
-        results["try_attribute_top_get"] = {
-            "origin_keys": list(op2.keys()),
-            "attribute_top": op2.get("attribute"),
-            "attribute_in_da": (op2.get("detailAttribute") or {}).get("attribute"),
-            "attributeInfo_top": op2.get("attributeInfo"),
-        }
-        return JSONResponse({"test_vals": test_vals, "results": results})
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
 @app.get("/naver-category-attrs")
 async def naver_category_attrs(category_id: str):
     """Naver 카테고리 속성 목록 조회 — 필수/선택 구분 포함."""
@@ -7830,18 +7753,10 @@ async def fill_attributes_result():
 
 
 @app.post("/fill-attributes")
-async def fill_attributes(
-    background_tasks: BackgroundTasks,
-    limit: int = 0,
-    dry_run: bool = False,
-):
-    """기존 SALE 상품 전체 attributeInfo 채움 (백그라운드)."""
-    global _fill_attr_state
-    if _fill_attr_state.get("running"):
-        return JSONResponse({"error": "이미 실행 중"}, status_code=409)
-    _fill_attr_state = {"running": True, "done": 0, "total": 0, "ok": 0, "skip": 0, "errors": 0, "log": [], "dry_run": dry_run}
-    background_tasks.add_task(_fill_attributes_job, limit=limit, dry_run=dry_run)
-    return {"status": "started", "dry_run": dry_run}
+async def fill_attributes(limit: int = 0, dry_run: bool = False):
+    """비활성화 — Naver Commerce API는 originProduct PUT으로 카테고리 속성 저장 불가.
+    attributeInfo 필드가 originProduct에 존재하지 않으며 PUT 시 조용히 무시됨 (조사 완료 2026-07-19)."""
+    return JSONResponse({"error": "disabled", "reason": "Naver API does not support setting category attributes via originProduct PUT"}, status_code=410)
 
 
 async def _fill_attributes_job(limit: int = 0, dry_run: bool = False):
