@@ -1105,6 +1105,26 @@ async def naver_category_attrs(category_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/naver-attr-values")
+async def naver_attr_values(attribute_seq: int):
+    """Naver 속성값 목록 조회 — attributeSeq별 선택 가능한 값 목록."""
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                f"{NAVER_BASE}/v1/product-attributes/attribute-values",
+                headers=headers,
+                params={"attributeSeq": attribute_seq}
+            )
+        if r.status_code != 200:
+            return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:500]}, status_code=400)
+        return JSONResponse(r.json())
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/ip-scan")
 async def ip_scan_all():
     """SALE 상품 전체를 DANGEROUS_KEYWORDS로 스캔 — IP 위반 상품 목록 반환."""
