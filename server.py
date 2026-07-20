@@ -6141,7 +6141,18 @@ async def startup_event():
         from main import search_naver_shopping
         import math as _math
         import httpx as _hx
+        from datetime import datetime, timezone, timedelta
+        _KST = timezone(timedelta(hours=9))
         print("[OVERPRICED-FIX] 01:30 스캔+처리 시작", flush=True)
+        _kst_start = datetime.now(_KST).strftime("%Y-%m-%d %H:%M KST")
+        try:
+            async with _hx.AsyncClient(timeout=8) as _cs:
+                await _cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                               json={"key": "ss.overpriced_fix.last_run",
+                                     "value": json.dumps({"status": "running", "started_at": _kst_start}, ensure_ascii=False),
+                                     "category": "audit"})
+        except Exception:
+            pass
 
         all_products: list[dict] = []
         page = 1
@@ -6241,7 +6252,21 @@ async def startup_event():
         print(f"[OVERPRICED-FIX] 완료: 판매중지={suspended} 가격조정={adjusted} 유지={skipped} 오류={len(errors)}", flush=True)
         if errors:
             print(f"[OVERPRICED-FIX] 오류목록: {errors[:5]}", flush=True)
+        _kst_done = datetime.now(_KST).strftime("%Y-%m-%d %H:%M KST")
+        try:
+            async with _hx.AsyncClient(timeout=8) as _cs:
+                await _cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                               json={"key": "ss.overpriced_fix.last_run",
+                                     "value": json.dumps({"status": "done", "started_at": _kst_start,
+                                                          "done_at": _kst_done, "suspended": suspended,
+                                                          "adjusted": adjusted, "skipped": skipped,
+                                                          "errors": len(errors)}, ensure_ascii=False),
+                                     "category": "audit"})
+        except Exception:
+            pass
 
+    global _overpriced_fix_fn
+    _overpriced_fix_fn = _job_overpriced_scan_and_fix
     scheduler.add_job(_job_overpriced_scan_and_fix, "cron", hour=1, minute=30,
                       id="overpriced_scan_fix", replace_existing=True,
                       misfire_grace_time=3600, coalesce=True)
@@ -6933,6 +6958,7 @@ async def debug_status_scan():
 
 # ─── DG 재고 스캔 + 판매중지 ──────────────────────────────────────────────────
 _dg_stock_state: dict = {}
+_overpriced_fix_fn = None  # lifespan에서 _job_overpriced_scan_and_fix 참조 저장
 
 
 async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
@@ -7333,6 +7359,15 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
         })
     except Exception:
         pass
+
+
+@app.post("/admin/run-overpriced-fix")
+async def admin_run_overpriced_fix(background_tasks: BackgroundTasks):
+    """01:30 과적가 재검증+처리 즉시 강제실행 (백그라운드). 결과: ss.overpriced_fix.last_run"""
+    if _overpriced_fix_fn is None:
+        return JSONResponse({"error": "job not initialized — 서버 재시작 필요"}, status_code=503)
+    background_tasks.add_task(_overpriced_fix_fn)
+    return JSONResponse({"status": "started", "result_key": "ss.overpriced_fix.last_run"})
 
 
 @app.post("/scan-dg-stock")
