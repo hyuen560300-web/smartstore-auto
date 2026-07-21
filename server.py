@@ -4249,6 +4249,13 @@ async def activate_product(request: Request):
     return JSONResponse({"status": "ok" if ok else "fail", "product_id": product_id})
 
 
+@app.post("/set-sale-price")
+async def set_sale_price(product_no: str, price: int):
+    """상품 판매가 직접 수정. product_no=origin_product_no, price=새 판매가(원)."""
+    ok = await naver_api.update_price(str(product_no), price)
+    return JSONResponse({"status": "ok" if ok else "fail", "product_no": product_no, "new_price": price})
+
+
 @app.post("/set-status-safe")
 async def set_status_safe(product_no: str, status: str):
     """GET 전체 원본→statusType 수정→PUT 방식 안전한 상태 변경 (SALE/SUSPENSION/CLOSE).
