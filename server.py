@@ -6004,15 +6004,16 @@ async def startup_event():
         if len(_codes_now) == 0 and len(_names_now) == 0:
             print("[SCHED] 상품 등록 건너뜀 — 동기화 후에도 codes·names 모두 0개 (비정상 상태, 중복 방지)", flush=True)
             return
-        # ── 1000개 한도 체크 ──
+        # ── 최대 등록 한도 체크 (MAX_PRODUCTS_LIMIT env, 기본 5000) ──
+        _max_limit = int(os.getenv("MAX_PRODUCTS_LIMIT", "5000"))
         _cur = await naver_api.count_sale_products()
-        if _cur >= 1000:
-            msg = f"[스마트스토어] 상품 등록 한도 도달 ({_cur}/1000) — 자동 등록 중단"
+        if _cur >= _max_limit:
+            msg = f"[스마트스토어] 상품 등록 한도 도달 ({_cur}/{_max_limit}) — 자동 등록 중단"
             print(msg, flush=True)
             await _tg_notify(msg)
             return
-        _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "11"))
-        _slots = min(_daily_limit, 1000 - _cur)
+        _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "10"))
+        _slots = min(_daily_limit, _max_limit - _cur)
         print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/1000, 이번:{_slots}개, 일일한도:{_daily_limit})", flush=True)
         try:
             await pipeline_register_from_domeggook(limit=_slots)
