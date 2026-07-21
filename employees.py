@@ -738,19 +738,20 @@ async def employee_image_inspector(
         reject_clause = "상품과 전혀 무관한 물체가 메인으로 보이면 score=0 REJECT"
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
 
-    resp = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=600,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": media_type, "data": img_b64}
-                },
-                {
-                    "type": "text",
-                    "text": f"""너는 네이버 스마트스토어 전문 품질검수관이야.
+    try:
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": img_b64}
+                    },
+                    {
+                        "type": "text",
+                        "text": f"""너는 네이버 스마트스토어 전문 품질검수관이야.
 '{product_name}'의 {img_type}를 아래 기준으로 채점해줘.
 
 채점 기준 (각 20점):
@@ -772,10 +773,13 @@ async def employee_image_inspector(
   "recommendation": "개선 방향 한 줄",
   "retry_prompt": "재생성 시 추가할 프롬프트 힌트 (문제 없으면 빈 문자열)"
 }}"""
-                }
-            ]
-        }]
-    )
+                    }
+                ]
+            }]
+        )
+    except Exception as _api_err:
+        print(f"[이미지검수관] API 오류 폴백 (score=80): {_api_err}", flush=True)
+        return {"score": 80, "passed": False, "issues": ["API 오류"], "recommendation": "검수 생략", "retry_prompt": ""}
 
     try:
         text = resp.content[0].text.strip()
