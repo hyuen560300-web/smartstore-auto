@@ -1853,6 +1853,25 @@ async def register_domeggook_sync(request: Request):
     return JSONResponse(result if isinstance(result, dict) else {"result": str(result)})
 
 
+@app.get("/debug-dg-proxy")
+async def debug_dg_proxy(kw: str = "캠핑", sz: int = 3):
+    """SS 서버에서 C24 DG 프록시 직접 호출 테스트 — IP차단/네트워크 진단용."""
+    import httpx as _hx
+    _C24_PROXY = "https://cafe24-auto-production.up.railway.app/dg-proxy"
+    try:
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(_C24_PROXY, params={"kw": kw, "sz": str(sz), "pg": "1"})
+            status = r.status_code
+            data = r.json()
+        items = data.get("domeggook", {}).get("list", {}).get("item", [])
+        if not isinstance(items, list):
+            items = [items] if items else []
+        return JSONResponse({"proxy_status": status, "item_count": len(items),
+                             "first": items[0] if items else None, "raw_keys": list(data.keys())})
+    except Exception as e:
+        return JSONResponse({"error": str(e), "type": type(e).__name__}, status_code=502)
+
+
 @app.post("/register-domeggook")
 async def register_from_domeggook(request: Request, background_tasks: BackgroundTasks):
     """도매꾹 API 소싱 → 스마트스토어 상품 등록 (백그라운드 실행).
