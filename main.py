@@ -4296,17 +4296,17 @@ async def pipeline_register_from_domeggook(
                 results["ip_blocked"] += 1
                 continue
 
-            # ─── 네이버 경쟁가 사전 게이트: 도매가 ≥ 최저가×0.70 → 마진 불가 ───
+            # ─── 네이버 경쟁가 사전 게이트: 도매가 ≥ 최저가×0.90 → 마진 불가 ───
             competitor_prices = await search_naver_shopping(str(p.get("name", "")))
             if competitor_prices:
                 _gate_min = min(
                     (c["price"] for c in competitor_prices if c.get("price", 0) > 0),
                     default=None,
                 )
-                if _gate_min and _ss_wholesale >= _gate_min * 0.70:
+                if _gate_min and _ss_wholesale >= _gate_min * 0.90:
                     print(
                         f"[소싱게이트] ⛔ 차단: {p.get('name','')[:25]} — "
-                        f"도매가₩{_ss_wholesale:,} ≥ 최저가₩{_gate_min:,}×0.70=₩{int(_gate_min*0.70):,}",
+                        f"도매가₩{_ss_wholesale:,} ≥ 최저가₩{_gate_min:,}×0.90=₩{int(_gate_min*0.90):,}",
                         flush=True,
                     )
                     results["skip"] += 1
@@ -4358,11 +4358,10 @@ async def pipeline_register_from_domeggook(
                 print(f"[소싱제외-가격] {p.get('name','')[:25]} — {price_result.get('reason','')}", flush=True)
                 results["skip"] += 1
                 continue
-            # ③ floor 근접 보류: 판매가가 floor(도매가×1.15)의 110% 이내
+            # ③ floor 보류: 판매가가 원가 floor(도매가×1.15) 미만이면 손해
             _ss_floor = round(_ss_wholesale * 1.15 / 10) * 10
-            _ss_near_thr = round(_ss_floor * 1.10 / 10) * 10
-            if price < _ss_near_thr:
-                print(f"[NEAR_FLOOR] 소싱보류: {p.get('name','')[:25]} — 판매가₩{price:,} < floor×1.10=₩{_ss_near_thr:,}", flush=True)
+            if price < _ss_floor:
+                print(f"[NEAR_FLOOR] 소싱보류: {p.get('name','')[:25]} — 판매가₩{price:,} < floor₩{_ss_floor:,}", flush=True)
                 results["skip"] += 1
                 continue
 

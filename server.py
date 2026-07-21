@@ -1876,7 +1876,7 @@ async def debug_sourcing_gate(request: Request):
         season_excl = _is_season_excluded(name)
         naver_prices = await search_naver_shopping(name)
         gate_min = min((c["price"] for c in naver_prices if c.get("price", 0) > 0), default=None) if naver_prices else None
-        gate_blocked = bool(gate_min and price >= gate_min * 0.70)
+        gate_blocked = bool(gate_min and price >= gate_min * 0.90)
         diag.append({
             "name": name[:30], "price": price,
             "season_excluded": season_excl,
