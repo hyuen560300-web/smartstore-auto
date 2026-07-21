@@ -1578,6 +1578,33 @@ async def _log_sourcing_decision(platform: str, dg_code: str, name: str, platfor
         pass
 
 
+def _parse_dg_content_for_fallback(dg_html: str, product_name: str) -> dict:
+    """도매꾹 원본 HTML → 특징 리스트 + 스펙 테이블 추출 (API 호출 0회)."""
+    import re as _re_dg
+    features: list = []
+    spec_rows: list = []
+    if dg_html:
+        for row in _re_dg.findall(r'<tr[^>]*>(.*?)</tr>', dg_html, _re_dg.S | _re_dg.I):
+            cells = _re_dg.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, _re_dg.S | _re_dg.I)
+            clean = [_re_dg.sub(r'<[^>]+>', '', c).strip() for c in cells]
+            clean = [c for c in clean if c and len(c) < 80]
+            if len(clean) >= 2:
+                spec_rows.append(clean[:2])
+        for tag in ('li', 'p'):
+            for m in _re_dg.finditer(rf'<{tag}[^>]*>(.*?)</{tag}>', dg_html, _re_dg.S | _re_dg.I):
+                txt = _re_dg.sub(r'<[^>]+>', '', m.group(1)).strip()
+                txt = _re_dg.sub(r'\s+', ' ', txt)
+                if 8 < len(txt) < 100 and txt not in features:
+                    features.append(txt)
+            if len(features) >= 8:
+                break
+    if not features:
+        features = [f"{product_name[:20]} 고품질", "빠른 배송 및 안전 포장", "합리적인 가격대"]
+    if not spec_rows:
+        spec_rows = [["상품명", product_name[:50]], ["배송", "택배 (1~3일)"], ["반품", "수령 후 7일"]]
+    return {"features": features[:8], "spec_rows": spec_rows[:8]}
+
+
 # ─── Claude AI 상품 설명 생성 (전 직원 협업 버전) ────────────────────────────
 async def generate_product_copy(product: dict, context: dict = None) -> dict:
     """시즌+트렌드+리뷰 Pain Point 반영한 상품 설명 생성"""
@@ -1672,33 +1699,37 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
           result["product_name"] = product.get("name", "상품")[:25]
       return result
     except Exception as _e:
-        print(f"[카피생성] API/파싱 오류 → 기본 폴백: {_e}", flush=True)
-        name = product.get("name", "상품")[:25]
+        print(f"[카피생성] API/파싱 오류 → DG 원본 폴백: {_e}", flush=True)
+        name = product.get("name", "상품")
+        _dg = _parse_dg_content_for_fallback(product.get("_dg_content", ""), name)
+        _feats = _dg["features"]
+        _specs = _dg["spec_rows"]
+        _short = name[:25]
         return {
             "product_name": name,
-            "headline": f"{name[:14]} 특가",
-            "sub_headline": "지금 바로 확인하세요",
-            "emotional_copy": f"{name}을 합리적인 가격에 만나보세요.",
-            "recommend_list": ["실용적인 제품을 원하시는 분", "가성비를 중시하는 분",
-                               "품질을 중시하는 분", "선물용으로 찾으시는 분", "빠른 배송이 필요하신 분"],
-            "reason_1": "검증된 품질로 만족도 높음",
-            "reason_2": "합리적인 가격대 형성",
-            "reason_3": "빠른 배송 및 안전 포장",
-            "spec_rows": [["상품명", name], ["배송", "택배"], ["원산지", "국내/해외"],
-                          ["반품", "수령 후 7일 이내"], ["교환", "상품 불량 시 가능"]],
+            "headline": _feats[0][:35] if _feats else f"{_short[:14]} 특가",
+            "sub_headline": _feats[1][:35] if len(_feats) > 1 else "지금 바로 확인하세요",
+            "emotional_copy": " ".join(_feats[2:4])[:100] if len(_feats) > 2 else f"{_short}을 합리적인 가격에 만나보세요.",
+            "recommend_list": (_feats[:5] if len(_feats) >= 5
+                               else _feats + ["빠른 배송이 필요하신 분", "선물용으로 찾으시는 분",
+                                              "가성비를 중시하는 분", "품질을 중시하는 분"][:5-len(_feats)]),
+            "reason_1": _feats[0] if _feats else "검증된 품질로 만족도 높음",
+            "reason_2": _feats[1] if len(_feats) > 1 else "합리적인 가격대 형성",
+            "reason_3": _feats[2] if len(_feats) > 2 else "빠른 배송 및 안전 포장",
+            "spec_rows": _specs,
             "spec_hint": "product detail texture and quality",
-            "compare_points": ["검증된 품질", "합리적 가격", "빠른 배송"],
-            "tags": [name[:5], "추천", "특가", "당일발송", "품질보장"],
-            "description": f"{name} 상품입니다.",
-            "seo_description": f"{name} 상품입니다. 합리적인 가격과 빠른 배송으로 만족스러운 쇼핑을 경험하세요.",
+            "compare_points": _feats[3:6] if len(_feats) > 3 else ["검증된 품질", "합리적 가격", "빠른 배송"],
+            "tags": [_short[:5], "추천", "특가", "당일발송", "품질보장"],
+            "description": " ".join(_feats[:2]) or f"{_short} 상품입니다.",
+            "seo_description": " ".join(_feats[:3])[:200] or f"{_short} 상품입니다. 합리적인 가격과 빠른 배송으로 만족스러운 쇼핑을 경험하세요.",
             "geo_faq": [
-                {"q": "이 상품은 어떤 분께 추천하나요?", "a": f"{name}이 필요하신 분께 추천합니다."},
+                {"q": "이 상품은 어떤 분께 추천하나요?", "a": _feats[0][:50] if _feats else f"{_short}이 필요하신 분께 추천합니다."},
                 {"q": "배송은 얼마나 걸리나요?", "a": "주문 후 1~3일 이내 배송됩니다."},
                 {"q": "반품이 가능한가요?", "a": "수령 후 7일 이내 반품 가능합니다."},
             ],
             "hs_code": "000000",
             "hs_code_desc": "General merchandise",
-            "customs_product_name": name,
+            "customs_product_name": _short,
             "customs_material": "Unknown",
             "customs_origin": "Unknown",
         }
