@@ -1336,9 +1336,7 @@ async def fetch_domeggook_products(
         return []
 
     if start_page <= 0:
-        registered_count = len(load_registered_codes())
-        # 페이지당 30개 기준, 등록 수에 맞춰 다음 페이지 산출 (최대 10페이지)
-        start_page = min(10, max(1, (registered_count // 30) + 1))
+        start_page = 1  # 항상 1페이지부터 — 중복은 registered_codes/names 체크로 처리
     print(f"[DOMEGGOOK] 검색 시작 페이지: {start_page}", flush=True)
 
     kws = keywords or _DG_KEYWORDS
