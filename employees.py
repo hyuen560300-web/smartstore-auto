@@ -332,11 +332,12 @@ def is_fashion_product(category: str) -> bool:
 async def employee_review_analyst(product_name: str, anthropic_key: str) -> dict:
     """상품 Pain Point & 셀링포인트 분석"""
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
-    resp = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=512,
-        system=[{"type": "text", "text": "이커머스 상품 분석 전문가. 반드시 JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"""
+    try:
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=[{"type": "text", "text": "이커머스 상품 분석 전문가. 반드시 JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": f"""
 '{product_name}' 상품의 고객 Pain Point와 셀링포인트를 분석해주세요.
 
 JSON만 출력:
@@ -346,8 +347,7 @@ JSON만 출력:
   "key_message": "핵심 마케팅 메시지"
 }}
 """}]
-    )
-    try:
+        )
         text = resp.content[0].text.strip()
         if "```" in text:
             text = text.split("```")[1]
@@ -577,18 +577,21 @@ async def employee_price_optimizer(
                 f"상위 3개: {top3}"
             )
 
-    resp = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=200,
-        system=[{"type": "text", "text": "네이버 스마트스토어 가격 전략 전문가. 반드시 JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"""
+    try:
+        resp = await client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=200,
+            system=[{"type": "text", "text": "네이버 스마트스토어 가격 전략 전문가. 반드시 JSON만 출력.", "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": f"""
 상품명: '{product_name}', 카테고리: '{category}', 원가: {cost_price:,}원{comp_context}
 
 최적 판매가 제안 (마진율 최소 15%, 심리적 가격대 적용, 경쟁사 평균가 기준 포지셔닝).
 JSON만 출력:
 {{"suggested_price": 28000, "margin_rate": 0.25, "reason": "근거 한 줄"}}
 """}]
-    )
+        )
+    except Exception:
+        return {"suggested_price": round(cost_price * 1.15 / 10) * 10, "reason": "기본 마진 적용 (API 오류 폴백)"}
     try:
         text = resp.content[0].text.strip()
         if "```" in text:
@@ -627,18 +630,18 @@ async def employee_tag_generator(product_name: str, category: str, selling_point
     """네이버 검색 최적화 태그 자동 생성 (Haiku)"""
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
     sp_text = ", ".join(selling_points[:3]) if selling_points else ""
-    resp = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=200,
-        system=[{"type": "text", "text": "네이버 쇼핑 검색 최적화 전문가. 반드시 JSON 배열만 출력.", "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"""
+    try:
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            system=[{"type": "text", "text": "네이버 쇼핑 검색 최적화 전문가. 반드시 JSON 배열만 출력.", "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": f"""
 상품명: '{product_name}', 카테고리: '{category}', 셀링포인트: {sp_text}
 
 구매자가 실제 검색할 키워드 중심으로 태그 10개 생성. 각 태그 최대 15자.
 JSON 배열만: ["태그1", "태그2", ...]
 """}]
-    )
-    try:
+        )
         text = resp.content[0].text.strip()
         if "```" in text:
             text = text.split("```")[1]
