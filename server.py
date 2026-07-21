@@ -6014,7 +6014,7 @@ async def startup_event():
             return
         _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "10"))
         _slots = min(_daily_limit, _max_limit - _cur)
-        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/1000, 이번:{_slots}개, 일일한도:{_daily_limit})", flush=True)
+        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/{_max_limit}, 이번:{_slots}개, 일일한도:{_daily_limit})", flush=True)
         try:
             await pipeline_register_from_domeggook(limit=_slots)
         except Exception as e:
