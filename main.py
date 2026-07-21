@@ -4905,8 +4905,8 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None) 
         channel_products = origin.get("channelProducts", [])
         channel_no = (channel_products[0].get("channelProductNo", "")
                       if channel_products else "")
-        product_url = (f"https://smartstore.naver.com/thehwmall/products/{channel_no}"
-                       if channel_no else "https://smartstore.naver.com/thehwmall")
+        product_url = (f"https://smartstore.naver.com/khww/products/{channel_no}"
+                       if channel_no else "https://smartstore.naver.com/khww")
 
         # 이미지 URL 수집
         raw_img = (origin.get("images") or {}).get("representativeImage") or {}
@@ -4934,16 +4934,22 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None) 
                 break
             continue
 
-        # Claude HTML 19섹션 생성 — 실패 시 건너뛰고 계속
+        # Claude HTML 19섹션 생성 — 실패 시 build_detail_html 폴백 (크레딧 없어도 구조 유지)
         html = await generate_claude_html_detail(product_dict, ai_copy, image_urls)
         if not html or "Noto Sans KR" not in html:
-            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ❌ HTML 생성 실패(건너뜀): {name[:30]}", flush=True)
-            results["failed"] += 1
-            consecutive_fail += 1
-            if consecutive_fail >= 5:
-                results["stopped_at"] = f"{idx}/{len(not_applied)} — 연속 {consecutive_fail}회 실패(시스템 이상 추정)"
-                break
-            continue
+            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ⚠️ Claude HTML 실패 → build_detail_html 폴백: {name[:30]}", flush=True)
+            _banner = image_urls[0] if image_urls else ""
+            _detail_img = image_urls[1] if len(image_urls) > 1 else ""
+            html = build_detail_html(_banner, _banner, ai_copy, _detail_img, product_name=name)
+            if not html or len(html) < 200:
+                print(f"[REAPPLY] [{idx}/{len(not_applied)}] ❌ 폴백도 실패(건너뜀): {name[:30]}", flush=True)
+                results["failed"] += 1
+                consecutive_fail += 1
+                if consecutive_fail >= 5:
+                    results["stopped_at"] = f"{idx}/{len(not_applied)} — 연속 {consecutive_fail}회 실패(시스템 이상 추정)"
+                    break
+                continue
+            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ✅ 폴백 HTML {len(html):,}자 적용: {name[:30]}", flush=True)
 
         # 저장 전 검증: 네이버는 html/body/head/style/script 태그를 필터링 → fragment만 저장 가능.
         # ① fragment 추출(안전망) ② 추출 후 본문이 빈값이면 저장 skip + 에러 로그
