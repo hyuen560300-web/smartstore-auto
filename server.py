@@ -1849,7 +1849,11 @@ async def register_domeggook_sync(request: Request):
     min_price = int(body.get("min_price", 3000))
     max_price = int(body.get("max_price", 150000))
     start_page = int(body.get("start_page", 0))
-    result = await pipeline_register_from_domeggook(limit, keywords, min_price, max_price, start_page)
+    try:
+        result = await pipeline_register_from_domeggook(limit, keywords, min_price, max_price, start_page)
+    except Exception as _e:
+        import traceback as _tb
+        return JSONResponse({"status": "exception", "error": str(_e), "tb": _tb.format_exc()[-2000:]}, status_code=500)
     return JSONResponse(result if isinstance(result, dict) else {"result": str(result)})
 
 
