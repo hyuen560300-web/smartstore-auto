@@ -1378,6 +1378,35 @@ async def fetch_domeggook_products(
             print(f"[DOMEGGOOK] '{kw}' 검색 오류: {e}", flush=True)
 
     if not raw_items:
+        # C24 서버 IP는 DG 차단 없음 → 프록시로 폴백
+        _C24_PROXY = "https://cafe24-auto-production.up.railway.app/dg-proxy"
+        print("[DOMEGGOOK] 직접 검색 0개 → C24 프록시 폴백 시도", flush=True)
+        for kw in (kws if raw_items == [] else []):
+            if len(raw_items) >= pool_size:
+                break
+            try:
+                async with httpx.AsyncClient(timeout=20) as c:
+                    r = await c.get(_C24_PROXY, params={
+                        "kw": kw, "pg": str(start_page),
+                        "sz": "30", "mnp": str(min_price), "mxp": str(max_price),
+                    })
+                    r.raise_for_status()
+                    data = r.json()
+                items = data.get("domeggook", {}).get("list", {}).get("item", [])
+                if not isinstance(items, list):
+                    items = []
+                added = 0
+                for it in items:
+                    no = str(it.get("no", ""))
+                    if no and no not in seen:
+                        seen.add(no)
+                        raw_items.append(it)
+                        added += 1
+                print(f"[DG-PROXY] '{kw}' → +{added}개 (누적 {len(raw_items)})", flush=True)
+                await asyncio.sleep(0.35)
+            except Exception as e:
+                print(f"[DG-PROXY] '{kw}' 오류: {e}", flush=True)
+    if not raw_items:
         return []
 
     # 상세 병렬 조회 (asyncio.gather 한 번에 너무 많으면 API 제한 → 10개씩 청크)
