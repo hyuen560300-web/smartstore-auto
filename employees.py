@@ -56,11 +56,12 @@ async def employee_sourcing_manager(products: list, limit: int, anthropic_key: s
         {"idx": i, "name": p.get("name", ""), "price": p.get("price", 0), "category": p.get("cat_large", "")}
         for i, p in enumerate(sample)
     ]
-    resp = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=512,
-        system=[{"type": "text", "text": "당신은 이커머스 상품 소싱 전문가입니다. 반드시 JSON 배열만 출력하세요.", "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"""
+    try:
+        resp = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=[{"type": "text", "text": "당신은 이커머스 상품 소싱 전문가입니다. 반드시 JSON 배열만 출력하세요.", "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": f"""
 스마트스토어에서 잘 팔릴 상품 {limit}개의 idx를 골라주세요.
 
 [필수 선별 기준 — 반드시 준수]
@@ -74,7 +75,10 @@ JSON 배열만 출력 (설명 없이): [0, 3, 7, ...]
 
 {json.dumps(product_list, ensure_ascii=False)}
 """}]
-    )
+        )
+    except Exception as _api_err:
+        print(f"[소싱팀장] API 오류 — 상위 {limit}개 폴백: {_api_err}", flush=True)
+        return filtered[:limit]
     try:
         indices = json.loads(resp.content[0].text.strip())
         return [sample[i] for i in indices if i < len(sample)][:limit]
