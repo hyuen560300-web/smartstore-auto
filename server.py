@@ -4312,6 +4312,33 @@ async def update_price(request: Request):
                          "error": r2.text[:300] if not ok else ""})
 
 
+@app.post("/fix-category")
+async def fix_category(request: Request):
+    """leafCategoryId 수정 (read-modify-write). Body: {product_no, category_id}"""
+    import httpx as _hx
+    body = await request.json()
+    product_no  = str(body.get("product_no", ""))
+    category_id = int(body.get("category_id", 0))
+    if not product_no or category_id <= 0:
+        return JSONResponse({"status": "error", "message": "product_no, category_id 필요"}, status_code=400)
+    headers = await naver_api._headers()
+    url = f"https://api.commerce.naver.com/external/v2/products/origin-products/{product_no}"
+    _READONLY = {"originProductNo", "channelProductNo", "regDate", "modDate", "statusFrom", "totalSalesQuantity", "channelProducts"}
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(url, headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"status": "error", "message": f"GET {r.status_code}: {r.text[:200]}"}, status_code=502)
+        origin = r.json().get("originProduct", {})
+        old_cat = origin.get("leafCategoryId")
+        payload = {k: v for k, v in origin.items() if k not in _READONLY}
+        payload["leafCategoryId"] = category_id
+        r2 = await c.put(url, headers=headers, json={"originProduct": payload})
+    ok = r2.status_code == 200
+    return JSONResponse({"status": "ok" if ok else "fail", "product_no": product_no,
+                         "old_category": old_cat, "new_category": category_id,
+                         "error": r2.text[:300] if not ok else ""})
+
+
 @app.post("/set-product-status")
 async def set_product_status_endpoint(request: Request):
     """상품 판매상태 변경 (SALE/SUSPENSION/CLOSE). read-modify-write 방식."""
