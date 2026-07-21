@@ -1855,21 +1855,49 @@ async def register_domeggook_sync(request: Request):
 
 @app.get("/debug-dg-proxy")
 async def debug_dg_proxy(kw: str = "캠핑", sz: int = 3):
-    """SS 서버에서 C24 DG 프록시 직접 호출 테스트 — IP차단/네트워크 진단용."""
+    """SS 서버에서 fetch_domeggook_products 실행 진단 — IP차단/프록시/필터 전 단계 출력."""
     import httpx as _hx
     _C24_PROXY = "https://cafe24-auto-production.up.railway.app/dg-proxy"
+    diag: dict = {"dg_key_set": bool(DOMEGGOOK_API_KEY)}
+
+    # ① 직접 DG 호출 테스트
     try:
-        async with _hx.AsyncClient(timeout=20) as c:
-            r = await c.get(_C24_PROXY, params={"kw": kw, "sz": str(sz), "pg": "1"})
-            status = r.status_code
-            data = r.json()
-        items = data.get("domeggook", {}).get("list", {}).get("item", [])
-        if not isinstance(items, list):
-            items = [items] if items else []
-        return JSONResponse({"proxy_status": status, "item_count": len(items),
-                             "first": items[0] if items else None, "raw_keys": list(data.keys())})
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.get(DOMEGGOOK_API_URL, params={
+                "ver": "4.1", "mode": "getItemList", "aid": DOMEGGOOK_API_KEY,
+                "market": "dome", "kw": kw, "om": "json",
+                "mnp": "3000", "mxp": "150000", "sz": str(sz), "pg": "1", "so": "rd",
+            })
+            d = r.json()
+        direct_items = d.get("domeggook", {}).get("list", {}).get("item", [])
+        if not isinstance(direct_items, list):
+            direct_items = [direct_items] if direct_items else []
+        diag["direct_count"] = len(direct_items)
     except Exception as e:
-        return JSONResponse({"error": str(e), "type": type(e).__name__}, status_code=502)
+        diag["direct_error"] = str(e)[:100]
+
+    # ② C24 프록시 호출 테스트
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r2 = await c.get(_C24_PROXY, params={"kw": kw, "sz": str(sz), "pg": "1"})
+            d2 = r2.json()
+        proxy_items = d2.get("domeggook", {}).get("list", {}).get("item", [])
+        if not isinstance(proxy_items, list):
+            proxy_items = [proxy_items] if proxy_items else []
+        diag["proxy_count"] = len(proxy_items)
+        diag["proxy_first_no"] = proxy_items[0].get("no") if proxy_items else None
+    except Exception as e:
+        diag["proxy_error"] = str(e)[:100]
+
+    # ③ 실제 fetch_domeggook_products 실행
+    try:
+        products = await fetch_domeggook_products([kw], pool_size=3, min_price=3000, max_price=150000, start_page=1)
+        diag["fetch_result_count"] = len(products)
+        diag["fetch_first"] = products[0].get("name", "")[:30] if products else None
+    except Exception as e:
+        diag["fetch_error"] = str(e)[:150]
+
+    return JSONResponse(diag)
 
 
 @app.post("/register-domeggook")
