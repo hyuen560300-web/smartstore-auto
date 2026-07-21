@@ -1774,6 +1774,8 @@ CATEGORY_ID_MAP = {
     "반려동물": 50000233,
     # 디지털/가전
     "디지털": 50000151,  "가전": 50002343,
+    "에어컨": 50002343, "실외기": 50002343, "에어컨커버": 50002343,
+    "선풍기": 50002343, "냉방": 50002343,   "히터": 50002343,
     # ── 2026-06-23 세분화 추가 (신규 명칭은 검증된 안전 leaf ID로 매핑) ──
     # 신발/슈즈 → 패션잡화 leaf(검증)
     "신발": 50003834,    "스니커즈": 50003834, "슬리퍼": 50003834, "샌들": 50003834,
@@ -4393,6 +4395,12 @@ async def pipeline_register_from_domeggook(
             _ss_floor = round(_ss_wholesale * 1.15 / 10) * 10
             if price < _ss_floor:
                 print(f"[NEAR_FLOOR] 소싱보류: {p.get('name','')[:25]} — 판매가₩{price:,} < floor₩{_ss_floor:,}", flush=True)
+                results["skip"] += 1
+                continue
+            # ④ 최소마진 1,000원: floor 초과해도 마진이 너무 적으면 스킵
+            _MIN_MARGIN = 1_000
+            if price - _ss_floor < _MIN_MARGIN:
+                print(f"[MIN_MARGIN] 소싱보류: {p.get('name','')[:25]} — 마진₩{price - _ss_floor:,} < 최소₩{_MIN_MARGIN:,}", flush=True)
                 results["skip"] += 1
                 continue
 
