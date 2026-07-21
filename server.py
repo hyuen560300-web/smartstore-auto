@@ -1876,7 +1876,7 @@ async def debug_sourcing_gate(request: Request):
         season_excl = _is_season_excluded(name)
         naver_prices = await search_naver_shopping(name)
         gate_min = min((c["price"] for c in naver_prices if c.get("price", 0) > 0), default=None) if naver_prices else None
-        gate_blocked = bool(gate_min and price >= gate_min * 0.90)
+        gate_blocked = bool(gate_min and price >= gate_min * 0.87)
         diag.append({
             "name": name[:30], "price": price,
             "season_excluded": season_excl,
@@ -5705,6 +5705,7 @@ async def _run_update_product_info_ss():
 
 
 _sync_done = False  # 동기화 완료 플래그 — 스케줄러가 완료 전 실행되는 것을 막음
+_daily_sourcing_state: dict = {"date": "", "count": 0}  # 하루 누적 소싱 카운터
 
 async def _sync_registered_codes():
     """registered_codes.json + registered_names.json 동기화.
@@ -6087,6 +6088,17 @@ async def startup_event():
         if len(_codes_now) == 0 and len(_names_now) == 0:
             print("[SCHED] 상품 등록 건너뜀 — 동기화 후에도 codes·names 모두 0개 (비정상 상태, 중복 방지)", flush=True)
             return
+        # ── 하루 누적 카운터 체크 (DAILY_SOURCING_LIMIT = 하루 총 등록 목표) ──
+        from datetime import datetime, timezone, timedelta
+        _kst_today = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+        if _daily_sourcing_state["date"] != _kst_today:
+            _daily_sourcing_state["date"] = _kst_today
+            _daily_sourcing_state["count"] = 0
+        _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "10"))
+        _already = _daily_sourcing_state["count"]
+        if _already >= _daily_limit:
+            print(f"[SCHED] 오늘 이미 {_already}/{_daily_limit}개 등록 완료 — 스킵", flush=True)
+            return
         # ── 최대 등록 한도 체크 (MAX_PRODUCTS_LIMIT env, 기본 5000) ──
         _max_limit = int(os.getenv("MAX_PRODUCTS_LIMIT", "5000"))
         _cur = await naver_api.count_sale_products()
@@ -6095,11 +6107,13 @@ async def startup_event():
             print(msg, flush=True)
             await _tg_notify(msg)
             return
-        _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "10"))
-        _slots = min(_daily_limit, _max_limit - _cur)
-        print(f"[SCHED] 상품 자동 등록 시작 (현재:{_cur}/{_max_limit}, 이번:{_slots}개, 일일한도:{_daily_limit})", flush=True)
+        _slots = min(_daily_limit - _already, _max_limit - _cur)
+        print(f"[SCHED] 상품 자동 등록 시작 (오늘:{_already}/{_daily_limit}, 이번:{_slots}개)", flush=True)
         try:
-            await pipeline_register_from_domeggook(limit=_slots)
+            result = await pipeline_register_from_domeggook(limit=_slots)
+            registered = result.get("success", 0) if isinstance(result, dict) else 0
+            _daily_sourcing_state["count"] += registered
+            print(f"[SCHED] 오늘 누적: {_daily_sourcing_state['count']}/{_daily_limit}개", flush=True)
         except Exception as e:
             print(f"[SCHED] 상품 등록 오류: {e}", flush=True)
 
