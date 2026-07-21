@@ -1867,6 +1867,7 @@ async def debug_sourcing_gate(request: Request):
     kws = body.get("keywords", ["주방"])
     limit = int(body.get("limit", 3))
 
+    from main import _is_season_excluded, search_naver_shopping
     products = await fetch_domeggook_products(kws, pool_size=limit * 3, min_price=3000, max_price=150000, start_page=1)
     diag = []
     for p in products[:limit]:
