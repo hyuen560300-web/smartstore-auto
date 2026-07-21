@@ -1857,6 +1857,37 @@ async def register_domeggook_sync(request: Request):
     return JSONResponse(result if isinstance(result, dict) else {"result": str(result)})
 
 
+@app.post("/debug-sourcing-gate")
+async def debug_sourcing_gate(request: Request):
+    """소싱게이트 skip 원인 진단 — fetch_domeggook_products 결과를 단계별 체크."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    kws = body.get("keywords", ["주방"])
+    limit = int(body.get("limit", 3))
+
+    products = await fetch_domeggook_products(kws, pool_size=limit * 3, min_price=3000, max_price=150000, start_page=1)
+    diag = []
+    for p in products[:limit]:
+        name = str(p.get("name", ""))
+        price = int(p.get("price", 0))
+        season_excl = _is_season_excluded(name)
+        naver_prices = await search_naver_shopping(name)
+        gate_min = min((c["price"] for c in naver_prices if c.get("price", 0) > 0), default=None) if naver_prices else None
+        gate_blocked = bool(gate_min and price >= gate_min * 0.70)
+        diag.append({
+            "name": name[:30], "price": price,
+            "season_excluded": season_excl,
+            "naver_count": len(naver_prices),
+            "gate_min": gate_min,
+            "gate_ratio": round(price / gate_min, 2) if gate_min else None,
+            "gate_blocked": gate_blocked,
+            "image": (p.get("image") or "")[:60],
+        })
+    return JSONResponse({"products_fetched": len(products), "diag": diag})
+
+
 @app.get("/debug-dg-proxy")
 async def debug_dg_proxy(kw: str = "캠핑", sz: int = 3):
     """SS 서버에서 fetch_domeggook_products 실행 진단 — IP차단/프록시/필터 전 단계 출력."""
