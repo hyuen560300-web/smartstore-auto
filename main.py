@@ -1604,7 +1604,8 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
     if naver_keywords:
         extra_context += f"\n네이버 쇼핑 검색량 높은 키워드(상품명에 우선 반영): {', '.join(naver_keywords[:5])}"
 
-    resp = await client.messages.create(
+    try:
+      resp = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=3000,
         system=[{
@@ -1658,20 +1659,20 @@ async def generate_product_copy(product: dict, context: dict = None) -> dict:
   "customs_origin": "원산지 추정 (China / Korea / Unknown 중 1개)"
 }}"""
         }]
-    )
-    text = resp.content[0].text.strip()
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start != -1 and end > start:
-        text = text[start:end]
-    _BAD_NAME_PATTERNS = ("불완전", "오류", "에러", "유효하지", "입력된", "BAD_REQUEST", "error", "invalid")
-    try:
-        result = json.loads(text)
-        pname = result.get("product_name", "")
-        if not pname or any(p in pname for p in _BAD_NAME_PATTERNS):
-            result["product_name"] = product.get("name", "상품")[:25]
-        return result
-    except Exception:
+      )
+      text = resp.content[0].text.strip()
+      start = text.find("{")
+      end = text.rfind("}") + 1
+      if start != -1 and end > start:
+          text = text[start:end]
+      _BAD_NAME_PATTERNS = ("불완전", "오류", "에러", "유효하지", "입력된", "BAD_REQUEST", "error", "invalid")
+      result = json.loads(text)
+      pname = result.get("product_name", "")
+      if not pname or any(p in pname for p in _BAD_NAME_PATTERNS):
+          result["product_name"] = product.get("name", "상품")[:25]
+      return result
+    except Exception as _e:
+        print(f"[카피생성] API/파싱 오류 → 기본 폴백: {_e}", flush=True)
         name = product.get("name", "상품")[:25]
         return {
             "product_name": name,
