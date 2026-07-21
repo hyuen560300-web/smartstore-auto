@@ -4327,18 +4327,17 @@ async def pipeline_register_from_domeggook(
                 results["ip_blocked"] += 1
                 continue
 
-            # ─── 네이버 경쟁가 사전 게이트: 도매가×1.15 > 최저가 → 최저마진으로도 시장가 초과 ───
-            # 임계값 0.87 = 1/1.15 손익분기점: 도매가 ≥ 최저가×0.87이면 floor > 최저가
+            # ─── 네이버 경쟁가 사전 게이트: floor(도매가×1.15) ≥ 최저가 → 등록 시 마진 0 이하 ───
             competitor_prices = await search_naver_shopping(str(p.get("name", "")))
             if competitor_prices:
                 _gate_min = min(
                     (c["price"] for c in competitor_prices if c.get("price", 0) > 0),
                     default=None,
                 )
-                if _gate_min and _ss_wholesale >= _gate_min * 0.87:
+                if _gate_min and _ss_wholesale * 1.15 >= _gate_min:
                     print(
                         f"[소싱게이트] ⛔ 차단: {p.get('name','')[:25]} — "
-                        f"도매가₩{_ss_wholesale:,} ≥ 최저가₩{_gate_min:,}×0.87=₩{int(_gate_min*0.87):,}",
+                        f"floor₩{int(_ss_wholesale*1.15):,} ≥ 최저가₩{_gate_min:,}",
                         flush=True,
                     )
                     results["skip"] += 1
