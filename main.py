@@ -1553,9 +1553,12 @@ def clean_product_name(name: str) -> str:
 
 
 # ─── 가격 계산 ────────────────────────────────────────────────────────────────
+MIN_SALE_PRICE = int(os.environ.get("MIN_SALE_PRICE", "3500"))
+
 def calculate_selling_price(wholesale_price: int) -> int:
     price = wholesale_price * (1 + MARGIN_RATE)
-    return round(price / 10) * 10
+    result = round(price / 10) * 10
+    return max(result, MIN_SALE_PRICE)
 
 
 async def _log_sourcing_decision(platform: str, dg_code: str, name: str, platform_id, wholesale: int, sale_price: int, reason: str) -> None:
