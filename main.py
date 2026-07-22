@@ -4943,8 +4943,8 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None) 
 
         # Claude HTML 19섹션 생성 — 실패 시 build_detail_html 폴백 (크레딧 없어도 구조 유지)
         html = await generate_claude_html_detail(product_dict, ai_copy, image_urls)
-        if not html or "Noto Sans KR" not in html:
-            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ⚠️ Claude HTML 실패 → build_detail_html 폴백: {name[:30]}", flush=True)
+        if not html or len(html) < 1000:
+            print(f"[REAPPLY] [{idx}/{len(not_applied)}] ⚠️ Claude HTML 실패/짧음 → build_detail_html 폴백: {name[:30]}", flush=True)
             _banner = image_urls[0] if image_urls else ""
             _detail_img = image_urls[1] if len(image_urls) > 1 else ""
             html = build_detail_html(_banner, _banner, ai_copy, _detail_img, product_name=name)
