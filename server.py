@@ -4494,6 +4494,31 @@ async def sale_list_endpoint():
                          "raw_sample": raw_sample})
 
 
+@app.get("/sale-raw")
+async def sale_raw_endpoint():
+    """search API 첫 페이지 raw JSON 반환 (디버그용)."""
+    import httpx as _hx
+    from datetime import datetime, timezone
+    headers = await naver_api._headers()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    async with _hx.AsyncClient(timeout=30) as c:
+        r = await c.post(
+            f"{NAVER_BASE}/v1/products/search",
+            headers=headers,
+            json={"productStatusTypes": ["SALE"], "page": 1, "size": 2,
+                  "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now},
+        )
+    body = r.json()
+    top_keys = list(body.keys())
+    first_item = (body.get("contents") or body.get("content") or [None])[0]
+    return JSONResponse({
+        "status": r.status_code,
+        "top_keys": top_keys,
+        "first_item_keys": list(first_item.keys()) if isinstance(first_item, dict) else first_item,
+        "first_item": first_item,
+    })
+
+
 @app.get("/get-channel-detail")
 async def get_channel_detail(channel_no: str):
     """channel-products API로 채널상품 detailContent 및 originProductNo 조회."""
