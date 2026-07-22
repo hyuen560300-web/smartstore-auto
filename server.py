@@ -4494,6 +4494,93 @@ async def sale_list_endpoint():
                          "raw_sample": raw_sample})
 
 
+@app.post("/sale-scan")
+async def sale_scan_endpoint(background_tasks: BackgroundTasks, keyword: str = ""):
+    """SALE 97개 origin-products 전체 조회 → 상품명/DG코드/채널번호/HTML길이 반환.
+    keyword 지정 시 해당 키워드 포함 상품만 필터.
+    결과: /sale-scan-result"""
+    import httpx as _hx
+    from datetime import datetime, timezone
+
+    async def _run():
+        headers = await naver_api._headers()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        nos = []
+        page = 1
+        while True:
+            async with _hx.AsyncClient(timeout=30) as c:
+                r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=headers,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                          "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now})
+            if r.status_code != 200: break
+            body = r.json()
+            for p in body.get("contents", []):
+                no = str(p.get("originProductNo", ""))
+                if no: nos.append(no)
+            if len(body.get("contents", [])) < 50: break
+            page += 1
+            await asyncio.sleep(0.5)
+
+        results = []
+        no_dg = []
+        for i, no in enumerate(nos):
+            try:
+                async with _hx.AsyncClient(timeout=15) as c:
+                    r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                     headers=await naver_api._headers())
+                if r2.status_code != 200:
+                    await asyncio.sleep(1); continue
+                origin = r2.json().get("originProduct", {})
+                name = (origin.get("name") or "").strip()
+                sp = int(origin.get("salePrice") or 0)
+                da = (origin.get("detailAttribute") or {})
+                dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
+                dc_len = len(origin.get("detailContent") or "")
+                ch_prods = origin.get("channelProducts", [])
+                channel_no = str(ch_prods[0].get("channelProductNo", "")) if ch_prods else ""
+                reg_date = origin.get("regDate", "")[:10]
+                item = {
+                    "no": no, "name": name, "sale_price": sp,
+                    "dg_code": dg_code, "channel_no": channel_no,
+                    "dc_len": dc_len, "reg_date": reg_date,
+                    "has_dg": dg_code.startswith("DG_") or dg_code.startswith("ONCH3_"),
+                }
+                results.append(item)
+                if not (dg_code.startswith("DG_") or dg_code.startswith("ONCH3_")):
+                    no_dg.append({"no": no, "name": name, "sale_price": sp,
+                                  "dg_code": dg_code or "(없음)", "reg_date": reg_date})
+                await asyncio.sleep(0.8)
+            except Exception as ex:
+                print(f"[SALE-SCAN] {no} 오류: {ex}", flush=True)
+                await asyncio.sleep(1)
+
+        kw_hits = [x for x in results if keyword and keyword in x["name"]] if keyword else []
+        save = {"total": len(results), "no_dg_count": len(no_dg),
+                "no_dg_items": no_dg, "keyword": keyword,
+                "keyword_hits": kw_hits, "all_items": results}
+        print(f"[SALE-SCAN] 완료 — 전체:{len(results)} DG없음:{len(no_dg)}", flush=True)
+        async with _hx.AsyncClient(timeout=10) as cs:
+            await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "ss.sale_scan.latest",
+                      "value": json.dumps(save, ensure_ascii=False),
+                      "category": "audit"})
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"status": "started", "keyword": keyword,
+                         "note": "결과는 /sale-scan-result로 3~4분 후 조회"})
+
+
+@app.get("/sale-scan-result")
+async def sale_scan_result():
+    """sale-scan 결과 조회"""
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=10) as c:
+        r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.sale_scan.latest")
+    if r.status_code != 200:
+        return JSONResponse({"status": "not_found"})
+    return JSONResponse(json.loads(r.json().get("value", "{}")))
+
+
 @app.post("/sale-margin-check")
 async def sale_margin_check(background_tasks: BackgroundTasks):
     """SALE 97개 전체 마진 백그라운드 검증. 결과는 /sale-margin-result로 조회."""
