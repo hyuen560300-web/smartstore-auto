@@ -5862,7 +5862,11 @@ async def startup_event():
             import json as _jj
             _ids = _r.json().get("value", [])
             if isinstance(_ids, str):
-                _ids = _jj.loads(_ids)
+                try:
+                    _ids = _jj.loads(_ids)
+                except Exception:
+                    import ast as _ast
+                    _ids = _ast.literal_eval(_ids)
             _notified_order_ids.update(_ids or [])
             print(f"[STARTUP] 주문 ID {len(_notified_order_ids)}건 복원 완료", flush=True)
     except Exception as _e:
@@ -5977,13 +5981,14 @@ async def startup_event():
             if new_orders:
                 print(f"[ORDER_CHECK] 신규 주문 {len(new_orders)}건 알림 완료", flush=True)
                 try:
+                    import json as _jj
                     _today_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
                     async with httpx.AsyncClient(timeout=5) as _c:
                         await _c.post(
                             "https://loving-serenity-production-2635.up.railway.app/context",
                             json={
                                 "key": f"ss.order_notified_ids.{_today_kst}",
-                                "value": list(_notified_order_ids),
+                                "value": _jj.dumps(list(_notified_order_ids)),
                                 "category": "system",
                             },
                         )
