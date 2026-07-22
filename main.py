@@ -4887,7 +4887,7 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None) 
             origin = item.get("originProduct", {})
             detail = origin.get("detailContent") or ""
             name = (origin.get("name") or "").strip()
-            if not name or "Noto Sans KR" in detail:
+            if not name or "Noto Sans KR" in detail or len(detail) >= 5000:
                 continue
             not_applied.append(item)
         if limit and limit > 0:

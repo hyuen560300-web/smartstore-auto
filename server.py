@@ -4445,6 +4445,50 @@ async def product_count_endpoint():
     return JSONResponse(results)
 
 
+@app.get("/sale-list")
+async def sale_list_endpoint():
+    """SALE 상품 전체 목록 (Naver search API 페이징, DG코드·가격 포함)."""
+    import httpx as _hx
+    from datetime import datetime, timezone
+    headers = await naver_api._headers()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    items = []
+    page = 1
+    while True:
+        async with _hx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/products/search",
+                headers=headers,
+                json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                      "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now},
+            )
+        if r.status_code != 200:
+            break
+        body = r.json()
+        contents = body.get("contents", [])
+        for p in contents:
+            origin = p.get("originProduct", {})
+            da = (origin.get("detailAttribute") or {})
+            sci = (da.get("sellerCodeInfo") or {})
+            dg_code = (sci.get("sellerManagementCode") or "").strip()
+            cost = int((da.get("purchasePrice") or da.get("costPrice") or 0))
+            dc_len = len(origin.get("detailContent") or "")
+            items.append({
+                "no": str(p.get("originProductNo", "")),
+                "name": (origin.get("name") or "").strip(),
+                "sale_price": int(origin.get("salePrice") or 0),
+                "cost_price": cost,
+                "dg_code": dg_code,
+                "dc_len": dc_len,
+            })
+        total = body.get("totalElements", 0)
+        if len(contents) < 50 or len(items) >= total:
+            break
+        page += 1
+        import asyncio as _ai; await _ai.sleep(0.5)
+    return JSONResponse({"total": len(items), "items": items})
+
+
 @app.get("/get-channel-detail")
 async def get_channel_detail(channel_no: str):
     """channel-products API로 채널상품 detailContent 및 originProductNo 조회."""
