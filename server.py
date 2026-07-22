@@ -2291,12 +2291,24 @@ async def register_single_product(request: Request):
                 except Exception as _dge:
                     print(f"[register-single] 도매꾹 추가이미지 실패(무시): {str(_dge)[:120]}", flush=True)
                 _vh = await _gen_html(p, ai, _vimgs)
-                if _vh and "Noto Sans KR" in _vh and len(_vh) >= 1000:
+                if _vh and len(_vh) >= 1000:
                     _vh = _frag(_vh)
                     if _vh and len(_vh) >= 500:
                         _upd = {k: v for k, v in payload["originProduct"].items()
                                 if k not in ("originProductNo", "channelProductNo", "regDate", "modDate", "statusFrom", "totalSalesQuantity")}
                         _upd["detailContent"] = _vh
+                        # KC 인증 kindType 빈 항목 제거 (BAD_REQUEST 방지)
+                        _da = _upd.get("detailAttribute")
+                        if isinstance(_da, dict):
+                            _ci = _da.get("productCertificationInfos") or []
+                            _cl = [x for x in _ci if x.get("kindType")]
+                            if len(_cl) != len(_ci):
+                                _da = dict(_da)
+                                if _cl:
+                                    _da["productCertificationInfos"] = _cl
+                                else:
+                                    _da.pop("productCertificationInfos", None)
+                                _upd["detailAttribute"] = _da
                         _vok, _verr = False, ""
                         for _va in range(3):
                             try:
