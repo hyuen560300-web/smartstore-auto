@@ -4975,6 +4975,18 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None) 
         # Naver API 업데이트 (full payload merge) — 429 등 일시오류 3회 재시도, 실패 시 건너뜀
         full_payload = {k: v for k, v in origin.items() if k not in _READONLY}
         full_payload["detailContent"] = html
+        # KC 인증 kindType 빈 항목 제거 (BAD_REQUEST 방지 — strip-prices-sync 동일 패턴)
+        _da = full_payload.get("detailAttribute")
+        if isinstance(_da, dict):
+            _ci = _da.get("productCertificationInfos") or []
+            _cleaned = [x for x in _ci if x.get("kindType")]
+            if len(_cleaned) != len(_ci):
+                _da = dict(_da)
+                if _cleaned:
+                    _da["productCertificationInfos"] = _cleaned
+                else:
+                    _da.pop("productCertificationInfos", None)
+                full_payload["detailAttribute"] = _da
         ok, err_msg = False, ""
         for _att in range(3):
             try:

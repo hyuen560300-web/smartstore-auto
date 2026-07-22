@@ -4339,6 +4339,47 @@ async def fix_category(request: Request):
                          "error": r2.text[:300] if not ok else ""})
 
 
+@app.post("/inject-detail-html")
+async def inject_detail_html(request: Request):
+    """단일 상품 detailContent 직접 주입 — 동기, KC 필드 정리 포함.
+    Body: {"product_no": "origin_product_no", "html": "HTML 내용"}"""
+    import httpx as _hx
+    body = await request.json()
+    product_no = str(body.get("product_no", ""))
+    html = str(body.get("html", ""))
+    if not product_no or not html:
+        return JSONResponse({"status": "error", "message": "product_no, html 필수"}, status_code=400)
+    headers = await naver_api._headers()
+    url = f"https://api.commerce.naver.com/external/v2/products/origin-products/{product_no}"
+    async with _hx.AsyncClient(timeout=30) as c:
+        r = await c.get(url, headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"status": "error", "step": "GET", "http": r.status_code,
+                                 "body": r.text[:300]}, status_code=502)
+        origin = r.json().get("originProduct", {})
+        _SKIP = {"originProductNo", "channelProductNo", "regDate", "modDate",
+                 "statusFrom", "totalSalesQuantity", "channelProducts"}
+        payload = {k: v for k, v in origin.items() if k not in _SKIP}
+        payload["detailContent"] = html
+        # KC 인증 kindType 빈 항목 제거 (BAD_REQUEST 방지)
+        da = payload.get("detailAttribute")
+        if isinstance(da, dict):
+            ci = da.get("productCertificationInfos") or []
+            cleaned = [x for x in ci if x.get("kindType")]
+            if len(cleaned) != len(ci):
+                da = dict(da)
+                if cleaned:
+                    da["productCertificationInfos"] = cleaned
+                else:
+                    da.pop("productCertificationInfos", None)
+                payload["detailAttribute"] = da
+        r2 = await c.put(url, headers=headers, json={"originProduct": payload})
+    ok = r2.status_code == 200
+    return JSONResponse({"status": "ok" if ok else "fail", "product_no": product_no,
+                         "html_len": len(html),
+                         "error": r2.text[:500] if not ok else ""})
+
+
 @app.post("/set-product-status")
 async def set_product_status_endpoint(request: Request):
     """상품 판매상태 변경 (SALE/SUSPENSION/CLOSE). read-modify-write 방식."""
