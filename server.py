@@ -4404,12 +4404,21 @@ async def get_detail_content(no: str):
             return JSONResponse({"status": "error", "http": r.status_code, "body": r.text[:300]}, status_code=502)
         origin = r.json().get("originProduct", {})
         dc = origin.get("detailContent", "")
+        cost_price = origin.get("costPrice", 0) or 0
+        sale_price = origin.get("salePrice", 0) or 0
+        floor_price = int(cost_price * 1.15) if cost_price else 0
+        margin = sale_price - floor_price if floor_price else None
         return JSONResponse({
             "product_no": no,
             "detail_content_len": len(dc),
             "preview": dc[:500] if dc else "",
             "status_type": origin.get("statusType"),
             "name": (origin.get("name") or "")[:60],
+            "sale_price": sale_price,
+            "cost_price": cost_price,
+            "floor_price": floor_price,
+            "margin": margin,
+            "margin_ok": margin >= 1000 if margin is not None else None,
         })
 
 
