@@ -4422,6 +4422,29 @@ async def get_detail_content(no: str):
         })
 
 
+@app.get("/product-count")
+async def product_count_endpoint():
+    """Naver search API totalElements로 실제 상태별 상품 수 조회."""
+    import httpx as _hx
+    from datetime import datetime, timezone
+    headers = await naver_api._headers()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    results = {}
+    async with _hx.AsyncClient(timeout=20) as c:
+        for status in ["SALE", "SUSPENSION"]:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/products/search",
+                headers=headers,
+                json={"productStatusTypes": [status], "page": 1, "size": 1,
+                      "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now},
+            )
+            if r.status_code == 200:
+                results[status] = r.json().get("totalElements", r.json().get("totalCount", "?"))
+            else:
+                results[status] = f"err{r.status_code}"
+    return JSONResponse(results)
+
+
 @app.get("/get-channel-detail")
 async def get_channel_detail(channel_no: str):
     """channel-products API로 채널상품 detailContent 및 originProductNo 조회."""
