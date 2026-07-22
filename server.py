@@ -4380,6 +4380,27 @@ async def inject_detail_html(request: Request):
                          "error": r2.text[:500] if not ok else ""})
 
 
+@app.get("/get-detail-content")
+async def get_detail_content(no: str):
+    """단일 상품 detailContent 실제 길이 확인 (Naver API 직접 GET)."""
+    import httpx as _hx
+    headers = await naver_api._headers()
+    url = f"https://api.commerce.naver.com/external/v2/products/origin-products/{no}"
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(url, headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"status": "error", "http": r.status_code, "body": r.text[:300]}, status_code=502)
+        origin = r.json().get("originProduct", {})
+        dc = origin.get("detailContent", "")
+        return JSONResponse({
+            "product_no": no,
+            "detail_content_len": len(dc),
+            "preview": dc[:500] if dc else "",
+            "status_type": origin.get("statusType"),
+            "name": (origin.get("name") or "")[:60],
+        })
+
+
 @app.post("/set-product-status")
 async def set_product_status_endpoint(request: Request):
     """상품 판매상태 변경 (SALE/SUSPENSION/CLOSE). read-modify-write 방식."""
