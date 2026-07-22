@@ -4494,6 +4494,98 @@ async def sale_list_endpoint():
                          "raw_sample": raw_sample})
 
 
+@app.post("/sale-margin-check")
+async def sale_margin_check(background_tasks: BackgroundTasks):
+    """SALE 97개 전체 마진 백그라운드 검증. 결과는 /sale-margin-result로 조회."""
+    import httpx as _hx
+    from datetime import datetime, timezone
+    import math as _math
+
+    async def _run():
+        headers = await naver_api._headers()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # 1. no 목록 수집
+        nos = []
+        page = 1
+        while True:
+            async with _hx.AsyncClient(timeout=30) as c:
+                r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=headers,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                          "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now})
+            if r.status_code != 200: break
+            body = r.json()
+            for p in body.get("contents", []):
+                no = str(p.get("originProductNo", ""))
+                if no: nos.append(no)
+            if len(body.get("contents", [])) < 50: break
+            page += 1
+            await asyncio.sleep(0.5)
+
+        # 2. 각 상품 상세 조회 + 마진 계산
+        MARGIN = float(os.environ.get("MARGIN_RATE", "0.15"))
+        MIN_SP = int(os.environ.get("MIN_SALE_PRICE", "3500"))
+        problems, ok_list = [], []
+        for i, no in enumerate(nos):
+            try:
+                async with _hx.AsyncClient(timeout=15) as c:
+                    r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                     headers=await naver_api._headers())
+                if r2.status_code != 200:
+                    await asyncio.sleep(1); continue
+                origin = r2.json().get("originProduct", {})
+                name = (origin.get("name") or "").strip()
+                sp = int(origin.get("salePrice") or 0)
+                da = (origin.get("detailAttribute") or {})
+                dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
+                # DG 도매가
+                cp = 0
+                if dg_code:
+                    try:
+                        async with _hx.AsyncClient(timeout=8) as cg:
+                            dg_r = await cg.get(
+                                f"https://smartstore-auto-production.up.railway.app/dg-search",
+                                params={"keyword": dg_code})
+                        if dg_r.status_code == 200:
+                            dg_items = dg_r.json().get("items", [])
+                            if dg_items: cp = int(dg_items[0].get("wholesale", 0) or 0)
+                    except Exception: pass
+                floor = _math.ceil(cp * (1 + MARGIN) / 10) * 10 if cp > 0 else 0
+                issue = None
+                if sp < MIN_SP: issue = f"저가({sp:,}원<{MIN_SP:,}원)"
+                elif cp > 0 and sp < floor: issue = f"역마진(판매:{sp:,} 바닥:{floor:,})"
+                if issue:
+                    problems.append({"no": no, "name": name[:30], "sale_price": sp,
+                                     "cost_price": cp, "floor": floor, "issue": issue})
+                else:
+                    ok_list.append({"no": no, "name": name[:20], "sale_price": sp})
+                await asyncio.sleep(0.8)
+            except Exception as ex:
+                print(f"[MARGIN-CHECK] {no} 오류: {ex}", flush=True)
+                await asyncio.sleep(1)
+
+        result = {"total": len(nos), "problems": problems, "ok": len(ok_list),
+                  "problem_count": len(problems)}
+        print(f"[MARGIN-CHECK] 완료 — 문제:{len(problems)}개 / 정상:{len(ok_list)}개", flush=True)
+        async with _hx.AsyncClient(timeout=10) as cs:
+            await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "ss.margin_check.latest", "value": json.dumps(result, ensure_ascii=False),
+                      "category": "audit"})
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"status": "started", "note": "결과는 /sale-margin-result로 조회"})
+
+
+@app.get("/sale-margin-result")
+async def sale_margin_result():
+    """마진 검증 결과 조회 (/sale-margin-check 실행 후 약 3~4분 뒤)."""
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=10) as c:
+        r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.margin_check.latest")
+    if r.status_code != 200:
+        return JSONResponse({"status": "not_found"})
+    return JSONResponse(json.loads(r.json().get("value", "{}")))
+
+
 @app.get("/sale-raw")
 async def sale_raw_endpoint():
     """search API 첫 페이지 raw JSON 반환 (디버그용)."""
