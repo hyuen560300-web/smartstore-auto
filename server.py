@@ -4422,6 +4422,33 @@ async def get_detail_content(no: str):
         })
 
 
+@app.get("/get-channel-detail")
+async def get_channel_detail(channel_no: str):
+    """channel-products API로 채널상품 detailContent 및 originProductNo 조회."""
+    import httpx as _hx
+    headers = await naver_api._headers()
+    url = f"https://api.commerce.naver.com/external/v2/products/channel-products/{channel_no}"
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(url, headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"status": "error", "http": r.status_code, "body": r.text[:300]}, status_code=502)
+        data = r.json()
+        ch = data.get("channelProduct", {})
+        origin = data.get("originProduct", {})
+        ch_dc = ch.get("detailContent", "")
+        orig_dc = origin.get("detailContent", "")
+        return JSONResponse({
+            "channel_no": channel_no,
+            "origin_product_no": ch.get("originProductNo") or origin.get("originProductNo"),
+            "name": (origin.get("name") or ch.get("name") or "")[:60],
+            "channel_dc_len": len(ch_dc),
+            "channel_dc_preview": ch_dc[:300] if ch_dc else "",
+            "origin_dc_len": len(orig_dc),
+            "origin_dc_preview": orig_dc[:300] if orig_dc else "",
+            "status_type": ch.get("statusType") or origin.get("statusType"),
+        })
+
+
 @app.post("/set-product-status")
 async def set_product_status_endpoint(request: Request):
     """상품 판매상태 변경 (SALE/SUSPENSION/CLOSE). read-modify-write 방식."""
