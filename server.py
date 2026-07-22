@@ -4466,17 +4466,21 @@ async def sale_list_endpoint():
             break
         body = r.json()
         contents = body.get("contents", [])
+        raw_sample = contents[0] if contents and not items else None
         for p in contents:
-            origin = p.get("originProduct", {})
+            # search API는 originProduct가 빈 경우 top-level에 직접 필드가 있을 수 있음
+            origin = p.get("originProduct") or {}
             da = (origin.get("detailAttribute") or {})
             sci = (da.get("sellerCodeInfo") or {})
             dg_code = (sci.get("sellerManagementCode") or "").strip()
             cost = int((da.get("purchasePrice") or da.get("costPrice") or 0))
             dc_len = len(origin.get("detailContent") or "")
+            name = (origin.get("name") or p.get("name") or "").strip()
+            sale_price = int(origin.get("salePrice") or p.get("salePrice") or 0)
             items.append({
                 "no": str(p.get("originProductNo", "")),
-                "name": (origin.get("name") or "").strip(),
-                "sale_price": int(origin.get("salePrice") or 0),
+                "name": name,
+                "sale_price": sale_price,
                 "cost_price": cost,
                 "dg_code": dg_code,
                 "dc_len": dc_len,
@@ -4486,7 +4490,8 @@ async def sale_list_endpoint():
             break
         page += 1
         import asyncio as _ai; await _ai.sleep(0.5)
-    return JSONResponse({"total": len(items), "items": items})
+    return JSONResponse({"total": len(items), "items": items,
+                         "raw_sample": raw_sample})
 
 
 @app.get("/get-channel-detail")
