@@ -2177,7 +2177,7 @@ async def register_single_product(request: Request):
         price_result = await employee_price_optimizer(
             product_name, category, raw_price, ANTHROPIC_API_KEY,
             competitor_prices=competitor_prices)
-        price = price_result["suggested_price"]
+        price = price_result.get("suggested_price") or raw_price
         print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
         if price_result.get("skip"):
             return JSONResponse({
