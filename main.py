@@ -233,7 +233,25 @@ _DG_KEYWORDS_ALL: list[str] = [
             # 식품/음료
             "간식,건과류,음료,커피,차,조미료,반찬,건강음료,"
             # 계절/특수
-            "여름용품,수영복,래쉬가드,겨울용품,방한용품,핫팩,선풍기,에어컨커버"
+            "여름용품,수영복,래쉬가드,겨울용품,방한용품,핫팩,선풍기,에어컨커버,"
+            # 주방 세부
+            "밀폐용기,보온도시락,실리콘용기,도마,냄비받침,냉장고정리함,주방장갑,음식보관용기,"
+            # 여름 아웃도어 세부
+            "쿨매트,냉감이불,모기장,버킷햇,자외선차단모자,팝업텐트,쿨링타월,아이스박스,"
+            # 반려동물 세부
+            "강아지쿨매트,고양이터널,강아지목줄,펫사료통,강아지이동가방,고양이간식볼,"
+            # 홈/생활 세부
+            "빨래건조대,세탁망,다용도옷걸이,발매트,욕실선반,욕실정리함,다용도수납함,"
+            # 뷰티 세부
+            "쿨링미스트,선스틱,수분팩,클렌징오일,여름팩,피부진정패치,자외선차단제,"
+            # 스포츠/홈트 세부
+            "폼롤러,줄넘기,스트레칭밴드,헬스장갑,밸런스패드,아령세트,아쿠아슈즈,"
+            # 여행/잡화 세부
+            "여행파우치,수면안대,양산,접이식우산,헤어밴드,보조배터리,네크쿠션,"
+            # 문구/사무 세부
+            "모니터받침대,케이블정리함,마우스패드,형광펜세트,다이어리,스티커메모지,"
+            # 캠핑 세부
+            "캠핑의자,캠핑테이블,캠핑랜턴,해먹,모기퇴치기,캠핑쿨러백,차박커튼"
         )
     ).split(",") if kw.strip()
 ]
@@ -1356,7 +1374,7 @@ async def fetch_domeggook_products(
                     "mnp": str(min_price), "mxp": str(max_price),
                     "sz": "30",    # 페이지당 30개
                     "pg": str(start_page),
-                    "so": "rd",    # 추천도순
+                    "so": "sd",    # 최신순 — 신규상품 우선(기등록 상품 중복 최소화)
                 })
                 r.raise_for_status()
                 data = r.json()
@@ -4257,9 +4275,9 @@ async def pipeline_register_from_domeggook(
     limit = min(limit, _max_limit - _cur_sale)
     print(f"[도매꾹파이프라인] 현재 {_cur_sale}개, 이번 최대 {limit}개 등록", flush=True)
 
-    # ① 도매꾹 API 상품 수집 (pool = limit * 3 으로 sourcing manager 선별 여유)
+    # ① 도매꾹 API 상품 수집 (pool = max(limit*10, 200) — 후보 고갈 방지)
     products = await fetch_domeggook_products(
-        keywords, pool_size=limit * 3,
+        keywords, pool_size=max(limit * 10, 200),
         min_price=min_price, max_price=max_price, start_page=start_page
     )
     if not products:
