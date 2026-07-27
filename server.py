@@ -4855,12 +4855,19 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
         # 2단계: 각 상품 상세 + DG 도매가 + margin 계산 + 즉시 수정
         for no in nos:
             try:
-                async with _hx.AsyncClient(timeout=15) as c:
-                    r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
-                                     headers=await naver_api._headers())
-                if r2.status_code != 200:
-                    skip_list.append({"no": no, "reason": f"GET실패{r2.status_code}"})
-                    await asyncio.sleep(1)
+                # 429 retry
+                r2 = None
+                for _attempt in range(3):
+                    async with _hx.AsyncClient(timeout=15) as c:
+                        r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                         headers=await naver_api._headers())
+                    if r2.status_code == 429:
+                        await asyncio.sleep(3 * (_attempt + 1))
+                    else:
+                        break
+                if r2 is None or r2.status_code != 200:
+                    skip_list.append({"no": no, "reason": f"GET실패{r2.status_code if r2 else 'None'}"})
+                    await asyncio.sleep(2)
                     continue
                 data = r2.json()
                 origin = data.get("originProduct", {})
@@ -4875,14 +4882,16 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
                 # margin_ok 판단
                 if wholesale <= 0 and dg_code:
                     # DG 삭제/판매종료 → 판매중지
-                    ok_s, err_s = await naver_api.set_product_status(no, "SUSPENSION")
+                    ok_s = await naver_api.set_product_status(no, "SUSPENSION")
                     suspended_list.append({"no": no, "name": name, "dg_code": dg_code,
-                                           "reason": "DG도매가0(삭제/종료)", "ok": ok_s})
+                                           "reason": "DG도매가0(삭제/종료)", "ok": bool(ok_s)})
+                    await asyncio.sleep(1)
                 elif wholesale <= 0:
                     # DG 코드 없음 → 판매중지
-                    ok_s, err_s = await naver_api.set_product_status(no, "SUSPENSION")
+                    ok_s = await naver_api.set_product_status(no, "SUSPENSION")
                     suspended_list.append({"no": no, "name": name, "dg_code": "",
-                                           "reason": "DG코드없음", "ok": ok_s})
+                                           "reason": "DG코드없음", "ok": bool(ok_s)})
+                    await asyncio.sleep(1)
                 else:
                     floor = int(_math.ceil(wholesale * (1 + MARGIN) / 10) * 10)
                     floor = max(floor, MIN_SP)
@@ -4907,10 +4916,10 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
                             "put_status": rp.status_code,
                             "ok": rp.status_code == 200,
                         })
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1)
             except Exception as ex:
                 skip_list.append({"no": no, "reason": str(ex)[:80]})
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(1.5)
 
         result = {
             "total": total,
