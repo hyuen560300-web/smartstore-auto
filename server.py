@@ -4901,16 +4901,8 @@ async def sale_margin_fix():
                                            "reason": "도매가0(DG삭제/품절)", "ok": _sr.status_code < 300,
                                            "put_status": _sr.status_code})
                 elif wholesale <= 0:
-                    _upd = dict(origin); _upd["statusType"] = "SUSPENSION"
-                    async with _hx.AsyncClient(timeout=10) as _sc:
-                        _sr = await _sc.put(
-                            f"{NAVER_BASE}/v2/products/origin-products/{no}",
-                            headers=await naver_api._headers(),
-                            json={"originProduct": _upd},
-                        )
-                    suspended_list.append({"no": no, "name": name, "dg_code": "",
-                                           "reason": "DG코드없음", "ok": _sr.status_code < 300,
-                                           "put_status": _sr.status_code})
+                    # DG 코드 없는 상품(수동등록 등)은 판매중지 금지 — skip만
+                    skip_list.append({"no": no, "name": name, "reason": "DG코드없음(skip)"})
                 else:
                     floor = int(_math.ceil(wholesale * (1 + MARGIN) / 10) * 10)
                     floor = max(floor, MIN_SP)
