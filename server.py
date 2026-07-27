@@ -1436,7 +1436,8 @@ async def product_detail_one(origin_no: str):
         return {"origin_no": origin_no, "name": origin.get("name", ""),
                 "price": origin.get("salePrice", 0), "channel_no": channel_no,
                 "dg_code": dg_code, "rep_image": rep, "cdn1_imgs": cdn[:6],
-                "reg_date": reg_date, "status": status}
+                "reg_date": reg_date, "status": status,
+                "detail_len": len(detail), "detail_preview": detail[:400]}
     except Exception as e:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
