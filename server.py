@@ -4878,19 +4878,35 @@ async def sale_margin_fix():
                 if not isinstance(da, dict):
                     da = {}
                 dg_code = str(((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "")).strip()
-                # 저장된 도매가 사용 (DG API 재호출 없음)
+                # 저장된 도매가 우선, 없으면 DG API 실시간 재조회
                 _cp = origin.get("costPrice")
                 _pp = (da.get("sellerCodeInfo") or {}).get("purchasePrice") if not _cp else None
                 wholesale = int(_cp or _pp or 0)
+                if wholesale <= 0 and dg_code:
+                    try:
+                        from main import _get_dg_wholesale as _gdw
+                        wholesale = await _gdw(dg_code)
+                    except Exception:
+                        wholesale = 0
 
                 if wholesale <= 0 and dg_code:
-                    ok_s = await naver_api.set_product_status(no, "SUSPENSION")
+                    async with _hx.AsyncClient(timeout=10) as _sc:
+                        _sr = await _sc.put(
+                            f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                            headers=await naver_api._headers(),
+                            json={"originProduct": {"statusType": "SUSPENSION"}},
+                        )
                     suspended_list.append({"no": no, "name": name, "dg_code": dg_code,
-                                           "reason": "costPrice0(DG미저장/삭제)", "ok": bool(ok_s)})
+                                           "reason": "도매가0(DG삭제/품절)", "ok": _sr.status_code < 300})
                 elif wholesale <= 0:
-                    ok_s = await naver_api.set_product_status(no, "SUSPENSION")
+                    async with _hx.AsyncClient(timeout=10) as _sc:
+                        _sr = await _sc.put(
+                            f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                            headers=await naver_api._headers(),
+                            json={"originProduct": {"statusType": "SUSPENSION"}},
+                        )
                     suspended_list.append({"no": no, "name": name, "dg_code": "",
-                                           "reason": "DG코드없음", "ok": bool(ok_s)})
+                                           "reason": "DG코드없음", "ok": _sr.status_code < 300})
                 else:
                     floor = int(_math.ceil(wholesale * (1 + MARGIN) / 10) * 10)
                     floor = max(floor, MIN_SP)
