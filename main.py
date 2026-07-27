@@ -4709,7 +4709,7 @@ async def pipeline_fix_products(
         product_id  = str(prod.get("originProductNo", ""))
         name        = origin.get("name", "").strip()
         status      = origin.get("statusType", "")
-        seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+        seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
         category    = (origin.get("detailAttribute") or {}).get("naverShoppingSearchInfo", {}).get("categoryName", "")
 
         if not product_id or not name:
