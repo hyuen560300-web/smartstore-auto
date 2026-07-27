@@ -8193,19 +8193,13 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
                     f"https://domeggook.com/main/item/itemView.php?no={item_no}",
                     headers=dg_headers,
                 )
-            no_stock = ("재고가 없는 상품" in r_dg.text or r_dg.status_code == 404)
+            # "재고가 없는 상품"은 DG JS에 항상 존재 → baseAmtDome 값으로 재고 판단
+            text = r_dg.text
+            m = (_re.search(r'["\']?baseAmtDome["\']?\s*[:=]\s*["\']?(\d+)', text)
+                 or _re.search(r'optionPrice["\']?\s*[:=]\s*["\']?(\d+)', text))
+            new_wholesale = int(m.group(1)) if m else 0
+            no_stock = (r_dg.status_code == 404 or new_wholesale <= 0)
             if not no_stock:
-                # 재입고 감지 — 새 도매가 파싱
-                text = r_dg.text
-                m = (_re.search(r'["\']?baseAmtDome["\']?\s*[:=]\s*["\']?(\d+)', text)
-                     or _re.search(r'optionPrice["\']?\s*[:=]\s*["\']?(\d+)', text))
-                new_wholesale = int(m.group(1)) if m else 0
-
-                if new_wholesale <= 0:
-                    _dg_stock_state["restock_skipped"] += 1
-                    _susp_checked += 1
-                    await _aio.sleep(_rnd.uniform(3.0, 5.0))
-                    continue
 
                 # 새 판매가: 기본 ×2.2, floor=도매가×1.15, 10원 단위
                 new_sale_price = round(max(new_wholesale * 2.2, new_wholesale * 1.15) / 10) * 10
