@@ -4434,6 +4434,80 @@ async def set_status_safe(product_no: str, status: str):
     return JSONResponse({"ok": False, "error": err})
 
 
+@app.get("/suspension-dg-check")
+async def suspension_dg_check():
+    """SUSPENSION 상품 중 DG 코드 있고 도매가>0인 것(잘못 판매중지)과 실제 도매가0인 것 분류."""
+    import httpx as _hx, asyncio as _ai
+    from main import NAVER_BASE, _dg_item_detail
+    headers = await naver_api._headers()
+
+    # 1. SUSPENSION 상품 목록 (최대 200개)
+    susp_nos = []
+    page = 1
+    while len(susp_nos) < 200:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            origin = p.get("originProduct", {}) or {}
+            if (p.get("statusType") or origin.get("statusType")) == "SUSPENSION":
+                no = str(p.get("originProductNo") or "")
+                if no:
+                    susp_nos.append(no)
+        if len(contents) < 50:
+            break
+        page += 1
+        await _ai.sleep(0.2)
+
+    restore_list, skip_no_dg, skip_zero_price = [], [], []
+
+    # 2. 각 상품 개별 조회 → dg_code 확인
+    for no in susp_nos:
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+            if r.status_code == 429:
+                await _ai.sleep(5)
+                async with _hx.AsyncClient(timeout=15) as c:
+                    r = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}", headers=headers)
+            if r.status_code != 200:
+                skip_no_dg.append({"no": no, "reason": f"API {r.status_code}"})
+                continue
+            d = r.json()
+            origin = d.get("originProduct", {}) or {}
+            name = origin.get("name", "")[:40]
+            dg_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+        except Exception as e:
+            skip_no_dg.append({"no": no, "reason": str(e)[:60]})
+            continue
+        await _ai.sleep(0.3)
+
+        if not dg_code:
+            skip_no_dg.append({"no": no, "name": name, "reason": "DG코드없음"})
+            continue
+
+        # 3. DG 도매가 조회
+        dg_no = dg_code.replace("DG_", "")
+        try:
+            dg = await _dg_item_detail(dg_no)
+            wholesale = int(dg.get("wholesale_price", 0) or 0)
+        except Exception:
+            wholesale = -1
+
+        if wholesale > 0:
+            restore_list.append({"no": no, "name": name, "dg_code": dg_code, "wholesale": wholesale})
+        else:
+            skip_zero_price.append({"no": no, "name": name, "dg_code": dg_code, "wholesale": wholesale})
+
+    return {
+        "total_suspension": len(susp_nos),
+        "restore_candidates": restore_list,
+        "real_zero_price": skip_zero_price,
+        "no_dg_code": skip_no_dg,
+    }
+
+
 @app.delete("/delete-product/{product_id}")
 async def delete_product(product_id: str):
     """🗑️ 상품 삭제"""
