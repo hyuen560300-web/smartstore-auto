@@ -1163,68 +1163,91 @@ async def ip_scan_all():
 
 @app.get("/products/code-audit")
 async def products_code_audit_ss():
-    """전체 SALE 상품 코드 감사.
+    """전체 SALE 상품 코드 감사 (/sale-scan 방식: 각 상품 원본 상세조회로 정확한 DG코드 확인).
     - valid_dg: DG_ 코드 (정상)
-    - no_code: sellerCode 없음 → 판매중지 대상
+    - no_code: sellerManagementCode 없음 → 판매중지 대상
     - owner_clan: W로 시작 → 판매중지 대상
     - margin_fail: 판매가 < 도매가×1.15 (역마진)
     - unknown_code: 기타 코드
     """
-    valid_dg, no_code, owner_clan, margin_fail, unknown_code = [], [], [], [], []
-    total_sale, page = 0, 1
+    import httpx as _hx
+    from datetime import datetime, timezone
+
+    headers = await naver_api._headers()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # 1단계: SALE 상품 originProductNo 목록 수집
+    nos = []
+    page = 1
     try:
         while True:
-            data = await naver_api.list_products(page=page, size=100)
-            items = data.get("contents", [])
-            if not items:
+            async with _hx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=headers,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                          "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now},
+                )
+            if r.status_code != 200:
                 break
-            for item in items:
-                origin = item.get("originProduct", {})
-                status = origin.get("statusType", "")
-                if status != "SALE":
-                    continue
-                total_sale += 1
-                pid = str(item.get("originProductNo", ""))
-                name = (origin.get("name") or "")[:40]
-                sale_price = int(origin.get("salePrice") or 0)
-                supply_price = int(origin.get("supplyPrice") or 0)
-                code = str(
-                    ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
-                    .get("sellerCode", "") or ""
-                ).strip()
-                entry = {"pid": pid, "name": name, "code": code,
-                         "sale": sale_price, "supply": supply_price}
-                if not code:
-                    no_code.append(entry)
-                elif code.upper().startswith("W"):
-                    owner_clan.append(entry)
-                elif code.startswith("DG_"):
-                    valid_dg.append(entry)
-                    if supply_price > 0 and sale_price > 0 and sale_price < supply_price * 1.15:
-                        e2 = dict(entry)
-                        e2["margin_pct"] = round((sale_price - supply_price) / supply_price * 100, 1)
-                        margin_fail.append(e2)
-                else:
-                    unknown_code.append(entry)
-            if len(items) < 100:
+            body = r.json()
+            for p in body.get("contents", []):
+                no = str(p.get("originProductNo", ""))
+                if no:
+                    nos.append(no)
+            if len(body.get("contents", [])) < 50:
                 break
             page += 1
             await asyncio.sleep(0.3)
-
-        stop_targets = [i["pid"] for i in no_code + owner_clan]
-        return JSONResponse({
-            "total_sale_scanned": total_sale,
-            "valid_dg": len(valid_dg),
-            "no_code": {"count": len(no_code), "items": no_code},
-            "owner_clan": {"count": len(owner_clan), "items": owner_clan},
-            "margin_fail": {"count": len(margin_fail), "items": margin_fail},
-            "unknown_code": {"count": len(unknown_code), "items": unknown_code},
-            "stop_targets_count": len(stop_targets),
-            "stop_targets": stop_targets,
-        })
     except Exception as e:
-        import traceback
-        return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-500:]}, status_code=500)
+        return JSONResponse({"error": f"search 단계 실패: {e}"}, status_code=500)
+
+    # 2단계: 각 상품 원본 상세조회 → sellerManagementCode, 가격 확인
+    valid_dg, no_code, owner_clan, margin_fail, unknown_code = [], [], [], [], []
+    for no in nos:
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                dr = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                    headers=headers,
+                )
+            if dr.status_code != 200:
+                continue
+            origin = dr.json().get("originProduct", {})
+            da = (origin.get("detailAttribute") or {})
+            sci = (da.get("sellerCodeInfo") or {})
+            code = (sci.get("sellerManagementCode") or "").strip()
+            name = (origin.get("name") or "")[:40]
+            sale_price = int(origin.get("salePrice") or 0)
+            cost_price = int(da.get("purchasePrice") or da.get("costPrice") or 0)
+            entry = {"pid": no, "name": name, "code": code,
+                     "sale": sale_price, "cost": cost_price}
+            if not code:
+                no_code.append(entry)
+            elif code.upper().startswith("W"):
+                owner_clan.append(entry)
+            elif code.startswith("DG_"):
+                valid_dg.append(entry)
+                if cost_price > 0 and sale_price > 0 and sale_price < cost_price * 1.15:
+                    e2 = dict(entry)
+                    e2["margin_pct"] = round((sale_price - cost_price) / cost_price * 100, 1)
+                    margin_fail.append(e2)
+            else:
+                unknown_code.append(entry)
+        except Exception:
+            pass
+        await asyncio.sleep(0.1)
+
+    stop_targets = [i["pid"] for i in no_code + owner_clan]
+    return JSONResponse({
+        "total_sale_scanned": len(nos),
+        "valid_dg": len(valid_dg),
+        "no_code": {"count": len(no_code), "items": no_code},
+        "owner_clan": {"count": len(owner_clan), "items": owner_clan},
+        "margin_fail": {"count": len(margin_fail), "items": margin_fail},
+        "unknown_code": {"count": len(unknown_code), "items": unknown_code},
+        "stop_targets_count": len(stop_targets),
+        "stop_targets": stop_targets,
+    })
 
 
 @app.post("/products/code-audit/execute")
