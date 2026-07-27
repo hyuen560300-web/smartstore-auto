@@ -1161,6 +1161,125 @@ async def ip_scan_all():
         return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-500:]}, status_code=500)
 
 
+@app.get("/products/code-audit")
+async def products_code_audit_ss():
+    """전체 SALE 상품 코드 감사.
+    - valid_dg: DG_ 코드 (정상)
+    - no_code: sellerCode 없음 → 판매중지 대상
+    - owner_clan: W로 시작 → 판매중지 대상
+    - margin_fail: 판매가 < 도매가×1.15 (역마진)
+    - unknown_code: 기타 코드
+    """
+    valid_dg, no_code, owner_clan, margin_fail, unknown_code = [], [], [], [], []
+    total_sale, page = 0, 1
+    try:
+        while True:
+            data = await naver_api.list_products(page=page, size=100)
+            items = data.get("contents", [])
+            if not items:
+                break
+            for item in items:
+                origin = item.get("originProduct", {})
+                status = origin.get("statusType", "")
+                if status != "SALE":
+                    continue
+                total_sale += 1
+                pid = str(item.get("originProductNo", ""))
+                name = (origin.get("name") or "")[:40]
+                sale_price = int(origin.get("salePrice") or 0)
+                supply_price = int(origin.get("supplyPrice") or 0)
+                code = str(
+                    ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
+                    .get("sellerCode", "") or ""
+                ).strip()
+                entry = {"pid": pid, "name": name, "code": code,
+                         "sale": sale_price, "supply": supply_price}
+                if not code:
+                    no_code.append(entry)
+                elif code.upper().startswith("W"):
+                    owner_clan.append(entry)
+                elif code.startswith("DG_"):
+                    valid_dg.append(entry)
+                    if supply_price > 0 and sale_price > 0 and sale_price < supply_price * 1.15:
+                        e2 = dict(entry)
+                        e2["margin_pct"] = round((sale_price - supply_price) / supply_price * 100, 1)
+                        margin_fail.append(e2)
+                else:
+                    unknown_code.append(entry)
+            if len(items) < 100:
+                break
+            page += 1
+            await asyncio.sleep(0.3)
+
+        stop_targets = [i["pid"] for i in no_code + owner_clan]
+        return JSONResponse({
+            "total_sale_scanned": total_sale,
+            "valid_dg": len(valid_dg),
+            "no_code": {"count": len(no_code), "items": no_code},
+            "owner_clan": {"count": len(owner_clan), "items": owner_clan},
+            "margin_fail": {"count": len(margin_fail), "items": margin_fail},
+            "unknown_code": {"count": len(unknown_code), "items": unknown_code},
+            "stop_targets_count": len(stop_targets),
+            "stop_targets": stop_targets,
+        })
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-500:]}, status_code=500)
+
+
+@app.post("/products/code-audit/execute")
+async def products_code_audit_execute_ss():
+    """no_code + owner_clan SALE 상품을 판매중지(SUSPENSION)로 변경."""
+    to_stop = []
+    page = 1
+    try:
+        while True:
+            data = await naver_api.list_products(page=page, size=100)
+            items = data.get("contents", [])
+            if not items:
+                break
+            for item in items:
+                origin = item.get("originProduct", {})
+                if origin.get("statusType") != "SALE":
+                    continue
+                pid = str(item.get("originProductNo", ""))
+                name = (origin.get("name") or "")[:40]
+                code = str(
+                    ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
+                    .get("sellerCode", "") or ""
+                ).strip()
+                if not code or code.upper().startswith("W"):
+                    to_stop.append({
+                        "pid": pid, "name": name, "code": code,
+                        "reason": "no_code" if not code else "owner_clan",
+                    })
+            if len(items) < 100:
+                break
+            page += 1
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    if not to_stop:
+        return JSONResponse({"status": "ok", "stopped": 0, "message": "판매중지 대상 없음"})
+
+    results = []
+    for item in to_stop:
+        try:
+            r = await naver_api.set_product_status(item["pid"], "SUSPENSION")
+            ok = r.get("success", False)
+            results.append({**item, "ok": ok})
+            print(f"[CODE-AUDIT-SS] {'✓' if ok else '✗'} suspend #{item['pid']} {item['name'][:20]} ({item['reason']})", flush=True)
+        except Exception as e:
+            results.append({**item, "ok": False, "error": str(e)[:60]})
+        await asyncio.sleep(0.35)
+
+    ok_list = [r for r in results if r.get("ok")]
+    fail_list = [r for r in results if not r.get("ok")]
+    return JSONResponse({"stopped": len(ok_list), "failed": len(fail_list),
+                         "ok": ok_list, "failed_items": fail_list})
+
+
 # ─── Pinterest ───────────────────────────────────────────────────────────────
 @app.get("/pinterest/boards")
 async def pinterest_boards_list():
