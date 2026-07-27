@@ -4821,12 +4821,11 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
     import httpx as _hx
     import math as _math
     from datetime import datetime, timezone
-    from main import _get_dg_wholesale, NAVER_BASE, MIN_SALE_PRICE
+    from main import NAVER_BASE, MIN_SALE_PRICE
 
     async def _run():
         MARGIN = float(os.environ.get("MARGIN_RATE", "0.15"))
         MIN_SP = int(os.environ.get("MIN_SALE_PRICE", str(MIN_SALE_PRICE)))
-        headers = await naver_api._headers()
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # 1단계: SALE no 목록 수집
@@ -4852,54 +4851,45 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
         total = len(nos)
         ok_list, fixed_list, suspended_list, skip_list = [], [], [], []
 
-        # 2단계: 각 상품 상세 + DG 도매가 + margin 계산 + 즉시 수정
+        # 2단계: 각 상품 origin-products 조회 → costPrice 사용 (DG API 호출 없음, 빠른 처리)
         for no in nos:
             try:
-                # 429 retry (지수 백오프: 10s, 20s, 40s)
                 r2 = None
-                for _attempt in range(4):
+                for _attempt in range(3):
                     async with _hx.AsyncClient(timeout=15) as c:
                         r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
                                          headers=await naver_api._headers())
                     if r2.status_code == 429:
-                        await asyncio.sleep(10 * (2 ** _attempt))
+                        await asyncio.sleep(5 * (_attempt + 1))
                     else:
                         break
                 if r2 is None or r2.status_code != 200:
                     skip_list.append({"no": no, "reason": f"GET실패{r2.status_code if r2 else 'None'}"})
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2)
                     continue
-                data = r2.json()
-                origin = data.get("originProduct", {})
+                origin = r2.json().get("originProduct", {})
                 name = (origin.get("name") or "").strip()[:30]
                 sp = int(origin.get("salePrice") or 0)
                 da = origin.get("detailAttribute") or {}
                 dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
+                # 저장된 도매가 사용 (DG API 재호출 없음)
+                wholesale = int(origin.get("costPrice") or da.get("purchasePrice") or 0)
 
-                # DG 도매가 조회
-                wholesale = await _get_dg_wholesale(dg_code) if dg_code else 0
-
-                # margin_ok 판단
                 if wholesale <= 0 and dg_code:
-                    # DG 삭제/판매종료 → 판매중지
                     ok_s = await naver_api.set_product_status(no, "SUSPENSION")
                     suspended_list.append({"no": no, "name": name, "dg_code": dg_code,
-                                           "reason": "DG도매가0(삭제/종료)", "ok": bool(ok_s)})
-                    await asyncio.sleep(1)
+                                           "reason": "costPrice0(DG미저장/삭제)", "ok": bool(ok_s)})
                 elif wholesale <= 0:
-                    # DG 코드 없음 → 판매중지
                     ok_s = await naver_api.set_product_status(no, "SUSPENSION")
                     suspended_list.append({"no": no, "name": name, "dg_code": "",
                                            "reason": "DG코드없음", "ok": bool(ok_s)})
-                    await asyncio.sleep(1)
                 else:
                     floor = int(_math.ceil(wholesale * (1 + MARGIN) / 10) * 10)
                     floor = max(floor, MIN_SP)
                     if sp >= floor:
-                        # margin_ok=true → 건드리지 않음
-                        ok_list.append({"no": no, "name": name, "sale": sp, "floor": floor})
+                        ok_list.append({"no": no, "name": name, "sale": sp,
+                                        "floor": floor, "wholesale": wholesale})
                     else:
-                        # margin_ok=false → 가격 재조정
                         new_price = floor
                         origin_upd = dict(origin)
                         origin_upd["salePrice"] = new_price
@@ -4916,10 +4906,9 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
                             "put_status": rp.status_code,
                             "ok": rp.status_code == 200,
                         })
-                        await asyncio.sleep(1)
             except Exception as ex:
                 skip_list.append({"no": no, "reason": str(ex)[:80]})
-            await asyncio.sleep(3)
+            await asyncio.sleep(1.5)
 
         from datetime import datetime, timezone as _tz
         result = {
