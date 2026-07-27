@@ -1387,7 +1387,7 @@ async def find_duplicate_products_naver():
         for p in contents:
             product_no = str(p.get("originProductNo", ""))
             origin = p.get("originProduct", {})
-            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+            seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
             name = (origin.get("name") or "").strip()
             all_prods.append({"product_no": product_no, "code": seller_code, "name": name})
         if len(contents) < 50:
@@ -1710,7 +1710,7 @@ async def _run_find_similar(prefix_len: int = 12):
         for p in contents:
             product_no = str(p.get("originProductNo", ""))
             origin = p.get("originProduct", {})
-            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+            seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
             name = (origin.get("name") or "").strip()
             category = str((origin.get("productInfoProvidedNotice") or {}).get("productInfoProvidedNoticeType", "") or
                            (origin.get("detailAttribute") or {}).get("productInfoProvidedNoticeType", "") or "")
@@ -1904,7 +1904,7 @@ async def deduplicate_naver(background_tasks: BackgroundTasks):
             for p in contents:
                 product_no = str(p.get("originProductNo", ""))
                 origin = p.get("originProduct", {})
-                seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+                seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
                 name = (origin.get("name") or "").strip()
                 all_prods.append({"product_no": product_no, "code": seller_code, "name": name})
             if len(contents) < 50:
@@ -1952,7 +1952,7 @@ async def deduplicate_naver_sync():
         for p in contents:
             product_no = str(p.get("originProductNo", ""))
             origin = p.get("originProduct", {})
-            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
+            seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or f"NAVER_ID_{product_no}"
             name = (origin.get("name") or "").strip()
             all_prods.append({"product_no": product_no, "code": seller_code, "name": name})
         if len(contents) < 50:
@@ -2820,10 +2820,12 @@ async def set_dg_code(product_no: str, dg_code: str):
         return JSONResponse({"ok": False, "error": f"Naver 조회 실패: HTTP {r.status_code}"})
     data = r.json()
     origin = dict(data.get("originProduct", {}))
-    seller_code_info = dict(origin.get("sellerCodeInfo") or {})
+    detail_attr = dict(origin.get("detailAttribute") or {})
+    seller_code_info = dict(detail_attr.get("sellerCodeInfo") or {})
     old_code = seller_code_info.get("sellerManagementCode", "")
     seller_code_info["sellerManagementCode"] = dg_code
-    origin["sellerCodeInfo"] = seller_code_info
+    detail_attr["sellerCodeInfo"] = seller_code_info
+    origin["detailAttribute"] = detail_attr
     ok, err = await naver_api.update_product(product_no, origin)
     if ok:
         return JSONResponse({"ok": True, "product_no": product_no,
@@ -5741,7 +5743,7 @@ async def sync_registered_codes():
         for prod in contents:
             product_no = str(prod.get("originProductNo", ""))
             origin = prod.get("originProduct", {})
-            seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+            seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
             prod_name = (origin.get("name") or "").strip()
             if seller_code:
                 codes.add(seller_code)
@@ -6459,9 +6461,6 @@ async def _run_update_product_info_ss():
                 # sellerManagementCode 추출 (detailAttribute.sellerCodeInfo 안에 있음)
                 detail_attr = origin.get("detailAttribute") or {}
                 code = (detail_attr.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
-                # 폴백: 최상위 sellerCodeInfo (구 버전 상품)
-                if not code:
-                    code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
                 print(f"[UPDATE-INFO-SS] pno={pno} code={code!r} origin_empty={not origin}", flush=True)
                 if not code or not code.upper().startswith("DG_"):
                     ss_skipped += 1
@@ -6563,7 +6562,7 @@ async def _sync_registered_codes():
             for prod in contents:
                 product_no = str(prod.get("originProductNo", ""))
                 origin = prod.get("originProduct", {})
-                seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+                seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
                 prod_name = (origin.get("name") or "").strip()
                 if seller_code:
                     codes.add(seller_code)
@@ -7446,7 +7445,7 @@ async def _run_fix_html_all(limit: int = 200) -> None:
     for item in all_items:
         origin = item.get("originProduct", {})
         prod_no = str(item.get("originProductNo", ""))
-        seller_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+        seller_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
         if seller_code:
             code_map.setdefault(seller_code, []).append({"no": prod_no, "item": item})
 
