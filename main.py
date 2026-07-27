@@ -4364,7 +4364,11 @@ async def pipeline_register_from_domeggook(
                     (c["price"] for c in competitor_prices if c.get("price", 0) > 0),
                     default=None,
                 )
-                if _gate_min and _ss_wholesale * 1.15 >= _gate_min:
+                # 신뢰도 먼저: 최저가 < 도매가×0.50 → 다른 상품(부품/단품) → 게이트 생략·폴백
+                if _gate_min and _gate_min < _ss_wholesale * 0.5:
+                    print(f"[신뢰도낮음] {p.get('name','')[:25]} — 최저가₩{_gate_min:,} < 도매가₩{_ss_wholesale:,}×0.5 → 게이트스킵·폴백", flush=True)
+                    competitor_prices = []
+                elif _gate_min and _ss_wholesale * 1.15 >= _gate_min:
                     print(
                         f"[소싱게이트] ⛔ 차단: {p.get('name','')[:25]} — "
                         f"floor₩{int(_ss_wholesale*1.15):,} ≥ 최저가₩{_gate_min:,}",
