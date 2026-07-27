@@ -4826,7 +4826,7 @@ async def sale_margin_fix():
     async def _run():
       try:
         import datetime as _dt_m
-        MARGIN = float(os.environ.get("MARGIN_RATE", "0.15"))
+        MARGIN = min(float(os.environ.get("MARGIN_RATE", "0.15")), 0.20)  # 최대 20% 상한
         MIN_SP = int(os.environ.get("MIN_SALE_PRICE", str(MIN_SALE_PRICE)))
         now = _dt_m.datetime.now(_dt_m.timezone.utc).strftime("%Y-%m-%d")
         print(f"[MARGIN-FIX] 시작 MARGIN={MARGIN} MIN_SP={MIN_SP}", flush=True)
