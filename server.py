@@ -1431,9 +1431,12 @@ async def product_detail_one(origin_no: str):
         rep = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
         detail = origin.get("detailContent", "") or ""
         cdn = list(dict.fromkeys(_re.findall(r'https?://cdn[0-9]?\.domeggook\.com/[^\s"\'<>\\)]+', detail)))
+        reg_date = origin.get("regDate", "") or ""
+        status = origin.get("statusType", "") or ""
         return {"origin_no": origin_no, "name": origin.get("name", ""),
                 "price": origin.get("salePrice", 0), "channel_no": channel_no,
-                "dg_code": dg_code, "rep_image": rep, "cdn1_imgs": cdn[:6]}
+                "dg_code": dg_code, "rep_image": rep, "cdn1_imgs": cdn[:6],
+                "reg_date": reg_date, "status": status}
     except Exception as e:
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
@@ -4537,6 +4540,35 @@ async def update_price(request: Request):
         r2 = await c.put(url, headers=headers, json={"originProduct": payload})
     ok = r2.status_code == 200
     return JSONResponse({"status": "ok" if ok else "fail", "product_id": product_id, "new_price": price,
+                         "error": r2.text[:300] if not ok else ""})
+
+
+@app.post("/update-name")
+async def update_name(request: Request):
+    """상품명 수정 (read-modify-write). Body: {product_no, name}"""
+    import httpx as _hx
+    body = await request.json()
+    product_no = str(body.get("product_no", ""))
+    new_name = str(body.get("name", "")).strip()
+    if not product_no or not new_name:
+        return JSONResponse({"status": "error", "message": "product_no, name 필요"}, status_code=400)
+    if len(new_name) > 100:
+        return JSONResponse({"status": "error", "message": "상품명 100자 초과"}, status_code=400)
+    headers = await naver_api._headers()
+    url = f"https://api.commerce.naver.com/external/v2/products/origin-products/{product_no}"
+    _READONLY = {"originProductNo", "channelProductNo", "regDate", "modDate", "statusFrom", "totalSalesQuantity", "channelProducts"}
+    async with _hx.AsyncClient(timeout=20) as c:
+        r = await c.get(url, headers=headers)
+        if r.status_code != 200:
+            return JSONResponse({"status": "error", "message": f"GET {r.status_code}: {r.text[:200]}"}, status_code=502)
+        origin = r.json().get("originProduct", {})
+        old_name = origin.get("name", "")
+        payload = {k: v for k, v in origin.items() if k not in _READONLY}
+        payload["name"] = new_name
+        r2 = await c.put(url, headers=headers, json={"originProduct": payload})
+    ok = r2.status_code == 200
+    return JSONResponse({"status": "ok" if ok else "fail", "product_no": product_no,
+                         "old_name": old_name, "new_name": new_name,
                          "error": r2.text[:300] if not ok else ""})
 
 
