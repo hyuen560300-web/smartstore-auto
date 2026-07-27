@@ -1442,6 +1442,50 @@ async def product_detail_one(origin_no: str):
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+@app.get("/channel-product")
+async def channel_product_detail(cn: str):
+    """채널상품번호(cn) → 원본상품번호 역추적 후 가격·DG코드·HTML·이미지 반환."""
+    import httpx as _hx, re as _re
+    from main import NAVER_BASE
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=25) as c:
+            # 1) 채널상품 API로 originProductNo 확보
+            rc = await c.get(f"{NAVER_BASE}/v2/channel-products/{cn}", headers=headers)
+            if rc.status_code != 200:
+                return JSONResponse({"error": f"channel HTTP {rc.status_code}", "body": rc.text[:200]}, status_code=400)
+            chan = rc.json().get("channelProduct", {}) or {}
+            origin_no = str(chan.get("originProductNo") or "")
+            if not origin_no:
+                return JSONResponse({"error": "originProductNo 없음", "raw": rc.json()}, status_code=400)
+            # 2) 원본상품 API로 전체 필드 조회
+            ro = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{origin_no}", headers=headers)
+        if ro.status_code != 200:
+            return JSONResponse({"error": f"origin HTTP {ro.status_code}"}, status_code=400)
+        origin = ro.json().get("originProduct", {}) or {}
+        dg_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "")
+        detail  = origin.get("detailContent", "") or ""
+        rep     = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
+        sale    = int(origin.get("salePrice") or 0)
+        # 실시간 도매가
+        from main import _get_dg_wholesale
+        wholesale = await _get_dg_wholesale(dg_code) if dg_code.startswith("DG_") else 0
+        floor_p   = int(wholesale * 1.15) if wholesale else 0
+        margin    = sale - floor_p if floor_p else None
+        return {
+            "channel_no": cn, "origin_no": origin_no,
+            "name": (origin.get("name") or "")[:60],
+            "salePrice": sale, "wholesale": wholesale, "floor": floor_p,
+            "margin": margin, "margin_ok": (margin > 0) if margin is not None else None,
+            "dg_code": dg_code, "dg_valid": dg_code.startswith("DG_"),
+            "rep_image": rep, "reg_date": origin.get("regDate", ""),
+            "detail_len": len(detail), "detail_preview": detail[:400],
+        }
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()[-300:]}, status_code=500)
+
+
 @app.get("/products/catalog")
 async def products_catalog():
     """전체 등록 상품 목록(블루오션 선정용): name, price, channel_no, dg_code, image, status."""
