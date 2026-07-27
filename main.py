@@ -4243,6 +4243,9 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
                 _leaf_cat = payload["originProduct"].get("leafCategoryId", 0)
             save_registered_code(code)
             save_registered_name(ai.get("product_name") or p.get("name", ""))
+            registered_codes.add(code)
+            registered_names.add(name_norm)
+            registered_names.add(_normalize_name(ai.get("product_name") or p.get("name", "")))
             results["success"] += 1
             print(f"[총괄] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원)", flush=True)
             await asyncio.sleep(0.5)
