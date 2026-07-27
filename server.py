@@ -1427,7 +1427,7 @@ async def product_detail_one(origin_no: str):
         origin = d.get("originProduct", {}) or {}
         chans = d.get("channelProducts", []) or []
         channel_no = str(chans[0].get("channelProductNo", "")) if chans else ""
-        dg_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+        dg_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
         rep = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "")
         detail = origin.get("detailContent", "") or ""
         cdn = list(dict.fromkeys(_re.findall(r'https?://cdn[0-9]?\.domeggook\.com/[^\s"\'<>\\)]+', detail)))
@@ -1455,7 +1455,7 @@ async def products_catalog():
             price = p.get("salePrice") or origin.get("salePrice") or 0
             channel_no = str(p.get("channelProductNo") or "")
             origin_no = str(p.get("originProductNo") or "")
-            dg_code = (origin.get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+            dg_code = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
             status = p.get("statusType") or origin.get("statusType") or ""
             img = p.get("representativeImageUrl") or ""
             out.append({"name": name, "price": price, "channel_no": channel_no,
