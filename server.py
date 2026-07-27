@@ -4853,22 +4853,38 @@ async def sale_margin_fix():
         ok_list, fixed_list, suspended_list, skip_list = [], [], [], []
 
         # 2단계: 각 상품 origin-products 조회 → costPrice 사용 (DG API 호출 없음, 빠른 처리)
+        import traceback as _tb
         for no in nos:
             try:
-                async with _hx.AsyncClient(timeout=15) as c:
-                    r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
-                                     headers=await naver_api._headers())
+                # 429 대비 재시도 1회
+                for _attempt in range(2):
+                    async with _hx.AsyncClient(timeout=15) as c:
+                        r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                         headers=await naver_api._headers())
+                    if r2.status_code == 429:
+                        await asyncio.sleep(40)
+                        continue
+                    break
                 if r2.status_code != 200:
                     skip_list.append({"no": no, "reason": f"GET실패{r2.status_code}"})
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)
                     continue
-                origin = r2.json().get("originProduct", {})
-                name = (origin.get("name") or "").strip()[:30]
+                body2 = r2.json()
+                origin = body2.get("originProduct") or {}
+                if not isinstance(origin, dict):
+                    skip_list.append({"no": no, "reason": f"originProduct타입오류:{type(origin).__name__}"})
+                    await asyncio.sleep(2)
+                    continue
+                name = str(origin.get("name") or "")[:30]
                 sp = int(origin.get("salePrice") or 0)
                 da = origin.get("detailAttribute") or {}
-                dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
+                if not isinstance(da, dict):
+                    da = {}
+                dg_code = str(((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "")).strip()
                 # 저장된 도매가 사용 (DG API 재호출 없음)
-                wholesale = int(origin.get("costPrice") or da.get("purchasePrice") or 0)
+                _cp = origin.get("costPrice")
+                _pp = (da.get("sellerCodeInfo") or {}).get("purchasePrice") if not _cp else None
+                wholesale = int(_cp or _pp or 0)
 
                 if wholesale <= 0 and dg_code:
                     ok_s = await naver_api.set_product_status(no, "SUSPENSION")
@@ -4902,8 +4918,9 @@ async def sale_margin_fix():
                             "ok": rp.status_code == 200,
                         })
             except Exception as ex:
-                skip_list.append({"no": no, "reason": str(ex)[:80]})
-            await asyncio.sleep(1.5)
+                skip_list.append({"no": no, "reason": str(ex)[:100],
+                                   "tb": _tb.format_exc().splitlines()[-3:]})
+            await asyncio.sleep(2)
 
         from datetime import datetime, timezone as _tz
         result = {
