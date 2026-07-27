@@ -4856,15 +4856,9 @@ async def sale_margin_fix():
         import traceback as _tb
         for no in nos:
             try:
-                # 429 대비 재시도 1회
-                for _attempt in range(2):
-                    async with _hx.AsyncClient(timeout=15) as c:
-                        r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
-                                         headers=await naver_api._headers())
-                    if r2.status_code == 429:
-                        await asyncio.sleep(60)
-                        continue
-                    break
+                async with _hx.AsyncClient(timeout=15) as c:
+                    r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                     headers=await naver_api._headers())
                 if r2.status_code != 200:
                     skip_list.append({"no": no, "reason": f"GET실패{r2.status_code}"})
                     await asyncio.sleep(2)
@@ -4923,22 +4917,29 @@ async def sale_margin_fix():
             await asyncio.sleep(5)
 
         from datetime import datetime, timezone as _tz
+        # 429 skip 목록 별도 추출 (retry 전용)
+        skip_429 = [s["no"] for s in skip_list if "429" in s.get("reason", "")]
         result = {
             "total": total,
             "margin_ok_count": len(ok_list),
             "fixed_count": len(fixed_list),
             "suspended_count": len(suspended_list),
             "skip_count": len(skip_list),
+            "skip_429_count": len(skip_429),
             "fixed": fixed_list,
             "suspended": suspended_list,
             "skip": skip_list,
             "completed_at": datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        print(f"[MARGIN-FIX] 완료 total={total} ok={len(ok_list)} fixed={len(fixed_list)} suspended={len(suspended_list)}", flush=True)
+        print(f"[MARGIN-FIX] 완료 total={total} ok={len(ok_list)} fixed={len(fixed_list)} suspended={len(suspended_list)} skip429={len(skip_429)}", flush=True)
         async with _hx.AsyncClient(timeout=10) as cs:
             await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
                 json={"key": "ss.margin_fix.latest", "value": json.dumps(result, ensure_ascii=False),
                       "category": "audit"})
+            if skip_429:
+                await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                    json={"key": "ss.margin_fix.skip429", "value": json.dumps(skip_429, ensure_ascii=False),
+                          "category": "audit"})
 
     asyncio.create_task(_run())
     return JSONResponse({"status": "started", "note": "결과는 /sale-margin-fix-result로 조회 (약 3~5분)"})
