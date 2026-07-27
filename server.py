@@ -4815,6 +4815,134 @@ async def sale_margin_result():
     return JSONResponse(json.loads(r.json().get("value", "{}")))
 
 
+@app.post("/sale-margin-fix")
+async def sale_margin_fix(background_tasks: BackgroundTasks):
+    """SALE 전체 margin 재검증 + false만 즉시 가격 재조정. 결과→/sale-margin-fix-result."""
+    import httpx as _hx
+    import math as _math
+    from datetime import datetime, timezone
+    from main import _get_dg_wholesale, NAVER_BASE, MIN_SALE_PRICE
+
+    async def _run():
+        MARGIN = float(os.environ.get("MARGIN_RATE", "0.15"))
+        MIN_SP = int(os.environ.get("MIN_SALE_PRICE", str(MIN_SALE_PRICE)))
+        headers = await naver_api._headers()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # 1단계: SALE no 목록 수집
+        nos = []
+        page = 1
+        while True:
+            async with _hx.AsyncClient(timeout=30) as c:
+                r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=headers,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                          "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now})
+            if r.status_code != 200:
+                break
+            body = r.json()
+            for p in body.get("contents", []):
+                no = str(p.get("originProductNo", ""))
+                if no:
+                    nos.append(no)
+            if len(body.get("contents", [])) < 50:
+                break
+            page += 1
+            await asyncio.sleep(0.5)
+
+        total = len(nos)
+        ok_list, fixed_list, suspended_list, skip_list = [], [], [], []
+
+        # 2단계: 각 상품 상세 + DG 도매가 + margin 계산 + 즉시 수정
+        for no in nos:
+            try:
+                async with _hx.AsyncClient(timeout=15) as c:
+                    r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                     headers=await naver_api._headers())
+                if r2.status_code != 200:
+                    skip_list.append({"no": no, "reason": f"GET실패{r2.status_code}"})
+                    await asyncio.sleep(1)
+                    continue
+                data = r2.json()
+                origin = data.get("originProduct", {})
+                name = (origin.get("name") or "").strip()[:30]
+                sp = int(origin.get("salePrice") or 0)
+                da = origin.get("detailAttribute") or {}
+                dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
+
+                # DG 도매가 조회
+                wholesale = await _get_dg_wholesale(dg_code) if dg_code else 0
+
+                # margin_ok 판단
+                if wholesale <= 0 and dg_code:
+                    # DG 삭제/판매종료 → 판매중지
+                    ok_s, err_s = await naver_api.set_product_status(no, "SUSPENSION")
+                    suspended_list.append({"no": no, "name": name, "dg_code": dg_code,
+                                           "reason": "DG도매가0(삭제/종료)", "ok": ok_s})
+                elif wholesale <= 0:
+                    # DG 코드 없음 → 판매중지
+                    ok_s, err_s = await naver_api.set_product_status(no, "SUSPENSION")
+                    suspended_list.append({"no": no, "name": name, "dg_code": "",
+                                           "reason": "DG코드없음", "ok": ok_s})
+                else:
+                    floor = int(_math.ceil(wholesale * (1 + MARGIN) / 10) * 10)
+                    floor = max(floor, MIN_SP)
+                    if sp >= floor:
+                        # margin_ok=true → 건드리지 않음
+                        ok_list.append({"no": no, "name": name, "sale": sp, "floor": floor})
+                    else:
+                        # margin_ok=false → 가격 재조정
+                        new_price = floor
+                        origin_upd = dict(origin)
+                        origin_upd["salePrice"] = new_price
+                        async with _hx.AsyncClient(timeout=20) as cu:
+                            rp = await cu.put(
+                                f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                headers=await naver_api._headers(),
+                                json={"originProduct": origin_upd},
+                            )
+                        fixed_list.append({
+                            "no": no, "name": name, "dg_code": dg_code,
+                            "old_price": sp, "new_price": new_price,
+                            "wholesale": wholesale, "floor": floor,
+                            "put_status": rp.status_code,
+                            "ok": rp.status_code == 200,
+                        })
+                        await asyncio.sleep(0.5)
+            except Exception as ex:
+                skip_list.append({"no": no, "reason": str(ex)[:80]})
+            await asyncio.sleep(0.8)
+
+        result = {
+            "total": total,
+            "margin_ok_count": len(ok_list),
+            "fixed_count": len(fixed_list),
+            "suspended_count": len(suspended_list),
+            "skip_count": len(skip_list),
+            "fixed": fixed_list,
+            "suspended": suspended_list,
+            "skip": skip_list,
+        }
+        print(f"[MARGIN-FIX] 완료 total={total} ok={len(ok_list)} fixed={len(fixed_list)} suspended={len(suspended_list)}", flush=True)
+        async with _hx.AsyncClient(timeout=10) as cs:
+            await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "ss.margin_fix.latest", "value": json.dumps(result, ensure_ascii=False),
+                      "category": "audit"})
+
+    background_tasks.add_task(_run)
+    return JSONResponse({"status": "started", "note": "결과는 /sale-margin-fix-result로 조회 (약 5~8분)"})
+
+
+@app.get("/sale-margin-fix-result")
+async def sale_margin_fix_result():
+    """margin-fix 결과 조회."""
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=10) as c:
+        r = await c.get("https://loving-serenity-production-2635.up.railway.app/context/ss.margin_fix.latest")
+    if r.status_code != 200:
+        return JSONResponse({"status": "not_found"})
+    return JSONResponse(json.loads(r.json().get("value", "{}")))
+
+
 @app.get("/sale-raw")
 async def sale_raw_endpoint():
     """search API 첫 페이지 raw JSON 반환 (디버그용)."""
