@@ -4862,7 +4862,7 @@ async def sale_margin_fix():
                         r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
                                          headers=await naver_api._headers())
                     if r2.status_code == 429:
-                        await asyncio.sleep(40)
+                        await asyncio.sleep(60)
                         continue
                     break
                 if r2.status_code != 200:
@@ -4920,7 +4920,7 @@ async def sale_margin_fix():
             except Exception as ex:
                 skip_list.append({"no": no, "reason": str(ex)[:100],
                                    "tb": _tb.format_exc().splitlines()[-3:]})
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
 
         from datetime import datetime, timezone as _tz
         result = {
