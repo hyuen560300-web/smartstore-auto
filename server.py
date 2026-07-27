@@ -4918,7 +4918,7 @@ async def sale_margin_fix():
                                    "tb": _tb.format_exc().splitlines()[-3:]})
             await asyncio.sleep(5)
 
-        from datetime import datetime, timezone as _tz
+        _tz = timezone
         # 429 skip 목록 별도 추출 (retry 전용)
         skip_429 = [s["no"] for s in skip_list if "429" in s.get("reason", "")]
         result = {
