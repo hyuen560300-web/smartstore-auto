@@ -4855,19 +4855,19 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
         # 2단계: 각 상품 상세 + DG 도매가 + margin 계산 + 즉시 수정
         for no in nos:
             try:
-                # 429 retry
+                # 429 retry (지수 백오프: 10s, 20s, 40s)
                 r2 = None
-                for _attempt in range(3):
+                for _attempt in range(4):
                     async with _hx.AsyncClient(timeout=15) as c:
                         r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
                                          headers=await naver_api._headers())
                     if r2.status_code == 429:
-                        await asyncio.sleep(3 * (_attempt + 1))
+                        await asyncio.sleep(10 * (2 ** _attempt))
                     else:
                         break
                 if r2 is None or r2.status_code != 200:
                     skip_list.append({"no": no, "reason": f"GET실패{r2.status_code if r2 else 'None'}"})
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
                     continue
                 data = r2.json()
                 origin = data.get("originProduct", {})
@@ -4919,8 +4919,9 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
                         await asyncio.sleep(1)
             except Exception as ex:
                 skip_list.append({"no": no, "reason": str(ex)[:80]})
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(3)
 
+        from datetime import datetime, timezone as _tz
         result = {
             "total": total,
             "margin_ok_count": len(ok_list),
@@ -4930,6 +4931,7 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
             "fixed": fixed_list,
             "suspended": suspended_list,
             "skip": skip_list,
+            "completed_at": datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         print(f"[MARGIN-FIX] 완료 total={total} ok={len(ok_list)} fixed={len(fixed_list)} suspended={len(suspended_list)}", flush=True)
         async with _hx.AsyncClient(timeout=10) as cs:
