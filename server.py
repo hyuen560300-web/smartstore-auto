@@ -4824,9 +4824,11 @@ async def sale_margin_fix():
     from main import NAVER_BASE, MIN_SALE_PRICE
 
     async def _run():
+      try:
         MARGIN = float(os.environ.get("MARGIN_RATE", "0.15"))
         MIN_SP = int(os.environ.get("MIN_SALE_PRICE", str(MIN_SALE_PRICE)))
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        print(f"[MARGIN-FIX] 시작 MARGIN={MARGIN} MIN_SP={MIN_SP}", flush=True)
 
         # 1단계: SALE no 목록 수집
         nos = []
@@ -4933,13 +4935,25 @@ async def sale_margin_fix():
         }
         print(f"[MARGIN-FIX] 완료 total={total} ok={len(ok_list)} fixed={len(fixed_list)} suspended={len(suspended_list)} skip429={len(skip_429)}", flush=True)
         async with _hx.AsyncClient(timeout=10) as cs:
-            await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+            save_r = await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
                 json={"key": "ss.margin_fix.latest", "value": json.dumps(result, ensure_ascii=False),
                       "category": "audit"})
+            print(f"[MARGIN-FIX] 저장완료 status={save_r.status_code}", flush=True)
             if skip_429:
                 await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
                     json={"key": "ss.margin_fix.skip429", "value": json.dumps(skip_429, ensure_ascii=False),
                           "category": "audit"})
+      except Exception as _top_ex:
+        import traceback as _tbm
+        print(f"[MARGIN-FIX] 최상위 예외: {_top_ex}\n{_tbm.format_exc()}", flush=True)
+        try:
+            async with _hx.AsyncClient(timeout=10) as _cs:
+                await _cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                    json={"key": "ss.margin_fix.latest",
+                          "value": json.dumps({"error": str(_top_ex), "tb": _tbm.format_exc()[-500:]}, ensure_ascii=False),
+                          "category": "audit"})
+        except Exception:
+            pass
 
     asyncio.create_task(_run())
     return JSONResponse({"status": "started", "note": "결과는 /sale-margin-fix-result로 조회 (약 3~5분)"})
