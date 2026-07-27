@@ -4854,18 +4854,12 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
         # 2단계: 각 상품 origin-products 조회 → costPrice 사용 (DG API 호출 없음, 빠른 처리)
         for no in nos:
             try:
-                r2 = None
-                for _attempt in range(3):
-                    async with _hx.AsyncClient(timeout=15) as c:
-                        r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
-                                         headers=await naver_api._headers())
-                    if r2.status_code == 429:
-                        await asyncio.sleep(5 * (_attempt + 1))
-                    else:
-                        break
-                if r2 is None or r2.status_code != 200:
-                    skip_list.append({"no": no, "reason": f"GET실패{r2.status_code if r2 else 'None'}"})
-                    await asyncio.sleep(2)
+                async with _hx.AsyncClient(timeout=15) as c:
+                    r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                     headers=await naver_api._headers())
+                if r2.status_code != 200:
+                    skip_list.append({"no": no, "reason": f"GET실패{r2.status_code}"})
+                    await asyncio.sleep(1)
                     continue
                 origin = r2.json().get("originProduct", {})
                 name = (origin.get("name") or "").strip()[:30]
