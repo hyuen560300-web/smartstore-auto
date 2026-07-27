@@ -4833,7 +4833,8 @@ async def sale_margin_fix():
         page = 1
         while True:
             async with _hx.AsyncClient(timeout=30) as c:
-                r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=headers,
+                r = await c.post(f"{NAVER_BASE}/v1/products/search",
+                    headers=await naver_api._headers(),
                     json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
                           "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now})
             if r.status_code != 200:
