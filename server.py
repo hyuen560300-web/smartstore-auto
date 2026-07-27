@@ -4816,7 +4816,7 @@ async def sale_margin_result():
 
 
 @app.post("/sale-margin-fix")
-async def sale_margin_fix(background_tasks: BackgroundTasks):
+async def sale_margin_fix():
     """SALE 전체 margin 재검증 + false만 즉시 가격 재조정. 결과→/sale-margin-fix-result."""
     import httpx as _hx
     import math as _math
@@ -4922,8 +4922,8 @@ async def sale_margin_fix(background_tasks: BackgroundTasks):
                 json={"key": "ss.margin_fix.latest", "value": json.dumps(result, ensure_ascii=False),
                       "category": "audit"})
 
-    background_tasks.add_task(_run)
-    return JSONResponse({"status": "started", "note": "결과는 /sale-margin-fix-result로 조회 (약 5~8분)"})
+    asyncio.create_task(_run())
+    return JSONResponse({"status": "started", "note": "결과는 /sale-margin-fix-result로 조회 (약 3~5분)"})
 
 
 @app.get("/sale-margin-fix-result")
