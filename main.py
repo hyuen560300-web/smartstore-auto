@@ -1078,7 +1078,7 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
 
     # 재고: qty.inventory (기본 100 캡)
     qty   = detail.get("qty", {}) if detail else {}
-    stock = min(_to_int(str(qty.get("inventory", 100))) or 100, 100)
+    stock = min(_to_int(str(qty.get("inventory", 0) or 0)), 100)
 
     # 상세 설명 HTML (공급사 상세페이지 이미지 포함)
     content = str(detail.get("content", "") or "") if detail else ""
@@ -4090,6 +4090,13 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             # ③-b 계절 필터: 현재 계절과 맞지 않는 상품 제외
             if _is_season_excluded(p.get("name", "")):
                 print(f"[계절필터] 스킵: {p.get('name','')[:30]} — {_SEASON_INFO['season']} 시즌 부적합", flush=True)
+                results["skip"] += 1
+                continue
+
+            # ③-c 재고 필터: 최소재고 미달 상품 제외
+            _ss_min_stock = int(os.getenv("SS_MIN_STOCK", "20"))
+            if p.get("stock", 100) < _ss_min_stock:
+                print(f"[재고필터] 스킵: {p.get('name','')[:30]} (재고={p.get('stock', '?')}<{_ss_min_stock})", flush=True)
                 results["skip"] += 1
                 continue
 
