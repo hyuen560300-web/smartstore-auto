@@ -6832,7 +6832,7 @@ async def startup_event():
         if _daily_sourcing_state["date"] != _kst_today:
             _daily_sourcing_state["date"] = _kst_today
             _daily_sourcing_state["count"] = 0
-        _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "10"))
+        _daily_limit = int(os.getenv("DAILY_SOURCING_LIMIT", "50"))
         _already = _daily_sourcing_state["count"]
         if _already >= _daily_limit:
             print(f"[SCHED] 오늘 이미 {_already}/{_daily_limit}개 등록 완료 — 스킵", flush=True)
