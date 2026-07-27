@@ -4825,9 +4825,10 @@ async def sale_margin_fix():
 
     async def _run():
       try:
+        import datetime as _dt_m
         MARGIN = float(os.environ.get("MARGIN_RATE", "0.15"))
         MIN_SP = int(os.environ.get("MIN_SALE_PRICE", str(MIN_SALE_PRICE)))
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = _dt_m.datetime.now(_dt_m.timezone.utc).strftime("%Y-%m-%d")
         print(f"[MARGIN-FIX] 시작 MARGIN={MARGIN} MIN_SP={MIN_SP}", flush=True)
 
         # 1단계: SALE no 목록 수집
@@ -4918,7 +4919,6 @@ async def sale_margin_fix():
                                    "tb": _tb.format_exc().splitlines()[-3:]})
             await asyncio.sleep(5)
 
-        _tz = timezone
         # 429 skip 목록 별도 추출 (retry 전용)
         skip_429 = [s["no"] for s in skip_list if "429" in s.get("reason", "")]
         result = {
@@ -4931,7 +4931,7 @@ async def sale_margin_fix():
             "fixed": fixed_list,
             "suspended": suspended_list,
             "skip": skip_list,
-            "completed_at": datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "completed_at": _dt_m.datetime.now(_dt_m.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         print(f"[MARGIN-FIX] 완료 total={total} ok={len(ok_list)} fixed={len(fixed_list)} suspended={len(suspended_list)} skip429={len(skip_429)}", flush=True)
         async with _hx.AsyncClient(timeout=10) as cs:
