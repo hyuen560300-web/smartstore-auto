@@ -428,6 +428,84 @@ def _ctx_set(key: str, value) -> None:
         pass
 
 
+# ── PostgreSQL 등록 코드·이름 영구저장 ────────────────────────────────────
+_REG_DB_URL = os.environ.get("DATABASE_URL", "")
+
+
+def _pg_conn():
+    if not _REG_DB_URL:
+        return None
+    try:
+        import psycopg2
+        return psycopg2.connect(_REG_DB_URL, connect_timeout=5)
+    except Exception:
+        return None
+
+
+def _ensure_pg_tables():
+    conn = _pg_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS ss_registered_codes "
+                "(code TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW())"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS ss_registered_names "
+                "(name TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW())"
+            )
+        conn.commit()
+    except Exception as e:
+        print(f"[REG-DB] 테이블 생성 실패: {e}", flush=True)
+    finally:
+        conn.close()
+
+
+def _migrate_reg_to_pg():
+    """기존 context_store 데이터를 PostgreSQL로 마이그레이션 (테이블 비어있을 때 1회)."""
+    conn = _pg_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM ss_registered_codes")
+            if cur.fetchone()[0] > 0:
+                return
+        codes = _ctx_get("smartstore.registered_codes") or []
+        names = _ctx_get("smartstore.registered_names") or []
+        with conn.cursor() as cur:
+            for c in codes:
+                cur.execute(
+                    "INSERT INTO ss_registered_codes (code) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (str(c),)
+                )
+            for n in names:
+                cur.execute(
+                    "INSERT INTO ss_registered_names (name) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (str(n),)
+                )
+        conn.commit()
+        print(f"[REG-DB] 마이그레이션 완료: codes={len(codes)} names={len(names)}", flush=True)
+    except Exception as e:
+        print(f"[REG-DB] 마이그레이션 실패: {e}", flush=True)
+    finally:
+        conn.close()
+
+
+def _init_reg_db():
+    try:
+        _ensure_pg_tables()
+        _migrate_reg_to_pg()
+    except Exception as e:
+        print(f"[REG-DB] 초기화 실패: {e}", flush=True)
+
+
+import threading as _threading
+_threading.Thread(target=_init_reg_db, daemon=True).start()
+
+
 # ── 카테고리별 HTML 템플릿 저장·재사용 ──────────────────────────────────
 _HTML_TMPL_NAME = "{{PRODUCT_NAME}}"
 _HTML_TMPL_IMG  = "{{MAIN_IMG}}"
@@ -554,26 +632,56 @@ def _apply_html_template(tmpl_data: dict, new_name: str, new_image_url: str) -> 
 
 
 def load_registered_codes() -> set:
-    # 1순위: /tmp 파일
+    # 1순위: PostgreSQL 직접 조회 (재시작 후에도 영구 유지)
+    conn = _pg_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT code FROM ss_registered_codes")
+                codes = {row[0] for row in cur.fetchall()}
+            conn.close()
+            if codes:
+                return codes
+        except Exception as e:
+            print(f"[REG-DB] load_codes 실패: {e}", flush=True)
+            try: conn.close()
+            except: pass
+    # 2순위: /tmp 파일
     try:
         with open(REGISTERED_CODES_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
     except Exception:
         pass
-    # 2순위: PostgreSQL context_store 복원
+    # 3순위: context_store REST API
     data = _ctx_get("smartstore.registered_codes")
     if isinstance(data, list):
-        try:
-            with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-        except Exception:
-            pass
         return set(data)
     return set()
 
 
 def save_registered_code(code: str):
-    codes = load_registered_codes()
+    # 1순위: PostgreSQL 직접 INSERT (중복 무시)
+    conn = _pg_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ss_registered_codes (code) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (str(code),)
+                )
+            conn.commit()
+            conn.close()
+            return
+        except Exception as e:
+            print(f"[REG-DB] save_code 실패: {e}", flush=True)
+            try: conn.close()
+            except: pass
+    # 폴백: /tmp 파일 + context_store
+    try:
+        with open(REGISTERED_CODES_FILE, "r", encoding="utf-8") as f:
+            codes = set(json.load(f))
+    except Exception:
+        codes = set()
     codes.add(str(code))
     codes_list = list(codes)
     try:
@@ -591,20 +699,29 @@ def _normalize_name(name: str) -> str:
 
 
 def load_registered_names() -> set:
-    # 1순위: /tmp 파일
+    # 1순위: PostgreSQL 직접 조회
+    conn = _pg_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name FROM ss_registered_names")
+                names = {row[0] for row in cur.fetchall()}
+            conn.close()
+            if names:
+                return names
+        except Exception as e:
+            print(f"[REG-DB] load_names 실패: {e}", flush=True)
+            try: conn.close()
+            except: pass
+    # 2순위: /tmp 파일
     try:
         with open(REGISTERED_NAMES_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
     except Exception:
         pass
-    # 2순위: PostgreSQL context_store 복원
+    # 3순위: context_store REST API
     data = _ctx_get("smartstore.registered_names")
     if isinstance(data, list):
-        try:
-            with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-        except Exception:
-            pass
         return set(data)
     return set()
 
@@ -613,7 +730,28 @@ def save_registered_name(name: str):
     norm = _normalize_name(name)
     if not norm:
         return
-    names = load_registered_names()
+    # 1순위: PostgreSQL 직접 INSERT
+    conn = _pg_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ss_registered_names (name) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (norm,)
+                )
+            conn.commit()
+            conn.close()
+            return
+        except Exception as e:
+            print(f"[REG-DB] save_name 실패: {e}", flush=True)
+            try: conn.close()
+            except: pass
+    # 폴백: /tmp 파일 + context_store
+    try:
+        with open(REGISTERED_NAMES_FILE, "r", encoding="utf-8") as f:
+            names = set(json.load(f))
+    except Exception:
+        names = set()
     names.add(norm)
     names_list = list(names)
     try:
