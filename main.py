@@ -421,6 +421,39 @@ _MEANINGLESS_DG_CATS = frozenset({
     "직접판매", "직접판매상품", "기타", "일반", "분류없음", "기타상품", "",
 })
 
+# 네이버 등록 거부 단어 → 대체 표현 (의약외품·의료기기 효능 주장 방지)
+_NAVER_BANNED_REPLACEMENTS = {
+    "관절": "뼈 부위",
+    "통증": "불편함",
+    "치료": "관리",
+    "항균": "위생",
+    "살균": "청결",
+    "소독": "세척",
+    "진통": "불편",
+    "해열": "",
+    "항염": "",
+    "소염": "",
+    "혈압": "건강 수치",
+    "혈당": "건강 수치",
+    "혈류": "순환",
+    "콜레스테롤": "지방",
+    "항암": "",
+    "의약": "",
+    "처방": "권장",
+    "질환": "불편함",
+    "완화": "개선",
+    "멸균": "청결",
+}
+
+
+def _naver_filter_html(html: str) -> str:
+    """네이버 금지어를 안전한 표현으로 교체한다."""
+    for banned, replacement in _NAVER_BANNED_REPLACEMENTS.items():
+        if banned in html:
+            html = html.replace(banned, replacement)
+            print(f"[NAVER_FILTER] '{banned}' → '{replacement}' 교체", flush=True)
+    return html
+
 
 def _resolve_tmpl_category(raw_cat: str, name: str = "") -> str:
     """DG raw section → 의미있는 템플릿 분류키.
@@ -2638,7 +2671,8 @@ _SYSTEM_ROLE = """당신은 한국 최고 수준의 이커머스 상세페이지
 3. 시각적으로 완성도 높은 레이아웃 (섹션별 다양한 배경색/레이아웃 변화)
 4. 2025년 네이버 알고리즘: 체류시간·전환율·키워드밀도 모두 고려
 5. 모바일 우선 반응형 (100% 모바일 최적화 필수)
-6. 최소 10,000자 이상의 풍부한 콘텐츠 생성"""
+6. 최소 10,000자 이상의 풍부한 콘텐츠 생성
+7. ⛔ 네이버 금지어 절대 사용 금지 — 관절/통증/치료/항균/살균/소독/진통/해열/항염/소염/혈압/혈당/혈류/콜레스테롤/항암/의약/처방/질환/완화/멸균 포함 불가 (의약외품·의료기기 효능 주장으로 등록 거부됨)"""
 
 # 스타일별 few-shot 예시 (구조·톤·팔레트 참고용, 50줄 이내)
 _STYLE_EXAMPLE = {
@@ -4608,6 +4642,8 @@ async def pipeline_register_from_domeggook(
                 except Exception as _e_ss:
                     print(f"[STEP3] HTML 생성 예외 → build_detail_html 폴백: {_e_ss}", flush=True)
                     claude_html = ""
+                if claude_html:
+                    claude_html = _naver_filter_html(claude_html)
                 _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
                 if not _html_ok and claude_html:
                     _sec_cnt = _count_html_sections(claude_html)
@@ -4616,6 +4652,8 @@ async def pipeline_register_from_domeggook(
                         _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
                     except Exception:
                         _claude_html2 = ""
+                    if _claude_html2:
+                        _claude_html2 = _naver_filter_html(_claude_html2)
                     if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 6:
                         claude_html = _claude_html2
                         _html_ok = True

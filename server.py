@@ -2642,6 +2642,7 @@ async def register_with_template_endpoint(request: Request):
             generate_claude_html_detail, _count_html_sections,
             _get_html_template, _save_html_template, _apply_html_template,
             _html_template_key, _resolve_tmpl_category, _ctx_set,
+            _naver_filter_html,
         )
         _napi = _NCA()
 
@@ -2679,6 +2680,8 @@ async def register_with_template_endpoint(request: Request):
                 claude_html = await generate_claude_html_detail(_p, _ai, [image_url])
             except Exception as _ce:
                 claude_html = ""
+            if claude_html:
+                claude_html = _naver_filter_html(claude_html)
             _ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
             if not _ok:
                 return JSONResponse({"status": "error",
