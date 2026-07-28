@@ -998,6 +998,20 @@ class NaverCommerceAPI:
             print(f"[UPDATE] 상품 수정 실패({product_id}): {msg}", flush=True)
             return False, msg
 
+    async def get_product(self, product_id: str) -> dict:
+        """단일 원산지상품 조회. 반환: originProduct dict (실패 시 {})"""
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
+                    headers=await self._headers(),
+                )
+            if r.status_code == 200:
+                return r.json().get("originProduct", {})
+            return {}
+        except Exception:
+            return {}
+
     async def set_product_status(self, product_id: str, status: str) -> bool:
         """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)"""
         async with httpx.AsyncClient(timeout=15) as c:
@@ -5998,11 +6012,33 @@ async def _apply_zero_margin_pricing_ss(limit: int = 9999) -> dict:
 
                 full = dict(origin)
                 full["salePrice"] = new_price
+
+                # optionCombinations 있으면 각 조합 price 재계산 (절대가격 기준)
+                opt_combos = list(full.get("optionCombinations") or [])
+                has_options = bool(opt_combos)
+                if has_options:
+                    adjusted_combos = []
+                    for opt in opt_combos:
+                        opt_copy = dict(opt)
+                        old_opt_add = int(opt_copy.get("price") or 0)
+                        old_final = our_price + old_opt_add
+                        opt_copy["price"] = max(0, old_final - new_price)
+                        adjusted_combos.append(opt_copy)
+                    full["optionCombinations"] = adjusted_combos
+
                 ok, err = await naver_api.update_product(product_no, full)
                 if ok:
-                    results["adjusted"] += 1
+                    await asyncio.sleep(1.0)
+                    refreshed = await naver_api.get_product(product_no)
+                    actual = int(refreshed.get("salePrice") or 0)
                     net = round(new_price * (1 - SS_FEE) - cost)
-                    print(f"[ZERO-MARGIN-SS] ✅ {name[:20]} {our_price:,}→{new_price:,}원 (순마진₩{net})", flush=True)
+                    opt_tag = "[옵션]" if has_options else ""
+                    if actual == new_price:
+                        results["adjusted"] += 1
+                        print(f"[ZERO-MARGIN-SS] ✅{opt_tag} {name[:20]} {our_price:,}→{new_price:,}원 (순마진₩{net})", flush=True)
+                    else:
+                        results["errors"].append(f"{name[:15]}: PUT200OK 미반영(실제₩{actual:,}≠목표₩{new_price:,})")
+                        print(f"[ZERO-MARGIN-SS] ⚠️{opt_tag} {name[:20]} PUT200OK지만 미반영 actual₩{actual:,} target₩{new_price:,}", flush=True)
                 else:
                     results["errors"].append(f"{name[:15]}: {(err or '')[:40]}")
             except Exception as e:
