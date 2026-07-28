@@ -5847,13 +5847,13 @@ async def _get_dg_wholesale(dg_code: str) -> int:
     if not item_no or not DOMEGGOOK_API_KEY:
         return 0
     try:
-        async with _hx.AsyncClient(timeout=12) as c:
+        async with _hx.AsyncClient(timeout=20) as c:
             r = await c.get(DOMEGGOOK_API_URL, params={
                 "ver": "4.5", "mode": "getItemView", "aid": DOMEGGOOK_API_KEY,
                 "no": item_no, "om": "json",
             })
-        raw = r.json().get("domeggook", {})
-        price_block = raw.get("price", {})
+        raw = r.json().get("domeggook") or {}
+        price_block = raw.get("price") or {}
         dome_raw = price_block.get("dome", 0) if isinstance(price_block, dict) else 0
         # DG API가 {"#text": "6600"} 딕셔너리로 응답하는 경우도 처리
         if isinstance(dome_raw, dict):
