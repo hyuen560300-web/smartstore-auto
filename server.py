@@ -3079,6 +3079,50 @@ async def apply_zero_margin_ss(limit: int = 200):
     return JSONResponse({"status": "started", "limit": limit, "message": f"순마진 재조정 {limit}개 백그라운드 실행 중"})
 
 
+@app.get("/sale-margin-check")
+async def sale_margin_check():
+    """SALE 상품 전체 현재 순마진 상태 실측 확인."""
+    import math as _m
+    from main import naver_api, _get_dg_wholesale
+    SS_FEE = float(os.environ.get("SS_PLATFORM_FEE_RATE", "0.06"))
+    items_out = []
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for prod in contents:
+            origin = prod.get("originProduct", {})
+            if origin.get("statusType") != "SALE":
+                continue
+            name = origin.get("name", "")[:30]
+            price = int(origin.get("salePrice") or 0)
+            dg_code = str(((origin.get("detailAttribute") or {})
+                           .get("sellerCodeInfo") or {})
+                          .get("sellerManagementCode") or "").strip()
+            dome = await _get_dg_wholesale(dg_code) if dg_code else 0
+            if dome > 0:
+                net = round(price * (1 - SS_FEE) - dome)
+                min_p = int(_m.ceil((dome + 1) / (1 - SS_FEE) / 10) * 10)
+                max_p = int(_m.ceil((dome + 300) / (1 - SS_FEE) / 10) * 10)
+                in_range = 0 < net <= 300
+                items_out.append({"name": name, "price": price, "dome": dome,
+                                   "net": net, "min_p": min_p, "max_p": max_p,
+                                   "in_range": in_range, "dg_code": dg_code})
+            else:
+                items_out.append({"name": name, "price": price, "dome": 0,
+                                   "dg_code": dg_code, "note": "도매가조회실패"})
+            await asyncio.sleep(0.3)
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.5)
+    in_range_cnt = sum(1 for i in items_out if i.get("in_range"))
+    return JSONResponse({"total": len(items_out), "in_range": in_range_cnt,
+                         "items": items_out})
+
+
 @app.post("/price-audit")
 async def price_audit_now(limit: int = 100):
     """경쟁사 가격 감사 즉시 실행 (백그라운드). 일일 자동 실행과 동일한 로직."""
