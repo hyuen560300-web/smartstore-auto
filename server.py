@@ -2145,9 +2145,11 @@ async def debug_dg_wholesale(dg_code: str = "DG_66822677"):
 
     # 2. 직접 DG API 원시 호출
     item_no = dg_code.replace("DG_", "")
+    _dg_url = DOMEGGOOK_API_URL or "https://domeggook.com/ssl/api/"
+    result["dg_api_url"] = _dg_url
     try:
         async with _hx.AsyncClient(timeout=20) as c:
-            r = await c.get(DOMEGGOOK_API_URL, params={
+            r = await c.get(_dg_url, params={
                 "ver": "4.5", "mode": "getItemView", "aid": DOMEGGOOK_API_KEY,
                 "no": item_no, "om": "json",
             })

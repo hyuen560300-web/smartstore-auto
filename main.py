@@ -5847,8 +5847,9 @@ async def _get_dg_wholesale(dg_code: str) -> int:
     if not item_no or not DOMEGGOOK_API_KEY:
         return 0
     try:
+        _dg_url = DOMEGGOOK_API_URL or "https://domeggook.com/ssl/api/"
         async with _hx.AsyncClient(timeout=20) as c:
-            r = await c.get(DOMEGGOOK_API_URL, params={
+            r = await c.get(_dg_url, params={
                 "ver": "4.5", "mode": "getItemView", "aid": DOMEGGOOK_API_KEY,
                 "no": item_no, "om": "json",
             })
