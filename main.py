@@ -5838,7 +5838,7 @@ _DG_CACHE_TTL = 3600  # 1시간
 
 async def _get_dg_wholesale(dg_code: str) -> int:
     """DG 코드로 도매가 실시간 조회 (1시간 캐시). costPrice 필드 대체."""
-    if not dg_code or not dg_code.startswith("DG_"):
+    if not dg_code:
         return 0
     import time as _time, httpx as _hx
     now = _time.time()
@@ -5846,7 +5846,7 @@ async def _get_dg_wholesale(dg_code: str) -> int:
     if cached and (now - cached[1]) < _DG_CACHE_TTL:
         return cached[0]
     item_no = dg_code.replace("DG_", "").strip()
-    if not item_no or not DOMEGGOOK_API_KEY:
+    if not item_no or not item_no.isdigit() or not DOMEGGOOK_API_KEY:
         return 0
     try:
         _dg_url = DOMEGGOOK_API_URL if (DOMEGGOOK_API_URL and "domeggook.com" in DOMEGGOOK_API_URL) else "https://domeggook.com/ssl/api/"
@@ -6011,6 +6011,16 @@ async def _apply_zero_margin_pricing_ss(limit: int = 200) -> dict:
         await asyncio.sleep(1.2)
 
     print(f"[ZERO-MARGIN-SS] 완료 {results}", flush=True)
+    try:
+        import httpx as _hx
+        async with _hx.AsyncClient(timeout=8) as c:
+            await c.post(f"{_CONTEXT_STORE_URL_SS}/context", json={
+                "key": "ss.apply_zero_margin_result",
+                "value": json.dumps(results, ensure_ascii=False),
+                "category": "data",
+            })
+    except Exception:
+        pass
     return results
 
 
