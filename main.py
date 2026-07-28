@@ -416,24 +416,55 @@ def _ctx_set(key: str, value) -> None:
 _HTML_TMPL_NAME = "{{PRODUCT_NAME}}"
 _HTML_TMPL_IMG  = "{{MAIN_IMG}}"
 
+# DG raw section에서 나오는 의미없는 catch-all 값 — 이것들은 상품명 키워드로 재판정
+_MEANINGLESS_DG_CATS = frozenset({
+    "직접판매", "직접판매상품", "기타", "일반", "분류없음", "기타상품", "",
+})
 
-def _html_template_key(category: str) -> str:
+
+def _resolve_tmpl_category(raw_cat: str, name: str = "") -> str:
+    """DG raw section → 의미있는 템플릿 분류키.
+    1. raw_cat이 의미있으면 그대로 사용
+    2. 무의미하면 product name 키워드로 CATEGORY_ID_MAP 최장매칭
+    3. 최종 폴백: _html_style_for 결과 기반 레이블
+    """
+    cat = (raw_cat or "").strip()
+    if cat and cat not in _MEANINGLESS_DG_CATS:
+        return cat
+    # CATEGORY_ID_MAP 키 중 product name에서 longest match 우선
+    # (CATEGORY_ID_MAP은 이 함수보다 아래에 정의되지만 호출 시점엔 이미 로드됨)
+    combined = f"{cat} {name}"
+    best_key, best_len = "", 0
+    for k in CATEGORY_ID_MAP:
+        if k in combined and len(k) > best_len:
+            best_key, best_len = k, len(k)
+    if best_key:
+        return best_key
+    # _STYLE_KEYWORDS / _html_style_for 폴백
+    if any(k in combined for k in _STYLE_A_OVERRIDE):
+        return "반려동물유아동"
+    _style_lbl = {"C": "뷰티프리미엄", "B": "스포츠캠핑", "D": "생활주방", "A": "패션라이프"}
+    return _style_lbl.get(_html_style_for(cat, name), "생활주방")
+
+
+def _html_template_key(category: str, name: str = "") -> str:
     import re as _re_t
-    safe = _re_t.sub(r"[^가-힣a-zA-Z0-9_]", "_", (category or "general").strip())[:30]
+    resolved = _resolve_tmpl_category(category, name)
+    safe = _re_t.sub(r"[^가-힣a-zA-Z0-9_]", "_", resolved.strip())[:30]
     return f"html_template.{safe}"
 
 
-def _get_html_template(category: str):
+def _get_html_template(category: str, name: str = ""):
     """context_store에서 카테고리 HTML 템플릿 조회. 없으면 None."""
-    data = _ctx_get(_html_template_key(category))
+    data = _ctx_get(_html_template_key(category, name))
     if isinstance(data, dict) and data.get("html"):
         return data
     return None
 
 
 def _save_html_template(category: str, html: str, source_name: str,
-                         source_image: str, extra_images=None) -> None:
-    """Claude Vision 생성 HTML → 플레이스홀더 치환 후 카테고리 템플릿으로 저장."""
+                         source_image: str, extra_images=None, name: str = "") -> None:
+    """Claude Vision 생성 HTML → 플레이스홀더 치환 후 의미있는 카테고리키로 저장."""
     try:
         tmpl_html = html
         if source_name:
@@ -446,16 +477,19 @@ def _save_html_template(category: str, html: str, source_name: str,
         if len(tmpl_html) < 3000:
             return
         from datetime import datetime as _dt_tmpl
+        _nm = name or source_name
+        resolved = _resolve_tmpl_category(category, _nm)
         tmpl_data = {
             "html":         tmpl_html,
             "source_name":  source_name,
             "source_image": source_image,
-            "category":     category,
+            "category":     resolved,
+            "raw_category": category,
             "created":      _dt_tmpl.now().strftime("%Y-%m-%d"),
             "reuse_count":  0,
         }
-        _ctx_set(_html_template_key(category), tmpl_data)
-        print(f"[HTML_TMPL] 카테고리 '{category}' 템플릿 저장 ({len(tmpl_html):,}자)", flush=True)
+        _ctx_set(_html_template_key(category, _nm), tmpl_data)
+        print(f"[HTML_TMPL] '{resolved}' 템플릿 저장 ({len(tmpl_html):,}자) [raw={category}]", flush=True)
     except Exception as _e:
         print(f"[HTML_TMPL] 저장 실패: {_e}", flush=True)
 
@@ -4552,18 +4586,20 @@ async def pipeline_register_from_domeggook(
             _all_imgs = [naver_img_url] + (p.get("_dg_extra_naver_urls") or [])
             detail_html = ""
             _html_from_tmpl = False
+            _pname = str(p.get("name", ""))
 
             # ① 카테고리 템플릿 재사용 시도 (Claude API 호출 없음)
-            _tmpl = _get_html_template(_cat)
+            _tmpl = _get_html_template(_cat, _pname)
             if _tmpl:
-                _tmpl_html = _apply_html_template(_tmpl, str(p.get("name", "")), naver_img_url)
+                _tmpl_html = _apply_html_template(_tmpl, _pname, naver_img_url)
                 if len(_tmpl_html) >= 5000 and _count_html_sections(_tmpl_html) >= 6:
                     detail_html = _tmpl_html
                     _html_from_tmpl = True
                     _reuse_cnt = _tmpl.get("reuse_count", 0) + 1
                     _tmpl["reuse_count"] = _reuse_cnt
-                    _ctx_set(_html_template_key(_cat), _tmpl)
-                    print(f"[HTML_TMPL] '{_cat}' 템플릿 재사용 (#{_reuse_cnt}) → Claude API 호출 없음", flush=True)
+                    _ctx_set(_html_template_key(_cat, _pname), _tmpl)
+                    _rcat = _resolve_tmpl_category(_cat, _pname)
+                    print(f"[HTML_TMPL] '{_rcat}' 템플릿 재사용 (#{_reuse_cnt}) → Claude API 없음", flush=True)
 
             # ② 템플릿 없거나 재사용 실패 → Claude Vision 신규 생성
             if not _html_from_tmpl:
@@ -4586,12 +4622,13 @@ async def pipeline_register_from_domeggook(
                 if _html_ok:
                     detail_html = claude_html
                     # ③ 신규 생성 성공 + 해당 카테고리 템플릿 없으면 저장 (다음 상품부터 재사용)
-                    if not _get_html_template(_cat):
+                    if not _get_html_template(_cat, _pname):
                         _save_html_template(
                             _cat, claude_html,
-                            source_name=str(p.get("name", "")),
+                            source_name=_pname,
                             source_image=naver_img_url,
                             extra_images=p.get("_dg_extra_naver_urls") or [],
+                            name=_pname,
                         )
                 else:
                     detail_img_url = ""

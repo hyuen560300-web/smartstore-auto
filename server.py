@@ -2641,7 +2641,7 @@ async def register_with_template_endpoint(request: Request):
             save_registered_code, save_registered_name, _normalize_name,
             generate_claude_html_detail, _count_html_sections,
             _get_html_template, _save_html_template, _apply_html_template,
-            _html_template_key, _ctx_set,
+            _html_template_key, _resolve_tmpl_category, _ctx_set,
         )
         _napi = _NCA()
 
@@ -2659,7 +2659,7 @@ async def register_with_template_endpoint(request: Request):
         detail_html = ""
         html_source = "none"
 
-        _tmpl = _get_html_template(category)
+        _tmpl = _get_html_template(category, name)
         if _tmpl:
             _tmpl_html = _apply_html_template(_tmpl, name, naver_img_url)
             if len(_tmpl_html) >= 5000 and _count_html_sections(_tmpl_html) >= 6:
@@ -2667,8 +2667,9 @@ async def register_with_template_endpoint(request: Request):
                 html_source = "template"
                 _reuse_cnt = _tmpl.get("reuse_count", 0) + 1
                 _tmpl["reuse_count"] = _reuse_cnt
-                _ctx_set(_html_template_key(category), _tmpl)
-                print(f"[tmpl-reg] '{category}' 템플릿 재사용 (#{_reuse_cnt}) Claude API 없음", flush=True)
+                _ctx_set(_html_template_key(category, name), _tmpl)
+                _rcat = _resolve_tmpl_category(category, name)
+                print(f"[tmpl-reg] '{_rcat}' 템플릿 재사용 (#{_reuse_cnt}) Claude API 없음", flush=True)
 
         if not detail_html:
             _p = {"name": name, "category": category, "price": wholesale or price}
@@ -2684,10 +2685,12 @@ async def register_with_template_endpoint(request: Request):
                                      "message": f"HTML 생성 실패 len={len(claude_html)}"})
             detail_html = claude_html
             html_source = "claude_vision"
-            if not _get_html_template(category):
+            if not _get_html_template(category, name):
                 _save_html_template(category, claude_html,
-                                    source_name=name, source_image=naver_img_url)
-            print(f"[tmpl-reg] Claude Vision 생성 → '{category}' 템플릿 저장", flush=True)
+                                    source_name=name, source_image=naver_img_url,
+                                    name=name)
+            _rcat2 = _resolve_tmpl_category(category, name)
+            print(f"[tmpl-reg] Claude Vision 생성 → '{_rcat2}' 템플릿 저장", flush=True)
 
         raw = {
             "code": dg_code, "name": name, "price": wholesale or price,
