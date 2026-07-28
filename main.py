@@ -5868,6 +5868,10 @@ async def _get_dg_wholesale(dg_code: str) -> int:
     if wholesale <= 0:
         print(f"[DG_WHOLESALE] {dg_code} → 도매가 0 (캐시 미저장)", flush=True)
         return 0
+    # DG API 오류로 수억~수경원 비정상값 방어
+    if wholesale > 10_000_000:
+        print(f"[DG_WHOLESALE] ⚠️ {dg_code} → 비정상 도매가 {wholesale:,}원 차단 (DG API 오류)", flush=True)
+        return 0
     _DG_WHOLESALE_CACHE[dg_code] = (wholesale, now)
     print(f"[DG_WHOLESALE] {dg_code} → {wholesale:,}원 (캐시저장)", flush=True)
     return wholesale
