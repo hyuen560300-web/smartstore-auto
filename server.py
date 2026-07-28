@@ -2522,6 +2522,93 @@ async def register_single_product(request: Request):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.post("/register-with-html")
+async def register_with_html(request: Request):
+    """
+    Gemini/외부 HTML로 상품 직접 등록 (HTML 생성 없이 주입)
+    Body: {"name": "상품명", "price": 15000, "image_url": "https://...",
+           "dg_code": "DG_12345", "html": "<div>...</div>",
+           "category": "생활잡화", "wholesale": 7000, "stock": 50}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "JSON 파싱 실패"}, status_code=400)
+
+    name      = str(body.get("name", "")).strip()
+    html      = str(body.get("html", "")).strip()
+    image_url = str(body.get("image_url", "")).strip()
+    if not name or not html or not image_url:
+        return JSONResponse({"status": "error", "message": "name/html/image_url 필수"}, status_code=400)
+
+    price     = int(body.get("price", 0))
+    wholesale = int(body.get("wholesale", 0))
+    stock     = int(body.get("stock", 50))
+    dg_code   = str(body.get("dg_code", ""))
+    category  = str(body.get("category", "생활잡화"))
+
+    try:
+        from main import (
+            NaverCommerceAPI as _NCA, build_product_payload, get_category_id,
+            clean_product_name, load_registered_codes, load_registered_names,
+            save_registered_code, save_registered_name, _normalize_name,
+        )
+        _napi = _NCA()
+
+        # 중복 체크
+        reg_codes = load_registered_codes()
+        reg_names = load_registered_names()
+        if dg_code and dg_code in reg_codes:
+            return JSONResponse({"status": "duplicate", "message": "이미 등록된 코드"})
+        name_norm = _normalize_name(name)
+        if name_norm and name_norm in reg_names:
+            return JSONResponse({"status": "duplicate", "message": "이미 등록된 상품명"})
+
+        # 이미지 업로드
+        naver_img_url = await _napi.upload_image(image_url)
+
+        raw = {
+            "code": dg_code, "name": name, "price": wholesale or price,
+            "category": category, "image": naver_img_url,
+            "stock": stock, "delivery_fee": 3000, "delivery_type": "",
+            "manufacturer": "", "brand": "", "origin": "",
+        }
+        ai  = {"product_name": name, "description": html}
+        payload = build_product_payload(raw, ai, price)
+        payload["originProduct"]["detailContent"]                        = html
+        payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
+        payload["originProduct"].setdefault("detailAttribute", {}).update({
+            "unitCapacity": {"unitPriceYn": False},
+        })
+        if dg_code:
+            payload["originProduct"]["detailAttribute"]["sellerCodeInfo"] = {
+                "sellerManagementCode": dg_code
+            }
+
+        result     = await _napi.register_product(payload)
+        origin_no  = str(result.get("originProductNo", ""))
+        chans      = result.get("channelProducts", []) or []
+        channel_no = str(result.get("smartstoreChannelProductNo", "")
+                         or (chans[0].get("channelProductNo", "") if chans else "") or "")
+        store_url  = f"https://smartstore.naver.com/main/products/{channel_no}" if channel_no else ""
+        sc_url     = f"https://sell.smartstore.naver.com/#/product/detail/{origin_no}" if origin_no else ""
+
+        if dg_code:
+            save_registered_code(dg_code)
+        safe_name = clean_product_name(name) or name[:25]
+        save_registered_name(safe_name)
+
+        print(f"[register-with-html] 등록 완료: {safe_name} | {origin_no} | html={len(html):,}자", flush=True)
+        return JSONResponse({
+            "status": "success", "name": safe_name, "price": price,
+            "origin_no": origin_no, "channel_no": channel_no,
+            "store_url": store_url, "sc_url": sc_url,
+            "html_len": len(html),
+        })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
 @app.post("/upload-excel")
 async def upload_excel(file: UploadFile = File(...)):
     save_path = Path(EXCEL_FOLDER) / file.filename
