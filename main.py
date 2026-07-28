@@ -4685,6 +4685,10 @@ async def pipeline_register_from_domeggook(
                             name=_pname,
                         )
                 else:
+                    if os.getenv("HARD_MODE_HTML", "false").lower() == "true":
+                        print(f"[STEP3][HARD_MODE] HTML 고급 생성 실패 → 폴백 차단, 상품 스킵: {str(p.get('name',''))[:30]}", flush=True)
+                        results["skip"] += 1
+                        continue
                     detail_img_url = ""
                     if not dg_content_html:
                         dalle_detail_raw = await generate_dalle_detail_shot(

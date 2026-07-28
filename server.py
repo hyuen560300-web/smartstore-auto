@@ -7213,8 +7213,9 @@ async def startup_event():
             print(msg, flush=True)
             await _tg_notify(msg)
             return
-        _slots = min(_daily_limit - _already, _max_limit - _cur)
-        print(f"[SCHED] 상품 자동 등록 시작 (오늘:{_already}/{_daily_limit}, 이번:{_slots}개)", flush=True)
+        _per_run = int(os.getenv("PER_RUN_LIMIT", "1"))
+        _slots = min(_daily_limit - _already, _max_limit - _cur, _per_run)
+        print(f"[SCHED] 상품 자동 등록 시작 (오늘:{_already}/{_daily_limit}, 이번:{_slots}개, per_run={_per_run})", flush=True)
         try:
             result = await pipeline_register_from_domeggook(limit=_slots)
             registered = result.get("success", 0) if isinstance(result, dict) else 0
@@ -7258,7 +7259,7 @@ async def startup_event():
     # 주간 네이버 패션 트렌드 업데이트 (월간→주간 단축)
     scheduler.add_job(job_fashion_trend_update, "interval", weeks=1, id="fashion_trend_update")
     # 09:00 / 13:00 / 20:00 상품 등록
-    scheduler.add_job(job_register_products, "cron", hour="9,13,20", minute=0, id="register_products_8")
+    scheduler.add_job(job_register_products, "interval", minutes=5, id="register_products_8")
     # 09:00 / 13:00 / 21:00 Pinterest 자동 핀 (상품 등록 1시간 후)
     scheduler.add_job(job_pinterest_pin, "cron", hour="9,13,21", minute=0, id="pinterest_pin")
     # 매주 월요일 00:00 저성과 상품 정리
