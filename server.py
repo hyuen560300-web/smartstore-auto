@@ -2126,6 +2126,61 @@ async def debug_dg_proxy(kw: str = "캠핑", sz: int = 3):
     return JSONResponse(diag)
 
 
+@app.get("/debug-dg-wholesale")
+async def debug_dg_wholesale(dg_code: str = "DG_66822677"):
+    """_get_dg_wholesale 실시간 진단 — 캐시 상태 + raw API 응답 + 파싱 결과."""
+    import time as _time
+    import httpx as _hx
+    from main import _DG_WHOLESALE_CACHE, DOMEGGOOK_API_URL, _get_dg_wholesale as _fn_wholesale
+    result: dict = {"dg_code": dg_code}
+
+    # 1. 캐시 상태
+    cached = _DG_WHOLESALE_CACHE.get(dg_code)
+    if cached:
+        price, ts = cached
+        age = int(_time.time() - ts)
+        result["cache"] = {"price": price, "age_sec": age, "expired": age > 3600}
+    else:
+        result["cache"] = None
+
+    # 2. 직접 DG API 원시 호출
+    item_no = dg_code.replace("DG_", "")
+    try:
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(DOMEGGOOK_API_URL, params={
+                "ver": "4.5", "mode": "getItemView", "aid": DOMEGGOOK_API_KEY,
+                "no": item_no, "om": "json",
+            })
+        raw_json = r.json()
+        raw = raw_json.get("domeggook") or {}
+        price_block = raw.get("price") or {}
+        dome_raw = price_block.get("dome", 0) if isinstance(price_block, dict) else 0
+        if isinstance(dome_raw, dict):
+            dome_parsed = dome_raw.get("#text") or dome_raw.get("text") or "0"
+        else:
+            dome_parsed = dome_raw
+        wholesale = int("".join(ch for ch in str(dome_parsed) if ch.isdigit()) or "0")
+        result["http_status"] = r.status_code
+        result["raw_top_keys"] = list(raw.keys())[:20]
+        result["price_block_type"] = type(price_block).__name__
+        result["price_block_raw"] = str(price_block)[:300]
+        result["dome_raw_type"] = type(dome_raw).__name__
+        result["dome_raw"] = str(dome_raw)[:100]
+        result["dome_parsed"] = str(dome_parsed)
+        result["wholesale_manual_parse"] = wholesale
+    except Exception as e:
+        result["api_error"] = str(e)[:300]
+
+    # 3. _get_dg_wholesale 함수 직접 호출
+    try:
+        fn_result = await _fn_wholesale(dg_code)
+        result["function_result"] = fn_result
+    except Exception as e:
+        result["function_error"] = str(e)[:200]
+
+    return JSONResponse(result)
+
+
 @app.post("/register-domeggook")
 async def register_from_domeggook(request: Request, background_tasks: BackgroundTasks):
     """도매꾹 API 소싱 → 스마트스토어 상품 등록 (백그라운드 실행).
