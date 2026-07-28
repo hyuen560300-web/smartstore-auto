@@ -2609,6 +2609,135 @@ async def register_with_html(request: Request):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.post("/register-with-template")
+async def register_with_template_endpoint(request: Request):
+    """
+    카테고리 HTML 템플릿 시스템 경유 등록 (실제 파이프라인 STEP3 로직 그대로).
+    - 해당 카테고리 템플릿 있으면 Claude API 없이 치환 재사용 → html_source=template
+    - 없으면 Claude Vision 생성 후 템플릿 저장 → html_source=claude_vision
+    Body: {"name": "상품명", "price": 15000, "image_url": "https://...",
+           "dg_code": "DG_12345", "category": "직접판매", "wholesale": 7000, "stock": 50}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "JSON 파싱 실패"}, status_code=400)
+
+    name      = str(body.get("name", "")).strip()
+    image_url = str(body.get("image_url", "")).strip()
+    if not name or not image_url:
+        return JSONResponse({"status": "error", "message": "name/image_url 필수"}, status_code=400)
+
+    price     = int(body.get("price", 0))
+    wholesale = int(body.get("wholesale", 0))
+    stock     = int(body.get("stock", 50))
+    dg_code   = str(body.get("dg_code", ""))
+    category  = str(body.get("category", "직접판매"))
+
+    try:
+        from main import (
+            NaverCommerceAPI as _NCA, build_product_payload,
+            clean_product_name, load_registered_codes, load_registered_names,
+            save_registered_code, save_registered_name, _normalize_name,
+            generate_claude_html_detail, _count_html_sections,
+            _get_html_template, _save_html_template, _apply_html_template,
+            _html_template_key, _ctx_set,
+        )
+        _napi = _NCA()
+
+        reg_codes = load_registered_codes()
+        reg_names = load_registered_names()
+        if dg_code and dg_code in reg_codes:
+            return JSONResponse({"status": "duplicate", "message": "이미 등록된 코드"})
+        name_norm = _normalize_name(name)
+        if name_norm and name_norm in reg_names:
+            return JSONResponse({"status": "duplicate", "message": "이미 등록된 상품명"})
+
+        naver_img_url = await _napi.upload_image(image_url)
+
+        # ── STEP3 템플릿 시스템 그대로 ──
+        detail_html = ""
+        html_source = "none"
+
+        _tmpl = _get_html_template(category)
+        if _tmpl:
+            _tmpl_html = _apply_html_template(_tmpl, name, naver_img_url)
+            if len(_tmpl_html) >= 5000 and _count_html_sections(_tmpl_html) >= 6:
+                detail_html = _tmpl_html
+                html_source = "template"
+                _reuse_cnt = _tmpl.get("reuse_count", 0) + 1
+                _tmpl["reuse_count"] = _reuse_cnt
+                _ctx_set(_html_template_key(category), _tmpl)
+                print(f"[tmpl-reg] '{category}' 템플릿 재사용 (#{_reuse_cnt}) Claude API 없음", flush=True)
+
+        if not detail_html:
+            _p = {"name": name, "category": category, "price": wholesale or price}
+            _ai = {"product_name": name, "headline": name[:20], "spec_hint": category,
+                   "description": "", "selling_points": [], "pain_points": []}
+            try:
+                claude_html = await generate_claude_html_detail(_p, _ai, [image_url])
+            except Exception as _ce:
+                claude_html = ""
+            _ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
+            if not _ok:
+                return JSONResponse({"status": "error",
+                                     "message": f"HTML 생성 실패 len={len(claude_html)}"})
+            detail_html = claude_html
+            html_source = "claude_vision"
+            if not _get_html_template(category):
+                _save_html_template(category, claude_html,
+                                    source_name=name, source_image=naver_img_url)
+            print(f"[tmpl-reg] Claude Vision 생성 → '{category}' 템플릿 저장", flush=True)
+
+        raw = {
+            "code": dg_code, "name": name, "price": wholesale or price,
+            "category": category, "image": naver_img_url,
+            "stock": stock, "delivery_fee": 3000, "delivery_type": "",
+            "manufacturer": "", "brand": "", "origin": "",
+        }
+        ai_reg = {"product_name": name, "description": detail_html}
+        payload = build_product_payload(raw, ai_reg, price)
+        payload["originProduct"]["detailContent"]                        = detail_html
+        payload["originProduct"]["images"]["representativeImage"]["url"] = naver_img_url
+        payload["originProduct"].setdefault("detailAttribute", {}).update(
+            {"unitCapacity": {"unitPriceYn": False}})
+        if dg_code:
+            payload["originProduct"]["detailAttribute"]["sellerCodeInfo"] = {
+                "sellerManagementCode": dg_code}
+
+        result     = await _napi.register_product(payload)
+        origin_no  = str(result.get("originProductNo", ""))
+        chans      = result.get("channelProducts", []) or []
+        channel_no = str(result.get("smartstoreChannelProductNo", "")
+                         or (chans[0].get("channelProductNo", "") if chans else "") or "")
+        store_url  = f"https://smartstore.naver.com/main/products/{channel_no}" if channel_no else ""
+        sc_url     = f"https://sell.smartstore.naver.com/#/product/detail/{origin_no}" if origin_no else ""
+
+        if dg_code:
+            save_registered_code(dg_code)
+        safe_name = clean_product_name(name) or name[:25]
+        save_registered_name(safe_name)
+
+        print(f"[tmpl-reg] 완료 {safe_name} | pid={origin_no} | {html_source}", flush=True)
+        return JSONResponse({
+            "status":       "success",
+            "name":         safe_name,
+            "price":        price,
+            "origin_no":    origin_no,
+            "channel_no":   channel_no,
+            "store_url":    store_url,
+            "sc_url":       sc_url,
+            "html_source":  html_source,
+            "html_len":     len(detail_html),
+            "html_snippet": detail_html[:500],
+            "category":     category,
+        })
+    except Exception as e:
+        import traceback as _tb
+        return JSONResponse({"status": "error", "message": str(e),
+                             "tb": _tb.format_exc()[-2000:]}, status_code=500)
+
+
 @app.post("/upload-excel")
 async def upload_excel(file: UploadFile = File(...)):
     save_path = Path(EXCEL_FOLDER) / file.filename
