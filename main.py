@@ -2693,7 +2693,8 @@ _SYSTEM_ROLE = """당신은 한국 최고 수준의 이커머스 상세페이지
 4. 2025년 네이버 알고리즘: 체류시간·전환율·키워드밀도 모두 고려
 5. 모바일 우선 반응형 (100% 모바일 최적화 필수)
 6. 최소 10,000자 이상의 풍부한 콘텐츠 생성
-7. ⛔ 네이버 금지어 절대 사용 금지 — 관절/통증/치료/항균/살균/소독/진통/해열/항염/소염/혈압/혈당/혈류/콜레스테롤/항암/의약/처방/질환/완화/멸균 포함 불가 (의약외품·의료기기 효능 주장으로 등록 거부됨)"""
+7. ⛔ 네이버 금지어 절대 사용 금지 — 관절/통증/치료/항균/살균/소독/진통/해열/항염/소염/혈압/혈당/혈류/콜레스테롤/항암/의약/처방/질환/완화/멸균 포함 불가 (의약외품·의료기기 효능 주장으로 등록 거부됨)
+8. ⛔ 형식적 CTA·홍보 문구 절대 금지 — "무료배송", "지금 바로 구매하기", "바로구매하기 →", "빨리 담으세요", "한정수량 특가", "지금 구매", "바로구매", "장바구니 담기" 등 클릭유도·프로모션성 문구 사용 불가. 상품의 실제 특징·재질·사용법·스펙·수치만 구체적으로 서술할 것."""
 
 # 스타일별 few-shot 예시 (구조·톤·팔레트 참고용, 50줄 이내)
 _STYLE_EXAMPLE = {
@@ -2745,7 +2746,7 @@ _STYLE_EXAMPLE = {
         "  <div style=\"flex:1 1 45%;background:#fff;border:2px solid #ddd;border-radius:10px;padding:20px;\"><b style=\"color:#888;\">BEFORE</b><p>매번 번거로운 정리…</p></div>\n"
         "  <div style=\"flex:1 1 45%;background:#FFF3E0;border:2px solid #FF6B00;border-radius:10px;padding:20px;\"><b style=\"color:#FF6B00;\">AFTER</b><p>한 번에 깔끔하게!</p></div></div>\n"
         " <div style=\"padding:24px;\"><p style=\"font-weight:700;color:#FF4444;\">✓ 10초 설치 ✓ 강력 고정 ✓ 물세척 OK</p></div>\n"
-        " <div style=\"background:#FF4444;padding:32px 24px;text-align:center;\"><p style=\"font-size:1.9em;color:#fff;font-weight:800;margin:0;\">지금 바로 구매하기</p></div>\n"
+        " <div style=\"background:#FF4444;padding:32px 24px;text-align:center;\"><p style=\"font-size:1.1em;color:#fff;font-weight:700;margin:0;\">소재: 고강도 ABS | 사이즈: 가로 28cm | 중량: 320g</p></div>\n"
         "</div>"
     ),
 }
@@ -2797,7 +2798,7 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         "15. 스펙표: 소재/사이즈/무게/색상/원산지 (flex 기반)\n\n"
         "16. 배송/교환 안내: 배송기간, 교환반품 조건\n\n"
         "17. 신뢰배지 3개: 빠른배송/정품보장/AS보장 (무료배송 절대 금지)\n\n"
-        "18. CTA: 강력한 구매 유도 섹션\n\n"
+        "18. 활용 예시 3가지: 구체적 사용 시나리오 서술 (언제/어디서/어떻게 쓰는지)\n\n"
         "19. 이런 분께 추천(타겟 페르소나 3~5가지) + 스토어찜 유도 + 푸터\n"
     )
     # 카테고리 → HTML 스타일 자동 매칭 (A/B/C/D)
