@@ -3079,12 +3079,14 @@ async def apply_zero_margin_ss(limit: int = 200):
     return JSONResponse({"status": "started", "limit": limit, "message": f"순마진 재조정 {limit}개 백그라운드 실행 중"})
 
 
-@app.get("/sale-margin-check")
-async def sale_margin_check():
-    """SALE 상품 전체 현재 순마진 상태 실측 확인."""
+_sale_margin_result: dict = {}
+
+async def _run_sale_margin_check():
     import math as _m
-    from main import naver_api, _get_dg_wholesale
+    from main import naver_api, _get_dg_wholesale, _CONTEXT_STORE_URL
+    global _sale_margin_result
     SS_FEE = float(os.environ.get("SS_PLATFORM_FEE_RATE", "0.06"))
+    _sale_margin_result = {"status": "running", "items": []}
     items_out = []
     page = 1
     while True:
@@ -3106,21 +3108,41 @@ async def sale_margin_check():
                 net = round(price * (1 - SS_FEE) - dome)
                 min_p = int(_m.ceil((dome + 1) / (1 - SS_FEE) / 10) * 10)
                 max_p = int(_m.ceil((dome + 300) / (1 - SS_FEE) / 10) * 10)
-                in_range = 0 < net <= 300
                 items_out.append({"name": name, "price": price, "dome": dome,
                                    "net": net, "min_p": min_p, "max_p": max_p,
-                                   "in_range": in_range, "dg_code": dg_code})
+                                   "in_range": 0 < net <= 300, "dg_code": dg_code})
             else:
                 items_out.append({"name": name, "price": price, "dome": 0,
                                    "dg_code": dg_code, "note": "도매가조회실패"})
-            await asyncio.sleep(0.3)
         if len(contents) < 50:
             break
         page += 1
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
     in_range_cnt = sum(1 for i in items_out if i.get("in_range"))
-    return JSONResponse({"total": len(items_out), "in_range": in_range_cnt,
-                         "items": items_out})
+    result = {"status": "done", "total": len(items_out),
+              "in_range": in_range_cnt, "items": items_out}
+    _sale_margin_result = result
+    try:
+        import httpx as _hx
+        async with _hx.AsyncClient(timeout=8) as c:
+            await c.post(f"{_CONTEXT_STORE_URL}/context", json={
+                "key": "ss.zero_margin_result",
+                "value": json.dumps(result, ensure_ascii=False),
+                "category": "data",
+            })
+    except Exception:
+        pass
+    print(f"[MARGIN-CHECK] 완료 total={len(items_out)} in_range={in_range_cnt}", flush=True)
+
+@app.get("/sale-margin-check")
+async def sale_margin_check():
+    """SALE 상품 전체 순마진 상태 실측 (백그라운드). 결과는 /sale-margin-result."""
+    asyncio.create_task(_run_sale_margin_check())
+    return JSONResponse({"status": "started", "note": "결과는 /sale-margin-result 조회"})
+
+@app.get("/sale-margin-result")
+async def sale_margin_result():
+    return JSONResponse(_sale_margin_result)
 
 
 @app.post("/price-audit")
