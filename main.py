@@ -207,7 +207,7 @@ DOMEGGOOK_API_KEY          = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))
 NAVER_DATALAB_CLIENT_ID    = os.environ.get("NAVER_DATALAB_CLIENT_ID", "")
 NAVER_DATALAB_CLIENT_SECRET = os.environ.get("NAVER_DATALAB_CLIENT_SECRET", "")
 
-DOMEGGOOK_API_URL  = "https://domeggook.com/ssl/api/"
+DOMEGGOOK_API_URL  = os.getenv("DOMEGGOOK_API_URL", "https://domeggook.com/ssl/api/")
 DOMEGGOOK_IMG_BASE = "https://img.domeggook.com/"
 # 기본 검색 키워드 — DOMEGGOOK_KEYWORDS 환경변수로 덮어쓰기 가능
 _DG_KEYWORDS_ALL: list[str] = [
@@ -1162,6 +1162,11 @@ async def _dg_item_detail(item_no: str) -> dict:
             return r.json().get("domeggook", {})
     except Exception as e:
         print(f"[DOMEGGOOK] 상세조회 실패({item_no}): {e}", flush=True)
+        if "domeggook.com" not in DOMEGGOOK_API_URL:
+            asyncio.create_task(_tg_notify(
+                f"⚠️ [SS] DG 프록시 연결 실패 — Bridge(ngrok) 꺼진 듯\n"
+                f"URL: {DOMEGGOOK_API_URL}\n오류: {str(e)[:200]}"
+            ))
         return {}
 
 
