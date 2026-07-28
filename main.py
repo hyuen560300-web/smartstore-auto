@@ -5854,10 +5854,16 @@ async def _get_dg_wholesale(dg_code: str) -> int:
             })
         raw = r.json().get("domeggook", {})
         price_block = raw.get("price", {})
-        dome_price = price_block.get("dome", 0) if isinstance(price_block, dict) else 0
-        wholesale = int(dome_price or 0)
+        dome_raw = price_block.get("dome", 0) if isinstance(price_block, dict) else 0
+        # DG API가 {"#text": "6600"} 딕셔너리로 응답하는 경우도 처리
+        if isinstance(dome_raw, dict):
+            dome_raw = dome_raw.get("#text") or dome_raw.get("text") or "0"
+        wholesale = int("".join(c for c in str(dome_raw) if c.isdigit()) or "0")
     except Exception as _e:
         print(f"[DG_WHOLESALE] 조회 실패 {dg_code}: {_e}", flush=True)
+        return 0
+    if wholesale <= 0:
+        print(f"[DG_WHOLESALE] {dg_code} → 도매가 0 (캐시 미저장)", flush=True)
         return 0
     _DG_WHOLESALE_CACHE[dg_code] = (wholesale, now)
     print(f"[DG_WHOLESALE] {dg_code} → {wholesale:,}원 (캐시저장)", flush=True)
