@@ -3071,6 +3071,14 @@ async def cs_reviews(limit: int = 20, days: int = 1):
     return JSONResponse({"reviews": [], "total": 0})
 
 
+@app.post("/apply-zero-margin")
+async def apply_zero_margin_ss(limit: int = 200):
+    """기존 SALE 상품 전체에 순마진 0~300원 전략 1회 적용 (백그라운드)."""
+    from main import _apply_zero_margin_pricing_ss
+    asyncio.create_task(_apply_zero_margin_pricing_ss(limit=limit))
+    return JSONResponse({"status": "started", "limit": limit, "message": f"순마진 재조정 {limit}개 백그라운드 실행 중"})
+
+
 @app.post("/price-audit")
 async def price_audit_now(limit: int = 100):
     """경쟁사 가격 감사 즉시 실행 (백그라운드). 일일 자동 실행과 동일한 로직."""
