@@ -4236,7 +4236,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
                 continue
 
             # ③-c 재고 필터: 최소재고 미달 상품 제외
-            _ss_min_stock = int(os.getenv("SS_MIN_STOCK", "20"))
+            _ss_min_stock = int(os.getenv("SS_MIN_STOCK", "100"))
             if p.get("stock", 100) < _ss_min_stock:
                 print(f"[재고필터] 스킵: {p.get('name','')[:30]} (재고={p.get('stock', '?')}<{_ss_min_stock})", flush=True)
                 results["skip"] += 1
