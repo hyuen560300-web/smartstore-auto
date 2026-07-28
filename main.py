@@ -4305,7 +4305,15 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             registered_names.add(name_norm)
             registered_names.add(_normalize_name(ai.get("product_name") or p.get("name", "")))
             results["success"] += 1
-            print(f"[총괄] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원)", flush=True)
+            results["registered_products"].append({
+                "name":         ai.get("product_name", p.get("name", "")),
+                "pid":          _pid1,
+                "html_source":  "template" if _html_from_tmpl else "claude_vision",
+                "html_snippet": detail_html[:400] if detail_html else "",
+                "category":     _cat,
+                "sc_url":       f"https://sell.smartstore.naver.com/#/product/detail/{_pid1}" if _pid1 else "",
+            })
+            print(f"[총괄] ✅ {ai.get('product_name', p.get('name',''))} ({price:,}원) [html={('template' if _html_from_tmpl else 'claude_vision')}]", flush=True)
             await asyncio.sleep(0.5)
 
         except Exception as e:
@@ -4386,7 +4394,8 @@ async def pipeline_register_from_domeggook(
     _proc_total = len(products[:limit])
     _proc_n = 0
     results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0,
-               "ip_blocked": 0, "errors": [], "source": "domeggook"}
+               "ip_blocked": 0, "errors": [], "source": "domeggook",
+               "registered_products": []}
 
     for p in products[:limit]:
         try:
