@@ -9460,6 +9460,76 @@ async def _rereg_batch_job(offset: int, size: int, dry_run: bool, stop_on_error:
         _rereg_state["running"] = False
 
 
+@app.get("/html-templates")
+async def list_html_templates():
+    """저장된 카테고리 HTML 템플릿 목록 조회."""
+    from main import _ctx_get, _html_template_key
+    import requests as _rq
+    CONTEXT_URL = os.environ.get("CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app")
+    try:
+        r = _rq.get(f"{CONTEXT_URL}/context", timeout=8)
+        if r.status_code != 200:
+            return {"error": f"context_store {r.status_code}"}
+        items = r.json() if isinstance(r.json(), list) else []
+        templates = []
+        for item in items:
+            key = item.get("key", "")
+            if key.startswith("html_template."):
+                try:
+                    import json as _j
+                    val = _j.loads(item.get("value", "{}"))
+                    templates.append({
+                        "key":          key,
+                        "category":     val.get("category", key.replace("html_template.", "")),
+                        "html_len":     len(val.get("html", "")),
+                        "reuse_count":  val.get("reuse_count", 0),
+                        "created":      val.get("created", ""),
+                        "source_name":  val.get("source_name", "")[:40],
+                    })
+                except Exception:
+                    pass
+        return {"count": len(templates), "templates": templates}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/html-template/{category}")
+async def get_html_template_endpoint(category: str):
+    """특정 카테고리 HTML 템플릿 조회."""
+    from main import _get_html_template
+    data = _get_html_template(category)
+    if not data:
+        return {"found": False, "category": category}
+    return {
+        "found":        True,
+        "category":     data.get("category", category),
+        "html_len":     len(data.get("html", "")),
+        "reuse_count":  data.get("reuse_count", 0),
+        "created":      data.get("created", ""),
+        "source_name":  data.get("source_name", "")[:60],
+    }
+
+
+@app.delete("/html-template/{category}")
+async def delete_html_template(category: str):
+    """카테고리 HTML 템플릿 삭제 (다음 등록 시 신규 생성 강제)."""
+    from main import _ctx_get, _ctx_set, _html_template_key
+    key = _html_template_key(category)
+    existing = _ctx_get(key)
+    if not existing:
+        return {"deleted": False, "message": f"'{category}' 템플릿 없음"}
+    import requests as _rq
+    CONTEXT_URL = os.environ.get("CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app")
+    try:
+        r = _rq.delete(f"{CONTEXT_URL}/context/{key}", timeout=8)
+        if r.status_code in (200, 204):
+            return {"deleted": True, "category": category, "key": key}
+        _ctx_set(key, None)
+        return {"deleted": True, "category": category, "key": key, "method": "set_null"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))

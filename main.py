@@ -412,6 +412,64 @@ def _ctx_set(key: str, value) -> None:
         pass
 
 
+# ── 카테고리별 HTML 템플릿 저장·재사용 ──────────────────────────────────
+_HTML_TMPL_NAME = "{{PRODUCT_NAME}}"
+_HTML_TMPL_IMG  = "{{MAIN_IMG}}"
+
+
+def _html_template_key(category: str) -> str:
+    import re as _re_t
+    safe = _re_t.sub(r"[^가-힣a-zA-Z0-9_]", "_", (category or "general").strip())[:30]
+    return f"html_template.{safe}"
+
+
+def _get_html_template(category: str):
+    """context_store에서 카테고리 HTML 템플릿 조회. 없으면 None."""
+    data = _ctx_get(_html_template_key(category))
+    if isinstance(data, dict) and data.get("html"):
+        return data
+    return None
+
+
+def _save_html_template(category: str, html: str, source_name: str,
+                         source_image: str, extra_images=None) -> None:
+    """Claude Vision 생성 HTML → 플레이스홀더 치환 후 카테고리 템플릿으로 저장."""
+    try:
+        tmpl_html = html
+        if source_name:
+            tmpl_html = tmpl_html.replace(source_name, _HTML_TMPL_NAME)
+        if source_image:
+            tmpl_html = tmpl_html.replace(source_image, _HTML_TMPL_IMG)
+        for extra in (extra_images or []):
+            if extra and extra != source_image:
+                tmpl_html = tmpl_html.replace(extra, _HTML_TMPL_IMG)
+        if len(tmpl_html) < 3000:
+            return
+        from datetime import datetime as _dt_tmpl
+        tmpl_data = {
+            "html":         tmpl_html,
+            "source_name":  source_name,
+            "source_image": source_image,
+            "category":     category,
+            "created":      _dt_tmpl.now().strftime("%Y-%m-%d"),
+            "reuse_count":  0,
+        }
+        _ctx_set(_html_template_key(category), tmpl_data)
+        print(f"[HTML_TMPL] 카테고리 '{category}' 템플릿 저장 ({len(tmpl_html):,}자)", flush=True)
+    except Exception as _e:
+        print(f"[HTML_TMPL] 저장 실패: {_e}", flush=True)
+
+
+def _apply_html_template(tmpl_data: dict, new_name: str, new_image_url: str) -> str:
+    """저장된 템플릿에 신규 상품 정보를 치환해서 반환."""
+    html = tmpl_data.get("html", "")
+    if not html:
+        return ""
+    html = html.replace(_HTML_TMPL_NAME, new_name)
+    html = html.replace(_HTML_TMPL_IMG, new_image_url)
+    return html
+
+
 def load_registered_codes() -> set:
     # 1순위: /tmp 파일
     try:
@@ -4483,43 +4541,66 @@ async def pipeline_register_from_domeggook(
             # ─── STEP 3: HTML 생성 및 검증 ───
             print(f"[STEP3] ({_proc_n}/{_proc_total}) HTML 생성 및 검증", flush=True)
             _all_imgs = [naver_img_url] + (p.get("_dg_extra_naver_urls") or [])
-            try:
-                claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
-            except Exception as _e_ss:
-                print(f"[STEP3] HTML 생성 예외 → build_detail_html 폴백: {_e_ss}", flush=True)
-                claude_html = ""
-            _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
-            if not _html_ok and claude_html:
-                _sec_cnt = _count_html_sections(claude_html)
-                print(f"[STEP3] HTML 재생성 시도 (길이:{len(claude_html)}, 섹션:{_sec_cnt}/17)", flush=True)
+            detail_html = ""
+            _html_from_tmpl = False
+
+            # ① 카테고리 템플릿 재사용 시도 (Claude API 호출 없음)
+            _tmpl = _get_html_template(_cat)
+            if _tmpl:
+                _tmpl_html = _apply_html_template(_tmpl, str(p.get("name", "")), naver_img_url)
+                if len(_tmpl_html) >= 5000 and _count_html_sections(_tmpl_html) >= 6:
+                    detail_html = _tmpl_html
+                    _html_from_tmpl = True
+                    _reuse_cnt = _tmpl.get("reuse_count", 0) + 1
+                    _tmpl["reuse_count"] = _reuse_cnt
+                    _ctx_set(_html_template_key(_cat), _tmpl)
+                    print(f"[HTML_TMPL] '{_cat}' 템플릿 재사용 (#{_reuse_cnt}) → Claude API 호출 없음", flush=True)
+
+            # ② 템플릿 없거나 재사용 실패 → Claude Vision 신규 생성
+            if not _html_from_tmpl:
                 try:
-                    _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
-                except Exception:
-                    _claude_html2 = ""
-                if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 6:
-                    claude_html = _claude_html2
-                    _html_ok = True
-            if _html_ok:
-                detail_html = claude_html
-                if dg_content_html:
-                    detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
-                    print(f"[상세페이지] 도매꾹 상세 이미지 추가 ✅", flush=True)
-            else:
-                detail_img_url = ""
-                if not dg_content_html:
-                    dalle_detail_raw = await generate_dalle_detail_shot(
-                        str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
-                    if dalle_detail_raw:
-                        try:
-                            detail_img_url = await naver_api.upload_image(dalle_detail_raw)
-                        except Exception:
-                            pass
-                detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url,
-                                                product_name=str(p.get("name", "")))
-                if dg_content_html:
-                    detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
-                    print(f"[상세페이지] 도매꾹 상세 이미지 추가 ✅ (폴백모드)", flush=True)
-                print(f"[STEP3] HTML 폴백 사용 (길이:{len(detail_html)})", flush=True)
+                    claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+                except Exception as _e_ss:
+                    print(f"[STEP3] HTML 생성 예외 → build_detail_html 폴백: {_e_ss}", flush=True)
+                    claude_html = ""
+                _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
+                if not _html_ok and claude_html:
+                    _sec_cnt = _count_html_sections(claude_html)
+                    print(f"[STEP3] HTML 재생성 시도 (길이:{len(claude_html)}, 섹션:{_sec_cnt}/17)", flush=True)
+                    try:
+                        _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+                    except Exception:
+                        _claude_html2 = ""
+                    if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 6:
+                        claude_html = _claude_html2
+                        _html_ok = True
+                if _html_ok:
+                    detail_html = claude_html
+                    # ③ 신규 생성 성공 + 해당 카테고리 템플릿 없으면 저장 (다음 상품부터 재사용)
+                    if not _get_html_template(_cat):
+                        _save_html_template(
+                            _cat, claude_html,
+                            source_name=str(p.get("name", "")),
+                            source_image=naver_img_url,
+                            extra_images=p.get("_dg_extra_naver_urls") or [],
+                        )
+                else:
+                    detail_img_url = ""
+                    if not dg_content_html:
+                        dalle_detail_raw = await generate_dalle_detail_shot(
+                            str(p.get("name", "")), ai.get("spec_hint", ""), _cat)
+                        if dalle_detail_raw:
+                            try:
+                                detail_img_url = await naver_api.upload_image(dalle_detail_raw)
+                            except Exception:
+                                pass
+                    detail_html = build_detail_html(banner_url, naver_img_url, ai, detail_img_url,
+                                                    product_name=str(p.get("name", "")))
+                    print(f"[STEP3] HTML 폴백 사용 (길이:{len(detail_html)})", flush=True)
+
+            if dg_content_html:
+                detail_html += f'\n<div style="margin-top:24px;">{dg_content_html}</div>'
+                print(f"[상세페이지] 도매꾹 상세 이미지 추가", flush=True)
 
             _, reject_kws = _get_scene_context(str(p.get("name", "")))
             qc_result = await run_qc_pipeline(
