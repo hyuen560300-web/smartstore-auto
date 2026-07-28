@@ -5946,69 +5946,68 @@ async def _run_price_competition_update(limit: int = 30) -> dict:
     return results
 
 
-async def _apply_zero_margin_pricing_ss(limit: int = 200) -> dict:
-    """기존 SALE 상품 전체에 순마진 0~300원 전략 1회 적용."""
+async def _apply_zero_margin_pricing_ss(limit: int = 9999) -> dict:
+    """기존 SALE 상품 전체에 순마진 0~300원 전략 1회 적용.
+    페이지별 즉시처리 방식 — 누적 후 처리 시 Rate Limit으로 originProduct 누락 문제 수정."""
     import math as _m
     SS_FEE = float(os.environ.get("SS_PLATFORM_FEE_RATE", "0.06"))
     results = {"checked": 0, "adjusted": 0, "skipped": 0, "no_cost": 0, "errors": []}
 
-    all_products: list[dict] = []
     page = 1
-    while len(all_products) < limit:
+    while True:
         resp = await naver_api.list_products(page=page, size=50)
         contents = resp.get("contents", [])
         if not contents:
             break
-        all_products.extend(contents)
+        for prod in contents:
+            try:
+                origin = prod.get("originProduct", {})
+                if origin.get("statusType") != "SALE":
+                    continue
+                product_no = str(prod.get("originProductNo", ""))
+                name = origin.get("name", "")
+                our_price = int(origin.get("salePrice") or 0)
+                if our_price <= 0:
+                    continue
+
+                dg_code = str(((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
+                              .get("sellerManagementCode") or "").strip()
+                cost = await _get_dg_wholesale(dg_code) if dg_code else 0
+                if cost <= 0:
+                    results["no_cost"] += 1
+                    print(f"[ZERO-MARGIN-SS] SKIP {name[:20]} — 도매가 확인 불가", flush=True)
+                    continue
+                results["checked"] += 1
+
+                min_price = int(_m.ceil((cost + 1) / (1 - SS_FEE) / 10) * 10)
+                max_price = int(_m.ceil((cost + 300) / (1 - SS_FEE) / 10) * 10)
+
+                if our_price < min_price:
+                    results["skipped"] += 1
+                    print(f"[ZERO-MARGIN-SS] ❌ 역마진: {name[:20]} 현재₩{our_price:,} < min₩{min_price:,}", flush=True)
+                    continue
+
+                new_price = max_price
+                if new_price == our_price:
+                    results["skipped"] += 1
+                    continue
+
+                full = dict(origin)
+                full["salePrice"] = new_price
+                ok, err = await naver_api.update_product(product_no, full)
+                if ok:
+                    results["adjusted"] += 1
+                    net = round(new_price * (1 - SS_FEE) - cost)
+                    print(f"[ZERO-MARGIN-SS] ✅ {name[:20]} {our_price:,}→{new_price:,}원 (순마진₩{net})", flush=True)
+                else:
+                    results["errors"].append(f"{name[:15]}: {(err or '')[:40]}")
+            except Exception as e:
+                results["errors"].append(str(e)[:50])
+            await asyncio.sleep(1.2)
         if len(contents) < 50:
             break
         page += 1
-
-    for prod in all_products[:limit]:
-        try:
-            origin = prod.get("originProduct", {})
-            if origin.get("statusType") != "SALE":
-                continue
-            product_no = str(prod.get("originProductNo", ""))
-            name = origin.get("name", "")
-            our_price = int(origin.get("salePrice") or 0)
-            if our_price <= 0:
-                continue
-
-            dg_code = str(((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
-                          .get("sellerManagementCode") or "").strip()
-            cost = await _get_dg_wholesale(dg_code) if dg_code else 0
-            if cost <= 0:
-                results["no_cost"] += 1
-                print(f"[ZERO-MARGIN-SS] SKIP {name[:20]} — 도매가 확인 불가", flush=True)
-                continue
-            results["checked"] += 1
-
-            min_price = int(_m.ceil((cost + 1) / (1 - SS_FEE) / 10) * 10)
-            max_price = int(_m.ceil((cost + 300) / (1 - SS_FEE) / 10) * 10)
-
-            if our_price < min_price:
-                results["skipped"] += 1
-                print(f"[ZERO-MARGIN-SS] ❌ 역마진: {name[:20]} 현재₩{our_price:,} < min₩{min_price:,}", flush=True)
-                continue
-
-            new_price = max_price
-            if new_price == our_price:
-                results["skipped"] += 1
-                continue
-
-            full = dict(origin)
-            full["salePrice"] = new_price
-            ok, err = await naver_api.update_product(product_no, full)
-            if ok:
-                results["adjusted"] += 1
-                net = round(new_price * (1 - SS_FEE) - cost)
-                print(f"[ZERO-MARGIN-SS] ✅ {name[:20]} {our_price:,}→{new_price:,}원 (순마진₩{net})", flush=True)
-            else:
-                results["errors"].append(f"{name[:15]}: {(err or '')[:40]}")
-        except Exception as e:
-            results["errors"].append(str(e)[:50])
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(0.5)  # 페이지간 Rate Limit 방지
 
     print(f"[ZERO-MARGIN-SS] 완료 {results}", flush=True)
     try:
