@@ -7209,6 +7209,21 @@ async def startup_event():
     except Exception as _e:
         print(f"[STARTUP] 주문 ID 복원 스킵: {_e}", flush=True)
 
+    # DG 프록시 URL 갱신 (NCP 터널 — context_store dg_proxy.url)
+    try:
+        async with httpx.AsyncClient(timeout=5) as _c_dg:
+            _r_dg = await _c_dg.get(
+                "https://loving-serenity-production-2635.up.railway.app/context/dg_proxy.url"
+            )
+        if _r_dg.status_code == 200:
+            import main as _main_mod
+            _proxy_url = _r_dg.json().get("value", "")
+            if _proxy_url and isinstance(_proxy_url, str) and _proxy_url.startswith("https://"):
+                _main_mod.DOMEGGOOK_API_URL = _proxy_url
+                print(f"[STARTUP] DOMEGGOOK_API_URL → {_proxy_url}", flush=True)
+    except Exception as _e_dg:
+        print(f"[STARTUP] DG 프록시 URL 갱신 스킵: {_e_dg}", flush=True)
+
     # ── APScheduler: n8n 워크플로우 3개 대체 ─────────────────────────────────
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from employees import (
