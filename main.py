@@ -5996,7 +5996,7 @@ async def _apply_zero_margin_pricing_ss(limit: int = 9999) -> dict:
                     continue
                 results["checked"] += 1
 
-                min_price = int(_m.ceil((cost + 1) / (1 - SS_FEE) / 10) * 10)
+                min_price = int(_m.ceil((cost + 10) / (1 - SS_FEE) / 10) * 10)
                 max_price = int(_m.ceil((cost + 300) / (1 - SS_FEE) / 10) * 10)
 
                 if our_price < min_price:
