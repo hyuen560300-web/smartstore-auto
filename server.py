@@ -207,24 +207,21 @@ async def _run_delete_hardmode(dry_run: bool = True):
             origin = p.get("originProduct", {}) or {}
             origin_no = str(p.get("originProductNo") or "")
             name = (origin.get("name") or p.get("name") or "").strip()
-            img = p.get("representativeImageUrl") or ""
+            # 이미지 URL: 목록 응답의 여러 필드명 시도
+            img = (p.get("representativeImage") or p.get("representativeImageUrl")
+                   or origin.get("representativeImage") or origin.get("representativeImageUrl") or "")
             dg_raw = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
             _HARDMODE_CACHE["scanned"] += 1
 
             is_hardmode = False
             reason = ""
-            # DG 코드가 하드모드 이후 DB 목록에 있는지
-            if dg_raw and (dg_raw in hardmode_codes or dg_raw.replace("DG_", "") in hardmode_codes):
-                is_hardmode = True
-                reason = f"DB코드({dg_raw})"
-            elif hardmode_codes and not dg_raw:
-                # 코드 없는 상품: 이미지 날짜로 판별
-                m = _re.search(r"/(\d{8})_", img)
-                if m and m.group(1) >= "20260728":
+            # 1순위: DB 코드 기준 (DG_ 접두사 유무 모두 체크)
+            if dg_raw and hardmode_codes:
+                if dg_raw in hardmode_codes or dg_raw.replace("DG_", "") in hardmode_codes:
                     is_hardmode = True
-                    reason = f"이미지날짜({m.group(1)})"
-            elif not hardmode_codes:
-                # DB 조회 실패 시 이미지 날짜만으로 판별
+                    reason = f"DB코드({dg_raw})"
+            # 2순위: 이미지 날짜 기준 (DB 기준 미적용 상품 또는 DB 조회 실패 시)
+            if not is_hardmode and img:
                 m = _re.search(r"/(\d{8})_", img)
                 if m and m.group(1) >= "20260728":
                     is_hardmode = True
