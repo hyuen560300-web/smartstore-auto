@@ -4795,56 +4795,32 @@ async def pipeline_register_from_domeggook(
             print(f"[STEP3] ({_proc_n}/{_proc_total}) HTML 생성 및 검증", flush=True)
             _all_imgs = [naver_img_url] + (p.get("_dg_extra_naver_urls") or [])
             detail_html = ""
-            _html_from_tmpl = False
             _pname = str(p.get("name", ""))
 
-            # ① 카테고리 템플릿 재사용 시도 (Claude API 호출 없음)
-            _tmpl = _get_html_template(_cat, _pname)
-            if _tmpl:
-                _tmpl_html = _apply_html_template(_tmpl, _pname, naver_img_url)
-                if len(_tmpl_html) >= 5000 and _count_html_sections(_tmpl_html) >= 6:
-                    detail_html = _tmpl_html
-                    _html_from_tmpl = True
-                    _reuse_cnt = _tmpl.get("reuse_count", 0) + 1
-                    _tmpl["reuse_count"] = _reuse_cnt
-                    _ctx_set(_html_template_key(_cat, _pname), _tmpl)
-                    _rcat = _resolve_tmpl_category(_cat, _pname)
-                    print(f"[HTML_TMPL] '{_rcat}' 템플릿 재사용 (#{_reuse_cnt}) → Claude API 없음", flush=True)
-
-            # ② 템플릿 없거나 재사용 실패 → Claude Vision 신규 생성
-            if not _html_from_tmpl:
+            # ── 매번 Claude 신규 HTML 생성 (템플릿 재사용 완전 제거 2026-07-29)
+            try:
+                claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+            except Exception as _e_ss:
+                print(f"[STEP3] HTML 생성 예외 → build_detail_html 폴백: {_e_ss}", flush=True)
+                claude_html = ""
+            if claude_html:
+                claude_html = _naver_filter_html(claude_html)
+            _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
+            if not _html_ok and claude_html:
+                _sec_cnt = _count_html_sections(claude_html)
+                print(f"[STEP3] HTML 재생성 시도 (길이:{len(claude_html)}, 섹션:{_sec_cnt}/17)", flush=True)
                 try:
-                    claude_html = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
-                except Exception as _e_ss:
-                    print(f"[STEP3] HTML 생성 예외 → build_detail_html 폴백: {_e_ss}", flush=True)
-                    claude_html = ""
-                if claude_html:
-                    claude_html = _naver_filter_html(claude_html)
-                _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
-                if not _html_ok and claude_html:
-                    _sec_cnt = _count_html_sections(claude_html)
-                    print(f"[STEP3] HTML 재생성 시도 (길이:{len(claude_html)}, 섹션:{_sec_cnt}/17)", flush=True)
-                    try:
-                        _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
-                    except Exception:
-                        _claude_html2 = ""
-                    if _claude_html2:
-                        _claude_html2 = _naver_filter_html(_claude_html2)
-                    if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 6:
-                        claude_html = _claude_html2
-                        _html_ok = True
-                if _html_ok:
-                    detail_html = claude_html
-                    # ③ 신규 생성 성공 + 해당 카테고리 템플릿 없으면 저장 (다음 상품부터 재사용)
-                    if not _get_html_template(_cat, _pname):
-                        _save_html_template(
-                            _cat, claude_html,
-                            source_name=_pname,
-                            source_image=naver_img_url,
-                            extra_images=p.get("_dg_extra_naver_urls") or [],
-                            name=_pname,
-                        )
-                else:
+                    _claude_html2 = await generate_claude_html_detail(p, ai, [u for u in _all_imgs if u])
+                except Exception:
+                    _claude_html2 = ""
+                if _claude_html2:
+                    _claude_html2 = _naver_filter_html(_claude_html2)
+                if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 6:
+                    claude_html = _claude_html2
+                    _html_ok = True
+            if _html_ok:
+                detail_html = claude_html
+            else:
                     if os.getenv("HARD_MODE_HTML", "false").lower() == "true":
                         print(f"[STEP3][HARD_MODE] HTML 고급 생성 실패 → 폴백 차단, 상품 스킵: {str(p.get('name',''))[:30]}", flush=True)
                         results["skip"] += 1
@@ -4903,6 +4879,25 @@ async def pipeline_register_from_domeggook(
             if detail_html:
                 payload["originProduct"]["detailContent"] = detail_html
             payload["originProduct"].setdefault("detailAttribute", {})["unitCapacity"] = {"unitPriceYn": False}
+
+            # ─── 등록 직전 최종 검증 (2026-07-29) ───
+            _pre_fail = None
+            if _is_fake_product(p):
+                _pre_fail = f"IP/브랜드 재확인 실패: {str(p.get('name',''))[:30]}"
+            if not _pre_fail and detail_html:
+                _kws = [w for w in str(p.get("name", "")).split() if len(w) >= 2][:5]
+                _kw_hits = sum(1 for w in _kws if w.lower() in detail_html.lower())
+                if _kws and _kw_hits == 0:
+                    _pre_fail = f"HTML-제목 키워드 불일치: {str(p.get('name',''))[:30]}"
+            if not _pre_fail and not code:
+                _pre_fail = f"DG코드 없음: {str(p.get('name',''))[:30]}"
+            if not _pre_fail and not _cat:
+                _pre_fail = f"카테고리 없음: {str(p.get('name',''))[:30]}"
+            if _pre_fail:
+                print(f"[PRECHECK] ⛔ 등록 차단 — {_pre_fail}", flush=True)
+                results["fail"] += 1
+                results["errors"].append(_pre_fail)
+                continue
 
             # ─── STEP 4: 등록 + Obsidian 저장 + 진행률 알림 ───
             print(f"[STEP4] ({_proc_n}/{_proc_total}) 등록 시작", flush=True)
