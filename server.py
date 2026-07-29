@@ -207,9 +207,10 @@ async def _run_delete_hardmode(dry_run: bool = True):
             origin = p.get("originProduct", {}) or {}
             origin_no = str(p.get("originProductNo") or "")
             name = (origin.get("name") or p.get("name") or "").strip()
-            # 이미지 URL: 목록 응답의 여러 필드명 시도
-            img = (p.get("representativeImage") or p.get("representativeImageUrl")
-                   or origin.get("representativeImage") or origin.get("representativeImageUrl") or "")
+            # 이미지 URL: originProduct.images.representativeImage.url 경로 (list_products 상세 포함)
+            _oimgs = (origin.get("images") or {})
+            img = ((_oimgs.get("representativeImage") or {}).get("url") or
+                   p.get("representativeImageUrl") or p.get("representativeImage") or "")
             dg_raw = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
             _HARDMODE_CACHE["scanned"] += 1
 
