@@ -90,6 +90,7 @@ app = FastAPI(title="스마트스토어 자동화 AI 직원단", version="3.0.0"
 _AUDIT_CACHE: dict = {"status": "idle", "scanned": 0, "products": []}
 
 _PURGE_CACHE: dict = {"status": "idle", "scanned": 0, "deleted": 0, "failed": 0, "log": []}
+_HARDMODE_CACHE: dict = {}
 
 _notified_order_ids: set = set()  # 텔레그램 이미 알림한 주문 ID (재시작 시 초기화)
 
@@ -171,6 +172,121 @@ async def products_purge_result():
         "deleted": c.get("deleted", 0),
         "failed": c.get("failed", 0),
         "log": c.get("log", []),
+    })
+
+
+# ─── 하드모드 이후 상품 삭제 (2026-07-29) ────────────────────────────────────
+async def _run_delete_hardmode(dry_run: bool = True):
+    global _HARDMODE_CACHE
+    import re as _re
+    import os as _os
+    _HARDMODE_CACHE = {"status": "running", "scanned": 0, "targets": [], "deleted": 0, "failed": 0, "dry_run": dry_run}
+
+    # PostgreSQL에서 2026-07-28 04:29 UTC(=KST 13:29) 이후 등록된 DG 코드 조회
+    hardmode_codes: set = set()
+    _db_url = _os.environ.get("DATABASE_URL", "")
+    if _db_url:
+        try:
+            import psycopg2 as _pg2
+            _conn = _pg2.connect(_db_url, connect_timeout=8)
+            with _conn.cursor() as _cur:
+                _cur.execute("SELECT code FROM ss_registered_codes WHERE created_at >= '2026-07-28 04:29:00'")
+                hardmode_codes = {row[0] for row in _cur.fetchall()}
+            _conn.close()
+            print(f"[HARDMODE] DB 하드모드 이후 코드: {len(hardmode_codes)}개", flush=True)
+        except Exception as _e:
+            print(f"[HARDMODE] DB 조회 실패: {_e}", flush=True)
+
+    page = 1
+    while True:
+        resp = await naver_api.list_products(page=page, size=50)
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for p in contents:
+            origin = p.get("originProduct", {}) or {}
+            origin_no = str(p.get("originProductNo") or "")
+            name = (origin.get("name") or p.get("name") or "").strip()
+            img = p.get("representativeImageUrl") or ""
+            dg_raw = ((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {}).get("sellerManagementCode", "") or ""
+            _HARDMODE_CACHE["scanned"] += 1
+
+            is_hardmode = False
+            reason = ""
+            # DG 코드가 하드모드 이후 DB 목록에 있는지
+            if dg_raw and (dg_raw in hardmode_codes or dg_raw.replace("DG_", "") in hardmode_codes):
+                is_hardmode = True
+                reason = f"DB코드({dg_raw})"
+            elif hardmode_codes and not dg_raw:
+                # 코드 없는 상품: 이미지 날짜로 판별
+                m = _re.search(r"/(\d{8})_", img)
+                if m and m.group(1) >= "20260728":
+                    is_hardmode = True
+                    reason = f"이미지날짜({m.group(1)})"
+            elif not hardmode_codes:
+                # DB 조회 실패 시 이미지 날짜만으로 판별
+                m = _re.search(r"/(\d{8})_", img)
+                if m and m.group(1) >= "20260728":
+                    is_hardmode = True
+                    reason = f"이미지날짜({m.group(1)})"
+
+            if is_hardmode and origin_no:
+                _HARDMODE_CACHE["targets"].append({
+                    "origin_no": origin_no, "name": name[:40], "dg_code": dg_raw, "reason": reason
+                })
+                if not dry_run:
+                    try:
+                        ok = await naver_api.delete_product(origin_no)
+                        if ok:
+                            _HARDMODE_CACHE["deleted"] += 1
+                            print(f"[HARDMODE-DEL] ✓ {origin_no} {name[:30]}", flush=True)
+                        else:
+                            _HARDMODE_CACHE["failed"] += 1
+                            print(f"[HARDMODE-DEL] ✗ {origin_no} {name[:30]}", flush=True)
+                    except Exception as _e2:
+                        _HARDMODE_CACHE["failed"] += 1
+                        print(f"[HARDMODE-DEL] ✗ {origin_no} {name[:30]} — {_e2}", flush=True)
+                    await asyncio.sleep(0.5)
+
+        if len(contents) < 50:
+            break
+        page += 1
+        await asyncio.sleep(0.3)
+
+    _HARDMODE_CACHE["status"] = "done"
+    print(f"[HARDMODE] 완료{'(dry)' if dry_run else ''}: 스캔={_HARDMODE_CACHE['scanned']} 대상={len(_HARDMODE_CACHE['targets'])} 삭제={_HARDMODE_CACHE['deleted']}", flush=True)
+
+
+@app.get("/delete-hardmode/preview")
+async def delete_hardmode_preview(background_tasks: BackgroundTasks):
+    """7/28 13:29(KST) 하드모드 이후 등록 상품 목록 조회 (삭제 없음). 결과: /delete-hardmode/result"""
+    if _HARDMODE_CACHE.get("status") == "running":
+        return JSONResponse({"status": "already_running", "scanned": _HARDMODE_CACHE.get("scanned", 0)})
+    background_tasks.add_task(_run_delete_hardmode, True)
+    return JSONResponse({"status": "preview_started", "result": "/delete-hardmode/result"})
+
+
+@app.post("/delete-hardmode/execute")
+async def delete_hardmode_execute(background_tasks: BackgroundTasks):
+    """7/28 13:29(KST) 하드모드 이후 등록 상품 전부 삭제 (백그라운드). 결과: /delete-hardmode/result"""
+    if _HARDMODE_CACHE.get("status") == "running":
+        return JSONResponse({"status": "already_running", "scanned": _HARDMODE_CACHE.get("scanned", 0)})
+    background_tasks.add_task(_run_delete_hardmode, False)
+    return JSONResponse({"status": "delete_started", "result": "/delete-hardmode/result"})
+
+
+@app.get("/delete-hardmode/result")
+async def delete_hardmode_result():
+    """delete-hardmode 진행 상황 및 결과."""
+    c = _HARDMODE_CACHE
+    return JSONResponse({
+        "status": c.get("status", "idle"),
+        "dry_run": c.get("dry_run", True),
+        "scanned": c.get("scanned", 0),
+        "target_count": len(c.get("targets", [])),
+        "targets": c.get("targets", []),
+        "deleted": c.get("deleted", 0),
+        "failed": c.get("failed", 0),
     })
 
 
