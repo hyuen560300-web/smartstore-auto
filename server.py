@@ -6243,6 +6243,23 @@ async def full_report():
     })
 
 
+@app.post("/add-registered-code")
+async def add_registered_code_api(request: Request):
+    """DG 코드를 registered_codes에 강제 추가 (이미지 만료 등으로 등록 불가 상품 재시도 방지용)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "message": "JSON 파싱 실패"}, status_code=400)
+    code = str(body.get("code", "")).strip()
+    if not code:
+        return JSONResponse({"status": "error", "message": "code 필수"}, status_code=400)
+    bare = code.replace("DG_", "")
+    from main import save_registered_code
+    save_registered_code(bare)
+    save_registered_code(f"DG_{bare}")
+    return JSONResponse({"status": "ok", "added": [bare, f"DG_{bare}"]})
+
+
 @app.get("/sync-registered-codes")
 async def sync_registered_codes():
     """네이버 등록 상품의 sellerManagementCode + 상품명 추출 → registered_codes/names.json 동기화
