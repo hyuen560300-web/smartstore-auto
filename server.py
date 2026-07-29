@@ -2481,6 +2481,7 @@ async def register_single_product(request: Request):
     """
     n8n Loop 전용 — 상품 1개 즉시 등록
     Body: {"title": "상품명", "category": "카테고리명", "price": 15000, "image": "https://..."}
+    price_override: true 이면 employee_price_optimizer 건너뜀 — 통합소싱 마진보장가 그대로 사용
     n8n 변수 예시: $node["Input"].json["title"]
     """
     try:
@@ -2534,19 +2535,25 @@ async def register_single_product(request: Request):
         ai["tags"] = seo_tags
 
         # Tool 2: 경쟁사 가격 수집 → 최적 가격 산정
-        from main import search_naver_shopping
-        competitor_prices = await search_naver_shopping(product_name)
-        price_result = await employee_price_optimizer(
-            product_name, category, raw_price, ANTHROPIC_API_KEY,
-            competitor_prices=competitor_prices)
-        price = price_result.get("suggested_price") or raw_price
-        print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
-        if price_result.get("skip"):
-            return JSONResponse({
-                "status": "skip",
-                "reason": price_result.get("reason", "경쟁가 하회"),
-                "competitor_min": price_result.get("competitor_min"),
-            })
+        # price_override=True: 통합소싱이 마진 보장가로 계산한 price 그대로 사용
+        price_override = bool(body.get("price_override", False))
+        if price_override:
+            price = int(raw_price)
+            print(f"[가격고정] price_override=True → {price:,}원 (통합소싱 마진보장가)", flush=True)
+        else:
+            from main import search_naver_shopping
+            competitor_prices = await search_naver_shopping(product_name)
+            price_result = await employee_price_optimizer(
+                product_name, category, raw_price, ANTHROPIC_API_KEY,
+                competitor_prices=competitor_prices)
+            price = price_result.get("suggested_price") or raw_price
+            print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
+            if price_result.get("skip"):
+                return JSONResponse({
+                    "status": "skip",
+                    "reason": price_result.get("reason", "경쟁가 하회"),
+                    "competitor_min": price_result.get("competitor_min"),
+                })
 
         naver_img_url = await get_product_image(p)
         if not naver_img_url:
