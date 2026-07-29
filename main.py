@@ -4208,18 +4208,20 @@ async def get_product_image(p: dict) -> str | None:
     """
     이미지 우선순위:
     1. 오너클랜 원본 → 업스케일(Real-ESRGAN/LANCZOS) → QC 95점+
-    2. Pexels 실사진 QC 75점+
-    3. Gemini 생성 QC 75점+
-    4. Flux 2 Pro QC 95점+ (원본 없을 때만)
-    5. DALL-E (최후 수단, 미달이라도 사용)
-    업스케일 QC 미달 시: 원본 폴백 없이 2순위부터 진행
-    모든 소스 실패 시: 원본 이미지 마지막 보험
+    2. 업스케일 미달/실패 시 → 원본 이미지 그대로 사용
+    원본 없거나 blurry → None 반환 (등록 스킵)
+    임의 이미지(Pexels/Gemini/Flux/DALL-E) 대체 절대 금지
     """
     image_url    = str(p.get("image", "")).strip()
     product_name = str(p.get("name", ""))
     category     = str(p.get("category", ""))
     _, reject_kws = _get_scene_context(product_name)
     from employees import employee_pexels_qc, employee_image_inspector
+
+    # DG 원본 없으면 등록 스킵 (임의 이미지 대체 금지)
+    if not image_url.startswith("http"):
+        print(f"[IMAGE] ❌ 원본 이미지 없음 → 등록 스킵: {product_name[:20]}", flush=True)
+        return None
 
     # ── 1. 오너클랜 원본 → 업스케일 → 직원19 하이브리드 배너 → QC 95점+ ──────────
     if image_url.startswith("http"):
@@ -4271,86 +4273,14 @@ async def get_product_image(p: dict) -> str | None:
         else:
             print(f"[IMAGE] 오너클랜 품질 불량({reason} {w}×{h})", flush=True)
 
-    # ── 2. Pexels QC 75점+ ───────────────────────────────────────────────────
-    print(f"[IMAGE] Pexels 검색: {product_name[:20]}", flush=True)
-    pexels_url = await search_pexels_image(product_name)
-    if pexels_url:
-        try:
-            qc = await employee_pexels_qc(pexels_url, product_name, ANTHROPIC_API_KEY)
-            score = qc.get("score", 0)
-            print(f"[IMAGE] Pexels QC {score}점 — {qc.get('reason','')}", flush=True)
-            if score >= 75:
-                result = await naver_api.upload_image(pexels_url)
-                print(f"[IMAGE] Pexels ✅", flush=True)
-                return result
-            print(f"[IMAGE] Pexels {score}점 미달 → Gemini", flush=True)
-        except Exception as e:
-            print(f"[IMAGE] Pexels 실패: {e}", flush=True)
-
-    # ── 3. Gemini QC 75점+ ───────────────────────────────────────────────────
-    print(f"[IMAGE] Gemini 생성: {product_name[:20]}", flush=True)
-    gemini_raw = await generate_gemini_image(product_name, category)
-    if gemini_raw:
-        try:
-            gemini_result = await naver_api.upload_raw_image(gemini_raw)
-            qc = await employee_image_inspector(
-                gemini_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
-            score = qc.get("score", 0)
-            print(f"[IMAGE] Gemini QC {score}점", flush=True)
-            if score >= 75:
-                print(f"[IMAGE] Gemini ✅", flush=True)
-                return gemini_result
-            print(f"[IMAGE] Gemini {score}점 미달 → Flux", flush=True)
-        except Exception as e:
-            print(f"[IMAGE] Gemini 실패: {e}", flush=True)
-
-    # ── 4. Flux QC 95점+ (원본 없을 때만) ────────────────────────────────────
-    if not image_url.startswith("http"):
-        print(f"[IMAGE] Flux 생성(원본 없음): {product_name[:20]}", flush=True)
-        flux_url = await generate_flux_image(product_name, category)
-        if flux_url:
-            try:
-                flux_result = await naver_api.upload_image(flux_url)
-                qc = await employee_image_inspector(
-                    flux_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
-                score = qc.get("score", 0)
-                print(f"[IMAGE] Flux QC {score}점", flush=True)
-                if score >= 95:
-                    print(f"[IMAGE] Flux ✅", flush=True)
-                    return flux_result
-                print(f"[IMAGE] Flux {score}점 미달 → DALL-E", flush=True)
-            except Exception as e:
-                print(f"[IMAGE] Flux 실패: {e}", flush=True)
-
-    # ── 5. DALL-E (최후 수단) ─────────────────────────────────────────────────
-    print(f"[IMAGE] DALL-E 생성: {product_name[:20]}", flush=True)
-    dalle_url = await generate_dalle_image(product_name)
-    if dalle_url:
-        try:
-            dalle_result = await naver_api.upload_image(dalle_url)
-            qc = await employee_image_inspector(
-                dalle_result, product_name, ANTHROPIC_API_KEY, reject_keywords=reject_kws)
-            score = qc.get("score", 0)
-            print(f"[IMAGE] DALL-E QC {score}점", flush=True)
-            if score >= 95:
-                print(f"[IMAGE] DALL-E ✅", flush=True)
-            else:
-                print(f"[IMAGE] DALL-E {score}점 미달이나 최후 수단 사용", flush=True)
-            return dalle_result
-        except Exception as e:
-            print(f"[IMAGE] DALL-E 실패: {e}", flush=True)
-
-    # ── 보험: 원본 이미지라도 사용 ───────────────────────────────────────────
-    if image_url.startswith("http"):
-        try:
-            result = await naver_api.upload_image(image_url)
-            print(f"[IMAGE] 원본 보험 사용 ✅", flush=True)
-            return result
-        except Exception as e:
-            print(f"[IMAGE] 원본 보험 실패: {e}", flush=True)
-
-    print(f"[IMAGE] ❌ 모든 소스 실패: {product_name[:20]}", flush=True)
-    return None
+    # ── 2. 원본 이미지 사용 (업스케일 미달/실패 시, 임의 이미지 대체 금지) ──────
+    try:
+        result = await naver_api.upload_image(image_url)
+        print(f"[IMAGE] 원본 이미지 사용 ✅: {product_name[:20]}", flush=True)
+        return result
+    except Exception as e:
+        print(f"[IMAGE] 원본 업로드 실패 → 등록 스킵: {e}", flush=True)
+        return None
 
 
 # ─── 파이프라인 ───────────────────────────────────────────────────────────────
