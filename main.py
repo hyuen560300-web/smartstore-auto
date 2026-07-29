@@ -1439,6 +1439,38 @@ _FAKE_BRAND_NAMES = {
     "프라다", "prada", "몽클레어", "moncler", "캐나다구스", "canada goose",
     "무스너클", "오메가", "까르띠에", "cartier", "페라리", "포르쉐",
     "애플정품", "삼성정품", "아이폰정품",
+    "이케아", "ikea",
+}
+# 캐릭터·IP 브랜드 — 가격 무관 전면 차단 (라이선스 없이 판매 불가, 2026-07-29)
+_IP_BRAND_NAMES = {
+    # 산리오 브랜드 + 개별 캐릭터
+    "헬로키티", "hello kitty", "hellokitty",
+    "산리오", "sanrio",
+    "마이멜로디", "my melody", "mymelody",
+    "시나모롤", "cinnamoroll",
+    "쿠로미", "kuromi",
+    "폼폼푸린", "pompompurin",
+    "포차코", "pochacco",
+    "케로케로케로피", "keroppi",
+    "리틀트윈스타", "little twin stars",
+    "아기상어", "baby shark",
+    "디즈니", "disney",
+    "포켓몬", "pokemon", "피카츄", "pikachu",
+    "카카오프렌즈", "kakao friends", "라이언", "어피치",
+    "라인프렌즈", "line friends", "브라운", "샐리",
+    "마블스튜디오", "marvel", "어벤져스", "avengers", "스파이더맨",
+    "스타워즈", "star wars",
+    "미키마우스", "미니마우스", "mickey mouse",
+    "도라에몽", "doraemon",
+    "짱구", "신짱구", "crayon shin",
+    "원피스", "나루토", "드래곤볼",
+    "귀멸의칼날", "귀멸", "진격의거인",
+    "방탄소년단", "bts",
+    "바비", "barbie",
+    "레고", "lego",
+    "스누피", "snoopy", "peanuts",
+    "미피", "miffy",
+    "무민", "moomin",
 }
 _FORBIDDEN_KEYWORDS = {
     "성인용", "19금", "섹스", "콘돔", "처방전", "의약품", "마약",
@@ -1452,6 +1484,10 @@ def _is_fake_product(p: dict) -> bool:
     # 금지 키워드
     for kw in _FORBIDDEN_KEYWORDS:
         if kw.lower() in name:
+            return True
+    # 캐릭터 IP 브랜드: 가격 무관 전면 차단
+    for brand in _IP_BRAND_NAMES:
+        if brand.lower() in name:
             return True
     # 위조 브랜드 + 비정상 저가 (정품 불가 가격대)
     for brand in _FAKE_BRAND_NAMES:
