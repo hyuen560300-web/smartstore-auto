@@ -201,6 +201,36 @@ def _cost_guard_ok(estimated_usd: float = 0.12) -> bool:
             return False
         _cost_state["spent"] += estimated_usd
         return True
+# ── Claude API 크레딧 가용 체크 (소싱 전 선행 확인) ────────────────────────────
+import time as _time_mod
+_CLAUDE_CREDIT_CACHE: dict = {"ok": True, "checked_at": 0.0}
+
+async def _check_claude_credits() -> bool:
+    """Claude API 크레딧 가용 여부 확인 (5분 캐시). 크레딧 소진/인증 오류 시 False 반환."""
+    global _CLAUDE_CREDIT_CACHE
+    if _time_mod.time() - _CLAUDE_CREDIT_CACHE.get("checked_at", 0.0) < 300:
+        return _CLAUDE_CREDIT_CACHE.get("ok", True)
+    ok = True
+    try:
+        import anthropic as _ant
+        _client = _ant.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        await _client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=1,
+            messages=[{"role": "user", "content": "1"}]
+        )
+    except Exception as _e:
+        _cls = type(_e).__name__
+        _err = str(_e).lower()
+        if "ratelimiterror" in _cls.lower():
+            ok = True  # 일시적 rate limit — 크레딧 있음
+        elif any(x in _err for x in ("529", "overloaded", "500 internal")):
+            ok = True  # 서버 일시적 문제 — 소싱 중단 안 함
+        else:
+            print(f"[CLAUDE-CHECK] ⛔ 크레딧 소진 또는 API 불가 → 소싱 중단: {_cls}: {_err[:80]}", flush=True)
+            ok = False
+    _CLAUDE_CREDIT_CACHE = {"ok": ok, "checked_at": _time_mod.time()}
+    return ok
+
 EXCEL_FOLDER        = os.environ.get("EXCEL_FOLDER", "/tmp/uploads")
 AS_PHONE            = os.environ.get("AS_PHONE", "010-0000-0000")
 DOMEGGOOK_API_KEY          = _clean_key(os.environ.get("DOMEGGOOK_API_KEY", ""))

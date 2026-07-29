@@ -7474,6 +7474,10 @@ async def startup_event():
         if not _sync_done:
             print("[SCHED] 상품 등록 건너뜀 — registered_codes 동기화 미완료 (중복 방지)", flush=True)
             return
+        from main import _check_claude_credits
+        if not await _check_claude_credits():
+            print("[SCHED] ⛔ Claude API 크레딧 소진 — 소싱 전체 중단 (HTML 없는 등록 방지)", flush=True)
+            return
         _codes_now = load_registered_codes()
         _names_now = load_registered_names()
         if len(_codes_now) == 0 and len(_names_now) == 0:
