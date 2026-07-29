@@ -1481,7 +1481,7 @@ async def _check_image_sharpness(url: str) -> tuple[float, int]:
             return -1, 0
         file_size = len(r.content)
         img = Image.open(_io.BytesIO(r.content)).convert("L")
-        if img.width < 500 or img.height < 500:
+        if img.width < 300 or img.height < 300:
             return 0.0, file_size
         arr = np.array(img.filter(ImageFilter.FIND_EDGES), dtype=float)
         return float(np.var(arr)), file_size
@@ -1497,7 +1497,7 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
     스킵 시 로그 기록."""
     from difflib import SequenceMatcher
     BLUR_THRESHOLD  = 200   # Laplacian variance (FIND_EDGES+np.var 기준)
-    MIN_FILE_KB     = 50    # 50KB
+    MIN_FILE_KB     = 30    # 30KB
     MIN_IMG_COUNT   = 1     # 최소 이미지 장수 (thumb 구조 다양성으로 1로 조정)
     SIM_THRESHOLD   = 0.70  # 이름 유사도 상한
 
@@ -1567,7 +1567,7 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
 
     # ⑤⑥ 이미지 다운로드 → 해상도·파일크기·선명도 병렬 체크 (5개씩)
     async def _score(p: dict) -> tuple[dict, float, int]:
-        variance, fsize = await _check_image_sharpness(p.get("image", ""))
+        variance, fsize = await _check_image_sharpness(_extract_hq_url(p.get("image", "")))
         return p, variance, fsize
 
     scored: list[tuple[dict, float, int]] = []
@@ -1588,7 +1588,7 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
             await _notify_skip(p, f"파일크기 {fsize//1024}KB < {MIN_FILE_KB}KB")
         elif variance == 0.0:
             img_removed += 1
-            await _notify_skip(p, "해상도 500px 미만")
+            await _notify_skip(p, "해상도 300px 미만")
         elif variance < BLUR_THRESHOLD:
             img_removed += 1
             await _notify_skip(p, f"흐릿한 이미지(score={variance:.0f})")
