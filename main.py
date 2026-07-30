@@ -6129,9 +6129,7 @@ async def _apply_zero_margin_pricing_ss(limit: int = 9999) -> dict:
                 max_price = int(_m.ceil((cost + 300) / (1 - SS_FEE) / 10) * 10)
 
                 if our_price < min_price:
-                    results["skipped"] += 1
-                    print(f"[ZERO-MARGIN-SS] ❌ 역마진: {name[:20]} 현재₩{our_price:,} < min₩{min_price:,}", flush=True)
-                    continue
+                    print(f"[ZERO-MARGIN-SS] ⬆️ 역마진→max: {name[:20]} 현재₩{our_price:,} → max₩{max_price:,}", flush=True)
 
                 new_price = max_price
                 if new_price == our_price:
