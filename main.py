@@ -4453,10 +4453,17 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             ai["tags"] = seo_tags
             print(f"[태그생성] {seo_tags[:3]}...", flush=True)
 
+            # 실제 도매 공급가 조회 (getItemView price.dome) — p.get("price")는 소매가이므로 사용 금지
+            _ss_wholesale_here = await _get_dg_wholesale(code)
+            if _ss_wholesale_here <= 0:
+                print(f"[소싱스킵] 공급가조회실패: {p.get('name','')[:30]} (DG{code})", flush=True)
+                results["skip"] += 1
+                continue
+
             # 경쟁사 가격 최적화 (위에서 수집한 competitor_prices 재사용)
             price_result = await employee_price_optimizer(
                 str(p.get("name", "")), str(p.get("category", "")),
-                int(p.get("price", 0)), ANTHROPIC_API_KEY,
+                _ss_wholesale_here, ANTHROPIC_API_KEY,
                 competitor_prices=competitor_prices)
             price = price_result["suggested_price"]
             print(f"[가격최적화] {price:,}원 — {price_result.get('reason','')}", flush=True)
@@ -4664,10 +4671,15 @@ async def pipeline_register_from_domeggook(
                 results["duplicate"] += 1
                 continue
 
-            # ① 도매가 0 사전 차단 (등록 전 단계에서 차단)
-            _ss_wholesale = int(p.get("price", 0))
-            if _ss_wholesale <= 0:
+            # ① DG 실제 공급가(도매가) 조회 — getItemView price.dome 사용
+            # p.get("price")는 DG 소비자 소매가(정가)이므로 원가 계산에 사용하면 안 됨
+            if int(p.get("price", 0)) <= 0:
                 print(f"[STEP1] ⛔ 도매가미기입: {p.get('name','')[:30]} — 소싱스킵", flush=True)
+                results["skip"] += 1
+                continue
+            _ss_wholesale = await _get_dg_wholesale(code)
+            if _ss_wholesale <= 0:
+                print(f"[STEP1] ⛔ 공급가조회실패: {p.get('name','')[:30]} (DG{code}) — 소싱스킵", flush=True)
                 results["skip"] += 1
                 continue
 
@@ -4742,23 +4754,20 @@ async def pipeline_register_from_domeggook(
                     competitor_prices = []  # 폴백: price_optimizer가 기본 마진(2.2×) 적용
             price_result = await employee_price_optimizer(
                 str(p.get("name", "")), str(p.get("category", "")),
-                int(p.get("price", 0)), ANTHROPIC_API_KEY,
+                _ss_wholesale, ANTHROPIC_API_KEY,
                 competitor_prices=competitor_prices)
             price = price_result["suggested_price"]
             if price_result.get("skip"):
                 print(f"[소싱제외-가격] {p.get('name','')[:25]} — {price_result.get('reason','')}", flush=True)
                 results["skip"] += 1
                 continue
-            # ③ floor 보류: 판매가가 원가 floor(도매가×1.15) 미만이면 손해
-            _ss_floor = round(_ss_wholesale * 1.15 / 10) * 10
-            if price < _ss_floor:
-                print(f"[NEAR_FLOOR] 소싱보류: {p.get('name','')[:25]} — 판매가₩{price:,} < floor₩{_ss_floor:,}", flush=True)
-                results["skip"] += 1
-                continue
-            # ④ 최소마진 1,000원: floor 초과해도 마진이 너무 적으면 스킵
-            _MIN_MARGIN = 1_000
-            if price - _ss_floor < _MIN_MARGIN:
-                print(f"[MIN_MARGIN] 소싱보류: {p.get('name','')[:25]} — 마진₩{price - _ss_floor:,} < 최소₩{_MIN_MARGIN:,}", flush=True)
+            # ③ 역마진 최종 방어: zero-margin 전략(순마진 0~300원) 기준 검증
+            # employee_price_optimizer가 이미 _min_price/_max_price로 클램핑하므로
+            # 여기서 double-check만 (wholesale*1.15 floor는 zero-margin과 충돌하므로 제거)
+            _SS_FEE_GATE = float(os.environ.get("SS_PLATFORM_FEE_RATE", "0.06"))
+            _net_gate = round(price * (1 - _SS_FEE_GATE) - _ss_wholesale)
+            if _net_gate <= 0:
+                print(f"[역마진] 소싱보류: {p.get('name','')[:25]} — net₩{_net_gate}", flush=True)
                 results["skip"] += 1
                 continue
 
