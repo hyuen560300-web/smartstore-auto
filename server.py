@@ -2318,6 +2318,8 @@ async def register_from_domeggook(request: Request, background_tasks: Background
     """도매꾹 API 소싱 → 스마트스토어 상품 등록 (백그라운드 실행).
     Body(선택): {"limit": 10, "keywords": ["생활용품","뷰티"], "min_price": 3000, "max_price": 150000}
     DOMEGGOOK_API_KEY 환경변수 필수."""
+    if os.getenv("SOURCING_PAUSED", "false").lower() == "true":
+        return JSONResponse({"status": "paused", "message": "SOURCING_PAUSED=true — 소싱 정지 중"}, status_code=503)
     if not _sync_done:
         return JSONResponse(
             {"status": "error", "message": "registered_codes 동기화 미완료 — 중복 방지를 위해 잠시 후 다시 시도하세요."},
@@ -2499,6 +2501,8 @@ async def register_single_product(request: Request):
     price_override: true 이면 employee_price_optimizer 건너뜀 — 통합소싱 마진보장가 그대로 사용
     n8n 변수 예시: $node["Input"].json["title"]
     """
+    if os.getenv("SOURCING_PAUSED", "false").lower() == "true":
+        return JSONResponse({"status": "paused", "message": "SOURCING_PAUSED=true — 소싱 정지 중"}, status_code=503)
     try:
         body = await request.json()
     except Exception:
@@ -7964,6 +7968,8 @@ async def command_endpoint(request: Request, background_tasks: BackgroundTasks):
         )
 
     if cmd == "register_domeggook":
+        if os.getenv("SOURCING_PAUSED", "false").lower() == "true":
+            return JSONResponse({"status": "paused", "message": "SOURCING_PAUSED=true — 소싱 정지 중"}, status_code=503)
         if not DOMEGGOOK_API_KEY:
             return JSONResponse({"status": "error", "message": "DOMEGGOOK_API_KEY 미설정"}, status_code=400)
         limit      = int(params.get("limit", 5))
