@@ -2274,7 +2274,7 @@ async def debug_dg_wholesale(dg_code: str = "DG_66822677"):
 
     # 2. 직접 DG API 원시 호출
     item_no = dg_code.replace("DG_", "")
-    _dg_url = DOMEGGOOK_API_URL if (DOMEGGOOK_API_URL and "domeggook.com" in DOMEGGOOK_API_URL) else "https://domeggook.com/ssl/api/"
+    _dg_url = DOMEGGOOK_API_URL or "https://domeggook.com/ssl/api/"
     result["dg_api_url_env"] = DOMEGGOOK_API_URL or "(없음)"
     result["dg_api_url_used"] = _dg_url
     try:
