@@ -663,6 +663,17 @@ def _apply_html_template(tmpl_data: dict, new_name: str, new_image_url: str) -> 
     return html
 
 
+def _norm_code(code: str) -> str:
+    """DG_/DG 접두사 + _N suffix 제거 → 순수 숫자 코드 반환."""
+    s = str(code).strip()
+    upper = s.upper()
+    if upper.startswith("DG_"):
+        s = s[3:]
+    elif upper.startswith("DG"):
+        s = s[2:]
+    return s.split("_")[0]
+
+
 def load_registered_codes() -> set:
     # 1순위: PostgreSQL 직접 조회 (재시작 후에도 영구 유지)
     conn = _pg_conn()
@@ -670,7 +681,7 @@ def load_registered_codes() -> set:
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT code FROM ss_registered_codes")
-                codes = {row[0] for row in cur.fetchall()}
+                codes = {_norm_code(row[0]) for row in cur.fetchall()}
             conn.close()
             if codes:
                 return codes
@@ -681,13 +692,13 @@ def load_registered_codes() -> set:
     # 2순위: /tmp 파일
     try:
         with open(REGISTERED_CODES_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
+            return {_norm_code(c) for c in json.load(f)}
     except Exception:
         pass
     # 3순위: context_store REST API
     data = _ctx_get("smartstore.registered_codes")
     if isinstance(data, list):
-        return set(data)
+        return {_norm_code(c) for c in data}
     return set()
 
 
@@ -699,7 +710,7 @@ def save_registered_code(code: str):
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO ss_registered_codes (code) VALUES (%s) ON CONFLICT DO NOTHING",
-                    (str(code),)
+                    (_norm_code(str(code)),)
                 )
             conn.commit()
             conn.close()
@@ -714,7 +725,7 @@ def save_registered_code(code: str):
             codes = set(json.load(f))
     except Exception:
         codes = set()
-    codes.add(str(code))
+    codes.add(_norm_code(str(code)))
     codes_list = list(codes)
     try:
         with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
@@ -4385,7 +4396,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             # 중복 체크: 코드 OR 정규화된 상품명
             code = str(p.get("code", ""))
             name_norm = _normalize_name(str(p.get("name", "")))
-            if (code and code in registered_codes) or (name_norm and name_norm in registered_names):
+            if (code and _norm_code(code) in registered_codes) or (name_norm and name_norm in registered_names):
                 results["duplicate"] += 1
                 continue
 
@@ -4545,7 +4556,7 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
                 _leaf_cat = payload["originProduct"].get("leafCategoryId", 0)
             save_registered_code(code)
             save_registered_name(ai.get("product_name") or p.get("name", ""))
-            registered_codes.add(code)
+            registered_codes.add(_norm_code(code))
             registered_names.add(name_norm)
             registered_names.add(_normalize_name(ai.get("product_name") or p.get("name", "")))
             results["success"] += 1
@@ -4648,7 +4659,7 @@ async def pipeline_register_from_domeggook(
             name_norm = _normalize_name(str(p.get("name", "")))
             print(f"\n[STEP1] ({_proc_n}/{_proc_total}) 소싱검증: {str(p.get('name',''))[:30]}", flush=True)
             # ─── STEP 1: 소싱 검증 ───
-            if (code and code in registered_codes) or (name_norm and name_norm in registered_names):
+            if (code and _norm_code(code) in registered_codes) or (name_norm and name_norm in registered_names):
                 results["duplicate"] += 1
                 continue
 
