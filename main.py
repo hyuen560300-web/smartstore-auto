@@ -2867,69 +2867,70 @@ def _html_quality_ok(html: str) -> tuple:
 # 카테고리별 HTML 스타일 상세 구조 (2026-06-23 고도화 — 스타일별 6섹션 필수구조 + 팔레트)
 _STYLE_DESIGN = {
     "A": (
-        "[디자인 스타일 — A. 스토리텔링형 (패션·가방·뷰티일반·펫·유아동·신발·주얼리·여행)]\n"
-        "감성 카피 + 라이프스타일 시나리오 중심. 색상 팔레트: #F5F0E8 / #8B7355 / #5C4A32 / #FAF7F2\n"
-        "필수 구조 6개(순서대로, 각 섹션 div):\n"
-        "  1) 감성 헤더 — 배경 #F5F0E8, 대형 제목(font-size 1.8em+), 감성 카피\n"
-        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\">\n"
-        "  3) 핵심 특징 3가지 — 이모지 아이콘+텍스트, display:flex;flex-wrap:wrap\n"
-        "  4) 라이프스타일 카피 — 이탤릭(font-style:italic), 배경 #FAF7F2, 중앙정렬\n"
-        "  5) 상세 설명 — 소재/사이즈/색상 (flex 리스트)\n"
-        "  6) 가격+구매유도 — 배경 #E8E0D5\n"
-        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / flex 레이아웃 필수\n"
+        "[디자인 스타일 — A. 라이프스타일형 (패션·가방·뷰티일반·펫·유아동·신발·여행)]\n"
+        "포인트컬러: #2c5f8a (네이비). 배경 전체 #ffffff. 그라데이션 절대 금지.\n"
+        "섹션 구성(순서대로):\n"
+        "  1) 헤더 — 배경 #f7f9fc, 포인트컬러 테두리 좌측 4px, 상품명+한 줄 설명\n"
+        "  2) 메인 이미지 — width:100%;max-width:860px\n"
+        "  3) 핵심 특징 3가지 — flex 카드, 포인트컬러 소제목\n"
+        "  4) 스펙·구성표 — border-bottom 구분선 리스트\n"
+        "  5) 사용 장면 설명 — 2~3가지 실제 상황, 이미지 포함\n"
+        "  6) FAQ + 마무리 — 담백한 구매 이유 3줄\n"
+        "⚠️ img 태그 반드시 포함 / 가격 표시 금지 / 그라데이션 금지\n"
     ),
     "B": (
-        "[디자인 스타일 — B. 인포그래픽형 (캠핑·스포츠·아웃도어·자동차·건강식품)]\n"
-        "스펙·수치 시각화 중심. 색상 팔레트: #1A1A2E / #16213E / #FFD700(골드) / #FFFFFF\n"
-        "필수 구조 6개(순서대로, 각 섹션 div):\n"
-        "  1) 강렬한 다크 헤더 — 배경 #1A1A2E, 흰 제목, 골드 #FFD700 포인트\n"
-        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\">\n"
-        "  3) 핵심 스펙 수치 3가지 — 큰 숫자+단위, display:flex(그리드형), 골드 강조\n"
-        "  4) 특징 비교/스펙 카드 — 배경 #16213E, 아이콘 스펙 카드(flex)\n"
-        "  5) 사용 상황별 활용 섹션\n"
-        "  6) 가격+구매유도 — 배경 #FFD700, 다크 텍스트\n"
-        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / flex(그리드) 레이아웃 필수\n"
+        "[디자인 스타일 — B. 스펙 정보형 (캠핑·스포츠·아웃도어·자동차·건강식품)]\n"
+        "포인트컬러: #1a4a2e (딥그린). 배경 전체 #ffffff. 그라데이션 절대 금지.\n"
+        "섹션 구성(순서대로):\n"
+        "  1) 헤더 — 배경 #f4f8f5, 딥그린 포인트 좌측 보더, 상품명+핵심 스펙 요약\n"
+        "  2) 메인 이미지 — width:100%;max-width:860px\n"
+        "  3) 핵심 수치 3가지 — flex 카드, 딥그린 숫자 강조\n"
+        "  4) 스펙표 — 소재/규격/중량/색상 border-bottom 리스트\n"
+        "  5) 사용 방법·장면 — 이미지 포함, 단계별 설명\n"
+        "  6) FAQ + 마무리\n"
+        "⚠️ img 태그 반드시 포함 / 가격 표시 금지 / 그라데이션 금지\n"
     ),
     "C": (
-        "[디자인 스타일 — C. 브랜드 감성형 (스킨케어·향수·프리미엄뷰티·시계·주얼리)]\n"
-        "극도의 미니멀·여백. 색상 팔레트: #FFFFFF / #000000 / #888888 / #F8F8F8\n"
-        "필수 구조 6개(순서대로, 각 섹션 div):\n"
-        "  1) 미니멀 화이트 헤더 — 배경 #FFFFFF, 여백 多(padding 24px+), 세리프체 제목(font-family:'Noto Serif KR',serif)\n"
-        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\"> (여백 있게)\n"
-        "  3) 브랜드 스토리 카피 — 짧고 고급스러운 문구, 중앙정렬\n"
-        "  4) 성분/소재 상세 — 심플 리스트, 라인 구분(border-bottom)\n"
-        "  5) 사용법 — 번호 순서, 미니멀\n"
-        "  6) 가격 — 심플, 여백 多, 배경 #F8F8F8\n"
-        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / 여백(padding 20px+) 필수\n"
+        "[디자인 스타일 — C. 미니멀 감성형 (스킨케어·향수·프리미엄뷰티·시계·주얼리)]\n"
+        "포인트컬러: #3d3d3d (차콜). 배경 전체 #ffffff. 그라데이션 절대 금지.\n"
+        "섹션 구성(순서대로):\n"
+        "  1) 헤더 — 여백 64px, 중앙정렬, 차콜 텍스트, 얇은 서브타이틀\n"
+        "  2) 메인 이미지 — 좌우 padding 32px, 여백 있게\n"
+        "  3) 특징 3가지 — 심플 border-bottom 리스트, 제목 굵게+설명 1줄\n"
+        "  4) 성분·소재 상세 — 라인 구분 테이블\n"
+        "  5) 사용법·주의사항 — 번호 리스트\n"
+        "  6) FAQ + 마무리 — 여백 多\n"
+        "⚠️ img 태그 반드시 포함 / 가격 표시 금지 / 그라데이션 금지\n"
     ),
     "D": (
-        "[디자인 스타일 — D. 썸네일 임팩트형 (생활잡화·주방·청소·수납·인테리어·식품·문구)]\n"
-        "강렬한 훅·Before/After. 색상 팔레트: #FF4444 / #FF6B00 / #FFFFFF / #FFF3E0\n"
-        "필수 구조 6개(순서대로, 각 섹션 div):\n"
-        "  1) 강렬한 훅 헤더 — 큰 글씨(font-weight 800+), 배경 #FF4444 또는 #FF6B00, 흰 텍스트\n"
-        "  2) 상품 메인 이미지 — <img ... style=\"width:100%;height:auto;display:block;\">\n"
-        "  3) Before/After 비교 — 2컬럼 display:flex(왼쪽 문제/오른쪽 해결)\n"
-        "  4) 핵심 혜택 3가지 — ✓체크마크+굵은 텍스트, 강조색 배경\n"
-        "  5) 사용 방법 — 번호+간단 설명\n"
-        "  6) 가격+긴급 구매유도 — 배경 #FF4444, 흰 텍스트, 큰 가격\n"
-        "⚠️ 텍스트만 나열 절대 금지 / img 태그 반드시 포함 / Before/After 섹션 필수\n"
+        "[디자인 스타일 — D. 실용 정보형 (생활잡화·주방·청소·수납·인테리어·식품·문구)]\n"
+        "포인트컬러: #b04000 (다크오렌지). 배경 전체 #ffffff. 그라데이션 절대 금지.\n"
+        "섹션 구성(순서대로):\n"
+        "  1) 헤더 — 배경 #fff8f4, 다크오렌지 좌측 보더 4px, 상품명+후크 1줄\n"
+        "  2) 메인 이미지 — width:100%;max-width:860px\n"
+        "  3) 혜택/해결점 3가지 — flex 카드, 다크오렌지 소제목\n"
+        "  4) 스펙·구성표 — border-bottom 리스트\n"
+        "  5) 사용 방법·장면 — 이미지 포함\n"
+        "  6) FAQ + 마무리\n"
+        "⚠️ img 태그 반드시 포함 / 가격 표시 금지 / 그라데이션 금지\n"
     ),
 }
 
 
 # ── 초고수 프롬프트 엔지니어링 (2026-06-23): ① 역할부여(system) + ③ few-shot 예시 ──
-_SYSTEM_ROLE = """당신은 한국 최고 수준의 이커머스 상세페이지 전문 디자이너이자 카피라이터입니다.
-무신사·29CM·마켓컬리·쿠팡 베스트셀러 수준의 고품질 상세페이지를 제작합니다.
+_SYSTEM_ROLE = """당신은 한국 이커머스 상세페이지 카피라이터이자 HTML 제작자입니다.
+사실에 기반한 담백하고 신뢰감 있는 설명으로 구매자의 합리적 결정을 돕는 것을 최우선으로 합니다.
 
 핵심 원칙:
-1. 상품마다 완전히 다른 고유한 페이지를 만든다 (절대 틀에 박힌 구조 반복 금지)
-2. 감성적이고 구매욕을 자극하는 카피라이팅 (페인포인트 공략)
-3. 시각적으로 완성도 높은 레이아웃 (섹션별 다양한 배경색/레이아웃 변화)
-4. 2025년 네이버 알고리즘: 체류시간·전환율·키워드밀도 모두 고려
-5. 모바일 우선 반응형 (100% 모바일 최적화 필수)
-6. 최소 10,000자 이상의 풍부한 콘텐츠 생성
-7. ⛔ 네이버 금지어 절대 사용 금지 — 관절/통증/치료/항균/살균/소독/진통/해열/항염/소염/혈압/혈당/혈류/콜레스테롤/항암/의약/처방/질환/완화/멸균 포함 불가 (의약외품·의료기기 효능 주장으로 등록 거부됨)
-8. ⛔ 형식적 CTA·홍보 문구 절대 금지 — "무료배송", "지금 바로 구매하기", "바로구매하기 →", "빨리 담으세요", "한정수량 특가", "지금 구매", "바로구매", "장바구니 담기" 등 클릭유도·프로모션성 문구 사용 불가. 상품의 실제 특징·재질·사용법·스펙·수치만 구체적으로 서술할 것."""
+1. 과장·미사여구 없이 상품 특성을 정확하고 구체적으로 전달 (AI 티 나는 문구 금지)
+2. 배경색: 흰색 #ffffff 고정. 포인트컬러 1개만 사용. 그라데이션 절대 금지
+3. 섹션 상하 여백: padding 48px~64px. 섹션당 텍스트 2~3줄 이내
+4. max-width: 860px, margin 0 auto 래퍼 필수. 모바일 반응형
+5. 본문 텍스트 색상: #333333. 포인트컬러는 소제목·강조에만 제한 사용
+6. ⛔ 절대 금지 문구: 업계최고·단연·압도적·혁신적·놀라운·최첨단·완벽한·꼭 필요한
+7. ⛔ 네이버 금지어 절대 사용 금지 — 관절/통증/치료/항균/살균/소독/진통/해열/항염/소염/혈압/혈당/혈류/콜레스테롤/항암/의약/처방/질환/완화/멸균
+8. ⛔ 형식적 CTA 금지 — "무료배송", "지금 바로 구매하기", "한정수량 특가", "장바구니 담기" 등
+9. 상품의 실제 특징·재질·사용법·스펙·수치만 서술. 허위·추정 정보 금지"""
 
 # 스타일별 few-shot 예시 (구조·톤·팔레트 참고용, 50줄 이내)
 _STYLE_EXAMPLE = {
@@ -3009,32 +3010,28 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
     img2_html = f'<img src="{extra_imgs[1]}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">' if len(extra_imgs) > 1 else f'<img src="{main_img}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">'
     img3_html = f'<img src="{extra_imgs[2]}" style="width:100%;max-width:420px;height:auto;display:block;margin:8px auto;">' if len(extra_imgs) > 2 else ""
     _sections = (
-        "[필수 섹션 19개 — 각 섹션 충분한 분량으로 작성, 전체 최소 10,000자]\n\n"
-        "1. 상단배너: 빠른배송/정품보장/AS보장 뱃지 (무료배송 문구 절대 금지)\n\n"
-        "2. 히어로섹션: 상품명 + 강력한 감성 카피 (이 상품만의 핵심 가치 1줄)\n\n"
-        "3. 5초 후킹: 고객 페인포인트를 직접 자극하는 임팩트 문구\n"
-        "   '혹시 이런 불편함 느끼셨나요?' → 구체적 상황 3가지 나열\n\n"
-        f"4. 메인이미지: <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n\n"
-        "5. 핵심수치 4개: 상품의 강점을 숫자로 표현 (flex 그리드 레이아웃)\n\n"
-        "6. 문제제기 4개: 기존 제품/방법의 불편함 카드 형식 (이모지+제목+설명)\n\n"
-        "7. 해결책 3개: 이 상품이 해결하는 방법 (체크마크 스타일)\n\n"
-        f"8. 이미지갤러리:\n{gallery_html}\n\n"
-        f"9. 상세설명1: 첫 번째 핵심 특징 심층 설명\n"
-        f"   {img1_html}\n"
-        "   flex 레이아웃 (좌이미지+우텍스트) / 특징명+상세설명 2~3문단\n\n"
-        f"10. 상세설명2: 두 번째 핵심 특징 심층 설명\n"
-        f"    {img2_html}\n"
-        "    flex 레이아웃 (좌텍스트+우이미지 순서반전) / 특징명+상세설명 2~3문단\n\n"
-        f"11. 사용법 4단계: STEP 01~04 번호 형식\n"
-        f"    {img3_html}\n\n"
-        "12. 비교표: 우리 상품 vs 일반 상품 / ✅❌ flex 기반 최소 5개 항목\n\n"
-        "13. 실제 후기 3개: 별점★★★★★ + 구매자(익명) + 구체적 후기 내용\n\n"
-        "14. FAQ 4개: 실제 고객이 네이버에서 검색할 법한 질문+상세 답변\n\n"
-        "15. 스펙표: 소재/사이즈/무게/색상/원산지 (flex 기반)\n\n"
-        "16. 배송/교환 안내: 배송기간, 교환반품 조건\n\n"
-        "17. 신뢰배지 3개: 빠른배송/정품보장/AS보장 (무료배송 절대 금지)\n\n"
-        "18. 활용 예시 3가지: 구체적 사용 시나리오 서술 (언제/어디서/어떻게 쓰는지)\n\n"
-        "19. 이런 분께 추천(타겟 페르소나 3~5가지) + 스토어찜 유도 + 푸터\n"
+        "[필수 9개 섹션 — 순서대로, 섹션당 텍스트 2~3줄 이내. 전체 목표 6,000~9,000자]\n\n"
+        "【섹션 1 — 후크】\n"
+        "한 문장. 구매자가 '나 이거 필요하네' 느끼게 하는 실제 상황 설명. 과장 금지.\n\n"
+        f"메인이미지: <img src=\"{main_img}\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\">\n\n"
+        "【섹션 2 — 핵심 혜택 3가지】\n"
+        "각각 제목(10자 이내) + 설명 1~2줄. 수치 있으면 포함. 없으면 추정 금지.\n\n"
+        "【섹션 3 — 이런 분께 맞습니다】\n"
+        "3가지 구체적 상황·대상. 각 1줄. '~하시는 분', '~가 불편했던 분' 형태.\n\n"
+        "【섹션 4 — 구성·스펙표】\n"
+        "소재/크기/색상/중량/구성품 목록. border-bottom 구분선 리스트 또는 flex 카드.\n"
+        "불확실한 값은 절대 추정 금지. 모르면 '제품 상세 이미지 참조'로 기재.\n\n"
+        "【섹션 5 — 사용 장면】\n"
+        "2~3가지 실제 사용 상황. 각 1~2줄.\n"
+        f"이미지:\n{gallery_html}\n\n"
+        "【섹션 6 — 비교·차별점】\n"
+        "기존 대안 대비 이 상품이 나은 점 2~3가지. 사실 기반. 허위 비교 금지.\n\n"
+        "【섹션 7 — 주의사항·관리법】\n"
+        "2~4가지. 안전·세탁·보관 등 실제 필요한 내용만.\n\n"
+        "【섹션 8 — FAQ】\n"
+        "4~6개 Q&A. 구매자가 실제 궁금해할 질문. 답변 1~2줄.\n\n"
+        "【섹션 9 — 마무리】\n"
+        "1문장 상품 요약 + 구매 이유 3가지 불릿. 과장 없이 사실 기반.\n"
     )
     # 카테고리 → HTML 스타일 자동 매칭 (A/B/C/D)
     _style = _html_style_for(str(category), str(product_name))
@@ -3053,16 +3050,20 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
         f"<style_type>{_style}</style_type>\n"
     )
 
-    # 공통 규칙 (④) — fragment·반응형·img 필수
+    # 공통 규칙 — fragment·반응형·img 필수·흰색배경
     _common = (
         "\n[공통 규칙 — 전 스타일 필수]\n"
         "- ⛔ <!DOCTYPE>·<html>·<head>·<body>·<style> 절대 금지 (fragment만, <div>로 시작, 모든 스타일 inline)\n"
         "- ⛔ width:NNpx / height:NNpx 절대 금지 → %·max-width·flex-basis 사용\n"
-        "- 이미지는 반드시 <img src=\"...\" style=\"width:100%;max-width:100%;height:auto;display:block;\"> (텍스트만 금지)\n"
-        "- 전체 래퍼 div: style=\"max-width:860px;width:100%;margin:0 auto;\"\n"
-        "- 표(table) 금지 → div+flex(display:flex;flex-wrap:wrap) / 글자 em·vw, 최소 14px\n"
-        "- 폰트 'Noto Sans KR' (필수) / 섹션마다 다른 배경색 사용 / 상품명 키워드 5회 이상 포함 / 최소 10,000자\n"
+        "- ⛔ 그라데이션 절대 금지 (background:linear-gradient, radial-gradient 등 일체 금지)\n"
+        "- 배경색: 섹션 전체 #ffffff 기본. 강조 섹션만 #f4f7fa 또는 #f8f8f8 허용\n"
+        "- 본문 텍스트: #333333. 포인트컬러는 소제목·보더에만 제한 사용\n"
+        "- 이미지는 반드시 <img src=\"...\" style=\"width:100%;max-width:860px;height:auto;display:block;margin:0 auto;\"> (텍스트만 금지)\n"
+        "- 전체 래퍼 div: style=\"max-width:860px;width:100%;margin:0 auto;background:#ffffff;\"\n"
+        "- 섹션 상하 패딩: padding 48px 24px ~ padding 64px 24px\n"
+        "- 상품명 키워드 5회 이상 포함\n"
         "- ⛔ 특정 가격(₩X,XXX / 단돈 XXX원 등) HTML에 절대 포함 금지 — 가격은 플랫폼이 표시함\n"
+        "- ⛔ '무료배송' 문구 금지\n"
     )
     _instruction = (
         "\n<instruction>위 <product_info>와 <style_type>를 바탕으로, 위 필수 구조와 예시 톤을 따라 "
@@ -3107,10 +3108,10 @@ async def generate_claude_html_detail(product: dict, ai: dict, image_urls: list)
             return None
         if len(frag) > len(_best):
             _best = frag
-        if len(frag) >= 8000:
+        if len(frag) >= 5000:
             print(f"[CLAUDE-HTML] ✅ {mode} {len(frag):,}자 생성(fragment, 품질OK)", flush=True)
             return frag
-        print(f"[CLAUDE-HTML] {mode} 시도{attempt+1}: {len(frag)}자(8000미달, 후보보관)", flush=True)
+        print(f"[CLAUDE-HTML] {mode} 시도{attempt+1}: {len(frag)}자(5000미달, 후보보관)", flush=True)
         return None
 
     # ── Vision 모드 시도 (최대 3회 재생성) ────────────────────────────────────
@@ -6500,3 +6501,114 @@ async def _send_weekly_performance_summary() -> None:
         print("[WEEKLY] 발송 완료", flush=True)
     except Exception as e:
         print(f"[WEEKLY] 실패: {e}", flush=True)
+
+
+# ── SS 마케팅 우선순위 태그 스캔 ─────────────────────────────────────
+_MP_CATEGORIES = frozenset([
+    "생활", "생활용품", "주방", "주방용품", "수납", "수납정리",
+    "청소", "청소용품", "캠핑", "캠핑용품", "자동차", "자동차용품",
+    "문구", "문구도구", "공구", "도구", "인테리어", "욕실", "세탁",
+])
+_MP_KEYWORDS = [
+    "정리", "수납", "청소", "닦기", "제거", "해결", "편리", "간편",
+    "손쉽", "절약", "효율", "자동", "빠른", "빠르게", "간단", "실용",
+    "다용도", "세척", "처리", "분리", "보관", "고정", "교체",
+]
+
+
+def _is_marketing_priority(name: str, category: str, price: int, stock: int,
+                            price_min: int = 5000, price_max: int = 40000,
+                            min_stock: int = 200) -> bool:
+    """SS 마케팅 우선순위 조건 판정."""
+    if price < price_min or price > price_max:
+        return False
+    if stock < min_stock:
+        return False
+    cat_low = (category or "").lower().replace(" ", "")
+    name_low = (name or "").lower()
+    cat_match = any(c in cat_low or c in name_low for c in _MP_CATEGORIES)
+    if not cat_match:
+        return False
+    return any(kw in name_low for kw in _MP_KEYWORDS)
+
+
+async def _scan_marketing_priority_ss(price_min: int = 5000, price_max: int = 40000,
+                                      min_stock: int = 200, max_pages: int = 20) -> dict:
+    """
+    SS SALE 상품 전체 스캔 → 마케팅 우선순위 조건 필터 → context_store 저장.
+
+    조건:
+      - 카테고리: 생활/주방/수납/청소/캠핑/자동차/문구도구 계열
+      - 가격: 5,000~40,000원
+      - 문제해결 키워드 포함 (정리/청소/해결/편리 등)
+      - 재고 200개 이상
+
+    반환: {"total_scanned": N, "priority": [...상품목록...]}
+    """
+    results = {"total_scanned": 0, "priority": [], "errors": []}
+    priority: list[dict] = []
+
+    for page in range(1, max_pages + 1):
+        try:
+            data = await naver_api.list_products(page=page, size=50)
+            contents = data.get("contents", [])
+            if not contents:
+                break
+            for item in contents:
+                origin = item.get("originProduct") or {}
+                status = origin.get("statusType") or item.get("statusType", "")
+                if status != "SALE":
+                    continue
+                name = str(origin.get("name") or item.get("name") or "")
+                price = int(origin.get("salePrice") or item.get("salePrice") or 0)
+                # 카테고리: 상품 분류 이름
+                category = str(
+                    origin.get("leafCategoryName")
+                    or origin.get("categoryName")
+                    or item.get("categoryName") or ""
+                )
+                # 재고: optionCombinations 합산 또는 stockQuantity
+                opt_combos = origin.get("optionCombinations") or origin.get("optionInfo", {}).get("optionCombinations") or []
+                if opt_combos:
+                    stock = sum(int(o.get("stockQuantity") or 0) for o in opt_combos)
+                else:
+                    stock = int(origin.get("stockQuantity") or 0)
+
+                results["total_scanned"] += 1
+
+                if _is_marketing_priority(name, category, price, stock, price_min, price_max, min_stock):
+                    origin_no = str(item.get("originProductNo") or "")
+                    channel_no = str(item.get("channelProductNo") or "")
+                    priority.append({
+                        "name": name[:40],
+                        "category": category,
+                        "price": price,
+                        "stock": stock,
+                        "origin_no": origin_no,
+                        "channel_no": channel_no,
+                        "url": f"https://smartstore.naver.com/thepick/products/{channel_no}" if channel_no else "",
+                    })
+        except Exception as e:
+            results["errors"].append(f"page{page}: {str(e)[:60]}")
+            break
+        await asyncio.sleep(0.3)
+
+    priority.sort(key=lambda x: x["stock"], reverse=True)
+    results["priority"] = priority
+    results["priority_count"] = len(priority)
+
+    print(f"[MP-SCAN] 완료: 전체={results['total_scanned']} 우선순위={len(priority)}개", flush=True)
+    for p in priority[:5]:
+        print(f"[MP-SCAN] ★ {p['name'][:30]} 가격₩{p['price']:,} 재고{p['stock']}", flush=True)
+
+    # context_store 저장
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            await c.post(f"{CONTEXT_STORE_URL}/context", json={
+                "key": "ss.marketing_priority",
+                "value": json.dumps(results, ensure_ascii=False),
+                "category": "data",
+            })
+    except Exception:
+        pass
+    return results

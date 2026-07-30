@@ -10009,6 +10009,52 @@ async def delete_html_template(category: str):
         return {"error": str(e)}
 
 
+_mp_scan_state: dict = {"running": False, "result": None}
+
+
+async def _run_mp_scan_bg(price_min: int, price_max: int, min_stock: int):
+    global _mp_scan_state
+    from main import _scan_marketing_priority_ss
+    _mp_scan_state = {"running": True, "result": None}
+    try:
+        result = await _scan_marketing_priority_ss(
+            price_min=price_min, price_max=price_max, min_stock=min_stock)
+        _mp_scan_state = {"running": False, "result": result}
+    except Exception as e:
+        _mp_scan_state = {"running": False, "result": None, "error": str(e)}
+
+
+@app.post("/marketing-priority-scan")
+async def marketing_priority_scan(
+    price_min: int = 5000, price_max: int = 40000, min_stock: int = 200
+):
+    """
+    SS SALE 상품 전체 스캔 → 마케팅 우선순위 목록 추출 (백그라운드).
+    조건: 카테고리(생활/주방/수납/청소/캠핑/자동차/문구) + 가격 5천~4만원 + 문제해결 키워드 + 재고200개+
+    결과: /marketing-priority-result
+    """
+    if _mp_scan_state.get("running"):
+        return JSONResponse({"status": "already_running"})
+    asyncio.create_task(_run_mp_scan_bg(price_min=price_min, price_max=price_max, min_stock=min_stock))
+    return {"status": "started", "result_url": "/marketing-priority-result"}
+
+
+@app.get("/marketing-priority-result")
+async def marketing_priority_result():
+    """마케팅 우선순위 스캔 결과 조회."""
+    state = dict(_mp_scan_state)
+    result = state.get("result") or {}
+    priority = result.get("priority", [])
+    return {
+        "running": state.get("running"),
+        "total_scanned": result.get("total_scanned", 0),
+        "priority_count": len(priority),
+        "priority": priority[:50],
+        "errors": result.get("errors", []),
+        "error": state.get("error"),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
