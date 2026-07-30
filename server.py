@@ -6281,46 +6281,31 @@ async def add_registered_code_api(request: Request):
 
 @app.post("/force-sync-pg-from-ctx")
 async def force_sync_pg_from_ctx():
-    """context_store smartstore.registered_codes → PostgreSQL 강제 동기화.
-    PostgreSQL이 context_store보다 적을 때(마이그레이션 불완전) 수동 실행."""
-    from main import _pg_conn, _ctx_get, _norm_code
-    codes = _ctx_get("smartstore.registered_codes") or []
-    if not codes:
+    """context_store → /tmp registered_codes.json 강제 동기화.
+    /tmp가 context_store보다 적을 때 수동 실행. (PG 크로스프로젝트 불가 → /tmp 직접 기록)"""
+    import json as _json
+    from main import _ctx_get, _norm_code, REGISTERED_CODES_FILE, load_registered_codes
+    ctx_codes = _ctx_get("smartstore.registered_codes") or []
+    if not ctx_codes:
         return JSONResponse({"status": "error", "message": "context_store 데이터 없음"})
-    conn = _pg_conn()
-    if not conn:
-        return JSONResponse({"status": "error", "message": "PostgreSQL 연결 실패"}, status_code=503)
-    inserted = 0
-    skipped = 0
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM ss_registered_codes")
-            before = cur.fetchone()[0]
-            for c in codes:
-                cur.execute(
-                    "INSERT INTO ss_registered_codes (code) VALUES (%s) ON CONFLICT DO NOTHING",
-                    (_norm_code(str(c)),)
-                )
-                if cur.rowcount > 0:
-                    inserted += 1
-                else:
-                    skipped += 1
-        conn.commit()
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM ss_registered_codes")
-            after = cur.fetchone()[0]
+        with open(REGISTERED_CODES_FILE, "r", encoding="utf-8") as f:
+            tmp_codes = set(json.load(f))
+    except Exception:
+        tmp_codes = set()
+    before = len(tmp_codes)
+    merged = tmp_codes | {_norm_code(str(c)) for c in ctx_codes}
+    try:
+        with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
+            _json.dump(list(merged), f)
     except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-    finally:
-        try: conn.close()
-        except: pass
+        return JSONResponse({"status": "error", "message": f"/tmp 기록 실패: {e}"}, status_code=500)
     return JSONResponse({
         "status": "ok",
-        "ctx_total": len(codes),
-        "pg_before": before,
-        "pg_after": after,
-        "inserted": inserted,
-        "skipped": skipped,
+        "ctx_total": len(ctx_codes),
+        "tmp_before": before,
+        "tmp_after": len(merged),
+        "added": len(merged) - before,
     })
 
 
@@ -7175,20 +7160,30 @@ async def _sync_registered_codes():
                 break
             page += 1
             await _asyncio.sleep(0.5)
+        # context_store 기존 코드와 MERGE (덮어쓰기 금지 — 과거 보호 코드 유실 방지)
+        from main import _ctx_get as _mcg, _ctx_set as _mcs, _norm_code as _mn
+        ctx_codes_raw = _mcg("smartstore.registered_codes") or []
+        ctx_names_raw = _mcg("smartstore.registered_names") or []
+        ctx_codes = {_mn(str(c)) for c in ctx_codes_raw}
+        ctx_names = set(ctx_names_raw)
+        merged_codes = ctx_codes | codes  # Naver + 역사적 보호 코드 합집합
+        merged_names = ctx_names | names
         # 0개 반환 시 기존 파일 유지 (API 오류·인증 실패 방어)
         if codes:
             with open(REGISTERED_CODES_FILE, "w", encoding="utf-8") as f:
-                json.dump(list(codes), f)
+                json.dump(list(merged_codes), f)
         if names:
             with open(REGISTERED_NAMES_FILE, "w", encoding="utf-8") as f:
-                json.dump(list(names), f)
-        # context_store도 동기화 — Railway 재시작 후 /tmp 초기화 복원용
-        from main import _ctx_set as _mcs
+                json.dump(list(merged_names), f)
+        # context_store도 병합 결과로 갱신
         if codes:
-            _mcs("smartstore.registered_codes", list(codes))
+            _mcs("smartstore.registered_codes", list(merged_codes))
         if names:
-            _mcs("smartstore.registered_names", list(names))
-        print(f"[STARTUP] 동기화 완료: codes={len(codes)}개 / names={len(names)}개", flush=True)
+            _mcs("smartstore.registered_names", list(merged_names))
+        print(
+            f"[STARTUP] 동기화 완료: naver={len(codes)} ctx={len(ctx_codes)} merged={len(merged_codes)}개",
+            flush=True,
+        )
     except Exception as e:
         print(f"[STARTUP] 동기화 실패 (기존 파일 유지): {e}", flush=True)
     finally:
