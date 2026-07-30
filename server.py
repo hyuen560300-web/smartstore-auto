@@ -1712,11 +1712,26 @@ async def reapply_html_endpoint(background_tasks: BackgroundTasks, limit: int = 
     """Claude HTML 19섹션 재적용 (백그라운드).
     ?nos=13580354278,13580357571 로 지정 상품 우선 강제 재적용.
     ?limit=N 으로 미적용분 배치 처리. 미지정이면 전체. 개별 실패는 건너뛰고 계속."""
+    from main import job_create, jobs_table_create
     no_list = [n.strip() for n in nos.split(",") if n.strip()] if nos else None
-    background_tasks.add_task(pipeline_reapply_claude_html, limit, no_list)
-    return {"message": "HTML 재적용 백그라운드 시작", "limit": limit or "전체",
+    jobs_table_create()
+    _jid = job_create("reapply-html")
+    background_tasks.add_task(pipeline_reapply_claude_html, limit, no_list, _jid)
+    return {"message": "HTML 재적용 백그라운드 시작", "job_id": _jid, "limit": limit or "전체",
             "nos_count": len(no_list) if no_list else 0,
-            "info": "진행은 Railway 로그 [REAPPLY] 태그 확인."}
+            "info": "진행률: GET /jobs/{job_id} — 재배포 후 자동 재개됨."}
+
+
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: int):
+    """잡 진행률 조회. status: running/completed/failed"""
+    from main import job_get
+    from fastapi import HTTPException
+    job = job_get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="잡을 찾을 수 없음")
+    pct = round(job["processed"] / job["total"] * 100, 1) if job.get("total") else 0
+    return {**job, "progress_pct": pct}
 
 
 @app.post("/strip-prices-direct")
@@ -7765,6 +7780,20 @@ async def startup_event():
                       id="overpriced_scan_fix", replace_existing=True,
                       misfire_grace_time=3600, coalesce=True)
     print("[SERVER] 스케줄러 등록: 과적가 재검증+처리 01:30 KST", flush=True)
+
+    # ── HTML 재적용 잡 자동 재개 (재배포 후 미완료 잡 복원) ──────────────────
+    async def _resume_html_reapply_job():
+        await _asyncio.sleep(10)
+        try:
+            from main import job_get_running, pipeline_reapply_claude_html as _reapply_fn, jobs_table_create
+            jobs_table_create()
+            _rj = job_get_running("reapply-html")
+            if _rj:
+                print(f"[STARTUP] HTML 재적용 잡 재개: id={_rj['id']}, {_rj['processed']}/{_rj['total']}", flush=True)
+                await _reapply_fn(limit=0, nos=None, job_id=_rj["id"])
+        except Exception as _re:
+            print(f"[STARTUP] HTML 재적용 재개 실패: {_re}", flush=True)
+    _asyncio.create_task(_resume_html_reapply_job())
 
     try:
         scheduler.start()
