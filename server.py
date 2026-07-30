@@ -7146,7 +7146,6 @@ async def _sync_registered_codes():
         _sync_done = True
 
 
-@app.on_event("startup")
 async def startup_event():
     """서버 시작 시 Drive 인덱스 자동 복구 + registered_codes 동기화 + 스케줄러 시작"""
     import asyncio as _asyncio
@@ -7644,6 +7643,15 @@ async def startup_event():
         asyncio.create_task(_scan_dg_stock_bg(dry_run=False))
     scheduler.add_job(job_dg_stock_scan, "cron", hour=3, minute=0, id="dg_stock_scan")
 
+    # 매일 01:00 KST — 마진 재검증 (역마진 상품 자동 판매중지)
+    async def _job_daily_margin_scan():
+        if _MARGIN_SCAN_STATE.get("status") == "running":
+            print("[SCHED] 마진스캔 이미 실행 중 — 스킵", flush=True)
+            return
+        asyncio.create_task(_run_margin_scan_bg())
+        print("[SCHED] 마진스캔 일일 자동 시작 (01:00 KST)", flush=True)
+    scheduler.add_job(_job_daily_margin_scan, "cron", hour=1, minute=0, id="daily_margin_scan")
+
     # ── 01:30 KST 과적가 재검증 + 판매중지/가격조정 ─────────────────────────
     async def _job_overpriced_scan_and_fix():
         """매일 01:30 KST — SALE 상품 경쟁가 재검증 → 판매중지(>3x) / 가격조정(1.5~3x)."""
@@ -7800,6 +7808,17 @@ async def startup_event():
         print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
     except Exception as _sched_err:
         print(f"[STARTUP] APScheduler 시작 실패 (서버는 계속 실행됨): {_sched_err}", flush=True)
+
+
+# ── FastAPI lifespan (공식 패턴 — @app.on_event 대체) ──────────────────────
+from contextlib import asynccontextmanager as _asynccontextmanager
+
+@_asynccontextmanager
+async def _app_lifespan(_application):
+    await startup_event()
+    yield
+
+app.router.lifespan_context = _app_lifespan
 
 
 async def _next_excel_internal() -> str | None:
