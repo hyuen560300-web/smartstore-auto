@@ -10066,7 +10066,7 @@ async def _run_mp_scan_bg(price_min: int, price_max: int, min_stock: int):
 
 @app.post("/marketing-priority-scan")
 async def marketing_priority_scan(
-    price_min: int = 5000, price_max: int = 40000, min_stock: int = 200
+    price_min: int = 5000, price_max: int = 40000, min_stock: int = 50
 ):
     """
     SS SALE 상품 전체 스캔 → 마케팅 우선순위 목록 추출 (백그라운드).

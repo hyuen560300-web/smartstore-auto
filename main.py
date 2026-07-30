@@ -6518,7 +6518,7 @@ _MP_KEYWORDS = [
 
 def _is_marketing_priority(name: str, category: str, price: int, stock: int,
                             price_min: int = 5000, price_max: int = 40000,
-                            min_stock: int = 200) -> bool:
+                            min_stock: int = 50) -> bool:
     """SS 마케팅 우선순위 조건 판정."""
     if price < price_min or price > price_max:
         return False
@@ -6533,7 +6533,7 @@ def _is_marketing_priority(name: str, category: str, price: int, stock: int,
 
 
 async def _scan_marketing_priority_ss(price_min: int = 5000, price_max: int = 40000,
-                                      min_stock: int = 200, max_pages: int = 20) -> dict:
+                                      min_stock: int = 50, max_pages: int = 20) -> dict:
     """
     SS SALE 상품 전체 스캔 → 마케팅 우선순위 조건 필터 → context_store 저장.
 
