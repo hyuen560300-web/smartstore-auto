@@ -3250,7 +3250,7 @@ async def _run_sale_margin_check():
                 max_p = int(_m.ceil((dome + 300) / (1 - SS_FEE) / 10) * 10)
                 items_out.append({"name": name, "price": price, "dome": dome,
                                    "net": net, "min_p": min_p, "max_p": max_p,
-                                   "in_range": 0 < net <= 300, "dg_code": dg_code})
+                                   "in_range": 0 < net <= 320, "dg_code": dg_code})
             else:
                 items_out.append({"name": name, "price": price, "dome": 0,
                                    "dg_code": dg_code, "note": "도매가조회실패"})
