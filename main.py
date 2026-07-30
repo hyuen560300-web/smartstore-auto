@@ -5208,122 +5208,95 @@ async def pipeline_fix_products(
     return results
 
 
-# ─── Job 영속성: 재배포 후 재개 지원 ────────────────────────────────────────────
-import psycopg2 as _psycopg2
-import psycopg2.extras as _psycopg2_extras
-
-_PG_JOB_URL: str = os.environ.get("DATABASE_URL", "")
-
-
-def _pg_job_conn():
-    return _psycopg2.connect(_PG_JOB_URL, connect_timeout=8)
+# ─── Job 영속성: 재배포 후 재개 지원 (context_store REST API 기반) ──────────────
+# Railway 크로스 프로젝트 간 psycopg2 직접연결 불가 → context_store HTTP API 사용
+# (context_store 자체는 동일 PostgreSQL을 백엔드로 사용함)
+_JOB_KEY = "ss_job.reapply_html"
+_CTX_API = "https://loving-serenity-production-2635.up.railway.app"
 
 
-def jobs_table_create() -> None:
-    if not _PG_JOB_URL:
-        return
+async def jobs_table_create() -> None:
+    pass  # context_store는 별도 테이블 생성 불필요
+
+
+async def job_create(job_type: str, total: int = 0) -> int | None:
+    """잡 생성 → context_store 저장 → 항상 id=1 반환 (단일 reapply 잡)."""
     try:
-        with _pg_job_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS ss_jobs (
-                        id                SERIAL PRIMARY KEY,
-                        type              VARCHAR(50)  NOT NULL,
-                        status            VARCHAR(20)  NOT NULL DEFAULT 'running',
-                        total             INTEGER      DEFAULT 0,
-                        processed         INTEGER      DEFAULT 0,
-                        last_processed_id VARCHAR(100) DEFAULT '',
-                        started_at        TIMESTAMPTZ  DEFAULT NOW(),
-                        updated_at        TIMESTAMPTZ  DEFAULT NOW(),
-                        error             TEXT         DEFAULT ''
-                    );
-                """)
-            conn.commit()
-    except Exception as _je:
-        print(f"[JOB] 테이블 생성 실패(무시): {_je}", flush=True)
-
-
-def job_create(job_type: str, total: int = 0) -> int | None:
-    if not _PG_JOB_URL:
-        return None
-    try:
-        with _pg_job_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO ss_jobs (type, status, total) VALUES (%s, 'running', %s) RETURNING id;",
-                    (job_type, total),
-                )
-                row = cur.fetchone()
-            conn.commit()
-        return row[0] if row else None
+        _now = datetime.now(timezone.utc).isoformat()
+        _job = {"id": 1, "type": job_type, "status": "running", "total": total,
+                "processed": 0, "last_processed_id": "", "error": "",
+                "started_at": _now, "updated_at": _now}
+        async with httpx.AsyncClient(timeout=8) as _c:
+            await _c.post(f"{_CTX_API}/context",
+                          json={"key": _JOB_KEY, "value": json.dumps(_job), "category": "ss_jobs"})
+        return 1
     except Exception as _je:
         print(f"[JOB] job_create 실패: {_je}", flush=True)
         return None
 
 
-def job_update(job_id: int | None, processed: int, last_id: str = "", error: str = "", total: int | None = None) -> None:
-    if not _PG_JOB_URL or not job_id:
+async def job_update(job_id: int | None, processed: int, last_id: str = "",
+                     error: str = "", total: int | None = None) -> None:
+    if not job_id:
         return
     try:
-        with _pg_job_conn() as conn:
-            with conn.cursor() as cur:
-                if total is not None:
-                    cur.execute(
-                        "UPDATE ss_jobs SET processed=%s, last_processed_id=%s, error=%s, total=%s, updated_at=NOW() WHERE id=%s;",
-                        (processed, last_id, error, total, job_id),
-                    )
-                else:
-                    cur.execute(
-                        "UPDATE ss_jobs SET processed=%s, last_processed_id=%s, error=%s, updated_at=NOW() WHERE id=%s;",
-                        (processed, last_id, error, job_id),
-                    )
-            conn.commit()
+        async with httpx.AsyncClient(timeout=8) as _c:
+            _r = await _c.get(f"{_CTX_API}/context/{_JOB_KEY}")
+            _raw = _r.json().get("value", "{}") if _r.status_code == 200 else "{}"
+            _job = json.loads(_raw) if isinstance(_raw, str) else {}
+            _job.update({"processed": processed, "last_processed_id": last_id,
+                         "updated_at": datetime.now(timezone.utc).isoformat()})
+            if error:
+                _job["error"] = error
+            if total is not None:
+                _job["total"] = total
+            await _c.post(f"{_CTX_API}/context",
+                          json={"key": _JOB_KEY, "value": json.dumps(_job), "category": "ss_jobs"})
     except Exception as _je:
         print(f"[JOB] job_update 실패(무시): {_je}", flush=True)
 
 
-def job_finish(job_id: int | None, processed: int, error: str = "") -> None:
-    if not _PG_JOB_URL or not job_id:
+async def job_finish(job_id: int | None, processed: int, error: str = "") -> None:
+    if not job_id:
         return
-    _st = "failed" if error else "completed"
     try:
-        with _pg_job_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE ss_jobs SET status=%s, processed=%s, error=%s, updated_at=NOW() WHERE id=%s;",
-                    (_st, processed, error, job_id),
-                )
-            conn.commit()
+        _st = "failed" if error else "completed"
+        async with httpx.AsyncClient(timeout=8) as _c:
+            _r = await _c.get(f"{_CTX_API}/context/{_JOB_KEY}")
+            _raw = _r.json().get("value", "{}") if _r.status_code == 200 else "{}"
+            _job = json.loads(_raw) if isinstance(_raw, str) else {}
+            _job.update({"status": _st, "processed": processed, "error": error,
+                         "updated_at": datetime.now(timezone.utc).isoformat()})
+            await _c.post(f"{_CTX_API}/context",
+                          json={"key": _JOB_KEY, "value": json.dumps(_job), "category": "ss_jobs"})
     except Exception as _je:
         print(f"[JOB] job_finish 실패(무시): {_je}", flush=True)
 
 
-def job_get(job_id: int) -> dict | None:
-    if not _PG_JOB_URL:
-        return None
+async def job_get(job_id: int = 1) -> dict | None:
     try:
-        with _pg_job_conn() as conn:
-            with conn.cursor(cursor_factory=_psycopg2_extras.RealDictCursor) as cur:
-                cur.execute("SELECT * FROM ss_jobs WHERE id=%s;", (job_id,))
-                row = cur.fetchone()
-        return dict(row) if row else None
+        async with httpx.AsyncClient(timeout=8) as _c:
+            _r = await _c.get(f"{_CTX_API}/context/{_JOB_KEY}")
+        if _r.status_code != 200:
+            return None
+        _raw = _r.json().get("value", "{}")
+        return json.loads(_raw) if isinstance(_raw, str) else (_raw or None)
     except Exception as _je:
         print(f"[JOB] job_get 실패: {_je}", flush=True)
         return None
 
 
-def job_get_running(job_type: str = "reapply-html") -> dict | None:
-    if not _PG_JOB_URL:
-        return None
+async def job_get_running(job_type: str = "reapply-html") -> dict | None:
     try:
-        with _pg_job_conn() as conn:
-            with conn.cursor(cursor_factory=_psycopg2_extras.RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM ss_jobs WHERE type=%s AND status='running' ORDER BY started_at DESC LIMIT 1;",
-                    (job_type,),
-                )
-                row = cur.fetchone()
-        return dict(row) if row else None
+        async with httpx.AsyncClient(timeout=8) as _c:
+            _r = await _c.get(f"{_CTX_API}/context/{_JOB_KEY}")
+        if _r.status_code != 200:
+            return None
+        _raw = _r.json().get("value", "{}")
+        _job = json.loads(_raw) if isinstance(_raw, str) else None
+        if _job and _job.get("type") == job_type and _job.get("status") == "running":
+            return _job
+        return None
     except Exception as _je:
         print(f"[JOB] job_get_running 실패: {_je}", flush=True)
         return None
@@ -5339,7 +5312,7 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None, 
     # 재개 시 이전 처리 카운트 복원
     _proc_offset = 0
     if job_id:
-        _jinfo = job_get(job_id)
+        _jinfo = await job_get(job_id)
         if _jinfo:
             _proc_offset = int(_jinfo.get("processed") or 0)
             if _proc_offset > 0:
@@ -5397,7 +5370,7 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None, 
         results["total"] = len(not_applied)
     print(f"[REAPPLY] 처리 예정 {len(not_applied)}개 (nos={'지정' if nos else '없음'}, limit={limit or '전체'}) — 시작", flush=True)
     if job_id:
-        job_update(job_id, _proc_offset, "", "", total=_proc_offset + len(not_applied))
+        await job_update(job_id, _proc_offset, "", "", total=_proc_offset + len(not_applied))
     await _tg_notify(
         f"[HTML 재적용 시작]\n\n미적용 상품: {len(not_applied)}개\n"
         "Claude HTML 19섹션 순차 적용 시작합니다."
@@ -5523,13 +5496,13 @@ async def pipeline_reapply_claude_html(limit: int = 0, nos: list | None = None, 
         results["success"] += 1
         print(f"[REAPPLY] [{idx}/{len(not_applied)}] ✅ {name[:40]} ({_before_html_len}→{len(html)}자)", flush=True)
         if job_id:
-            job_update(job_id, _proc_offset + idx, product_id)
+            await job_update(job_id, _proc_offset + idx, product_id)
         await asyncio.sleep(2.5)
 
     # 잡 완료 기록
     if job_id:
-        job_finish(job_id, _proc_offset + results["success"] + results["failed"],
-                   results.get("stopped_at", ""))
+        await job_finish(job_id, _proc_offset + results["success"] + results["failed"],
+                         results.get("stopped_at", ""))
 
     # 4. 최종 요약
     if not results["stopped_at"]:
