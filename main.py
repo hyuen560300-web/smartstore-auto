@@ -409,19 +409,15 @@ def _is_season_excluded(name: str) -> bool:
     return False
 
 def _get_rotating_keywords(n: int = 15) -> list[str]:
-    """날짜 시드 기반으로 매일 다른 키워드 n개 선택. 계절/이벤트 키워드 우선 포함."""
+    """결정론적 셔플로 202개 전체 균등 순환. 3시간마다 다른 분포."""
     import random as _r, datetime as _dt
-    seed = int(_dt.date.today().strftime("%Y%m%d"))
+    now = _dt.datetime.now()
+    hour_slot = now.hour // 3
+    seed = now.toordinal() * 8 + hour_slot
     rng = _r.Random(seed)
-    priority = _SEASON_INFO["allowed"] + _SEASON_INFO["events"]
-    matched = [kw for kw in _DG_KEYWORDS_ALL if any(p in kw for p in priority)]
-    others  = [kw for kw in _DG_KEYWORDS_ALL if kw not in matched]
-    p_n = min(7, len(matched), n)
-    p_sample = rng.sample(matched, p_n) if matched else []
-    o_sample = rng.sample(others, min(n - len(p_sample), len(others))) if others else []
-    return (p_sample + o_sample)[:n]
-
-_DG_KEYWORDS = _get_rotating_keywords(15)
+    kws = list(_DG_KEYWORDS_ALL)
+    rng.shuffle(kws)
+    return kws[:n]
 
 NAVER_BASE = "https://api.commerce.naver.com/external"
 
@@ -1738,7 +1734,7 @@ async def fetch_domeggook_products(
         start_page = 1  # 항상 1페이지부터 — 중복은 registered_codes/names 체크로 처리
     print(f"[DOMEGGOOK] 검색 시작 페이지: {start_page}", flush=True)
 
-    kws = keywords or _DG_KEYWORDS
+    kws = keywords or _get_rotating_keywords(15)
     seen: set[str] = set()
     raw_items: list[dict] = []
 
@@ -4621,7 +4617,7 @@ async def pipeline_register_from_domeggook(
     )
     if not products:
         print("[도매꾹파이프라인] DG 응답 없음 → 온채널 폴백 소싱 시도", flush=True)
-        _onch3_kws = keywords or _DG_KEYWORDS
+        _onch3_kws = keywords or _get_rotating_keywords(15)
         products = await onch3_sourcing.fetch_onch3_products(
             _onch3_kws, pool_size=limit * 3,
             min_price=min_price, max_price=max_price,
