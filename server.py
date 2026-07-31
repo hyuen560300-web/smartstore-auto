@@ -4842,8 +4842,88 @@ async def sale_sample_endpoint():
 
     return JSONResponse({
         "total_sale": total, "sampled": len(items),
-        "db_tables_has_ss_registered": "ss_registered_codes" in ([] if "__db_error__" in db_map else list(db_map.get("__dummy__", {}))),
+        "db_has_ss_registered": "ss_registered_codes" in ([] if "__db_error__" in db_map else [k for k in db_map if not k.startswith("__")]),
         "stats": stats,
+        "items": items,
+    })
+
+
+@app.get("/suspension-sample")
+async def suspension_sample_endpoint():
+    """SUSPENSION 상품 샘플 30개 — 최신 15개 + 오래된 15개, DG코드/마진 확인."""
+    import httpx as _hx
+    hdrs = await naver_api._headers()
+
+    async def _search_page(page: int, size: int) -> dict:
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs, json={
+                "productStatusTypes": ["SUSPENSION"], "page": page, "size": size,
+                "orderType": "NO", "periodType": "PROD_REG_DAY",
+                "fromDate": "2020-01-01", "toDate": "2099-12-31",
+            })
+        return r.json() if r.status_code == 200 else {"_http": r.status_code}
+
+    body1 = await _search_page(1, 15)
+    if "_http" in body1:
+        return JSONResponse({"error": f"네이버 API HTTP {body1['_http']}"}, status_code=502)
+
+    total = body1.get("totalElements", 0)
+    recent = body1.get("contents", [])
+    last_page = max(1, -(-total // 15))
+    body_old = await _search_page(last_page, 15)
+    old_items = body_old.get("contents", [])
+
+    all_contents = [("최신", p) for p in recent] + [("오래된", p) for p in old_items]
+    nos = [str(p.get("originProductNo", "")) for _, p in all_contents if p.get("originProductNo")]
+
+    db_map: dict = {}
+    try:
+        import psycopg2, psycopg2.extras
+        db_url = os.environ.get("DATABASE_URL", "postgresql://postgres:EWDltciLdYubwfgHmONLNeLlXBhUzVbE@switchyard.proxy.rlwy.net:19391/railway")
+        conn = psycopg2.connect(db_url, connect_timeout=8)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        if nos:
+            ph = ",".join(["%s"] * len(nos))
+            cur.execute(f"SELECT * FROM ss_registered_codes WHERE origin_product_no IN ({ph})", nos)
+            cols = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                d = dict(zip(cols, row))
+                db_map[str(d.get("origin_product_no", ""))] = d
+        conn.close()
+    except Exception as db_err:
+        db_map["__db_error__"] = str(db_err)
+
+    items = []
+    stats = {"no_dg": 0, "has_dg": 0, "margin_ok": 0, "margin_false": 0, "db_miss": 0}
+    for grp, p in all_contents:
+        origin = p.get("originProduct") or {}
+        da = (origin.get("detailAttribute") or {})
+        sci = (da.get("sellerCodeInfo") or {})
+        dg_code = (sci.get("sellerManagementCode") or "").strip()
+        name = (origin.get("name") or p.get("name") or "")
+        sale_price = int(origin.get("salePrice") or p.get("salePrice") or 0)
+        no = str(p.get("originProductNo", ""))
+        db = db_map.get(no, {})
+        margin_ok_val = db.get("margin_ok") if db else None
+        wholesale = db.get("wholesale_price", db.get("cost_price")) if db else None
+        last_stock = db.get("last_stock", db.get("stock")) if db else None
+
+        if dg_code: stats["has_dg"] += 1
+        else: stats["no_dg"] += 1
+        if not db: stats["db_miss"] += 1
+        if margin_ok_val is True: stats["margin_ok"] += 1
+        if margin_ok_val is False: stats["margin_false"] += 1
+
+        items.append({
+            "group": grp, "no": no, "name": name[:40],
+            "sale_price": sale_price, "dg_code": dg_code or None,
+            "margin_ok": margin_ok_val, "wholesale": wholesale, "last_stock": last_stock,
+        })
+
+    return JSONResponse({
+        "total_suspension": total, "sampled": len(items),
+        "stats": stats,
+        "db_error": db_map.get("__db_error__"),
         "items": items,
     })
 
