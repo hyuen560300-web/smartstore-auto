@@ -7291,6 +7291,21 @@ async def startup_event():
     except Exception as _e_dg:
         print(f"[STARTUP] DG 프록시 URL 갱신 스킵: {_e_dg}", flush=True)
 
+    # Bridge onch3 URL 갱신 (cloudflared 임시터널 — context_store bridge.onch3_url)
+    try:
+        async with httpx.AsyncClient(timeout=5) as _cb:
+            _rb = await _cb.get(
+                "https://loving-serenity-production-2635.up.railway.app/context/bridge.onch3_url"
+            )
+        if _rb.status_code == 200:
+            import onch3_sourcing as _onch3_mod
+            _bridge_url = _rb.json().get("value", "")
+            if _bridge_url and isinstance(_bridge_url, str) and _bridge_url.startswith("https://"):
+                _onch3_mod._ONCH3_BRIDGE = _bridge_url
+                print(f"[STARTUP] ONCH3 Bridge URL → {_bridge_url}", flush=True)
+    except Exception as _eb:
+        print(f"[STARTUP] Bridge URL 갱신 스킵: {_eb}", flush=True)
+
     # ── APScheduler: n8n 워크플로우 3개 대체 ─────────────────────────────────
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from employees import (
