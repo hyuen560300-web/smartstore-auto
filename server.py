@@ -4761,6 +4761,92 @@ async def naver_product_count():
     return JSONResponse({**counts, "활성합계_한도대상": active_total, "한도": 1000, "여유": 1000 - active_total})
 
 
+@app.get("/sale-sample")
+async def sale_sample_endpoint():
+    """SALE 상품 샘플 30개 실측 감사 — 최신 15개 + 오래된 15개 + DB 마진 매칭."""
+    import httpx as _hx, asyncio as _ai, os
+    from datetime import datetime, timezone
+    hdrs = await naver_api._headers()
+
+    async def _search_page(page: int, size: int) -> dict:
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs, json={
+                "productStatusTypes": ["SALE"], "page": page, "size": size,
+                "orderType": "NO", "periodType": "PROD_REG_DAY",
+                "fromDate": "2020-01-01", "toDate": "2099-12-31",
+            })
+        return r.json() if r.status_code == 200 else {}
+
+    # 1) 총 상품 수 + 최신 15개
+    body1 = await _search_page(1, 15)
+    total = body1.get("totalElements", 0)
+    recent = body1.get("contents", [])
+
+    # 2) 오래된 15개 (마지막 페이지)
+    last_page = max(1, -(-total // 15))  # ceil
+    body_old = await _search_page(last_page, 15)
+    old_items = body_old.get("contents", [])
+
+    # 3) PostgreSQL ss_registered_codes 조회
+    all_contents = [("최신", p) for p in recent] + [("오래된", p) for p in old_items]
+    nos = [str(p.get("originProductNo", "")) for _, p in all_contents if p.get("originProductNo")]
+    db_map = {}
+    try:
+        import psycopg2, psycopg2.extras
+        db_url = os.environ.get("DATABASE_URL", "postgresql://postgres:EWDltciLdYubwfgHmONLNeLlXBhUzVbE@switchyard.proxy.rlwy.net:19391/railway")
+        conn = psycopg2.connect(db_url, connect_timeout=8)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        # 테이블 존재 여부
+        cur.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")
+        tables = [r[0] for r in cur.fetchall()]
+        if "ss_registered_codes" in tables:
+            ph = ",".join(["%s"] * len(nos))
+            cur.execute(f"SELECT * FROM ss_registered_codes WHERE origin_product_no IN ({ph})", nos)
+            cols = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                d = dict(zip(cols, row))
+                db_map[str(d.get("origin_product_no", ""))] = d
+        conn.close()
+    except Exception as db_err:
+        db_map["__db_error__"] = str(db_err)
+
+    # 4) 결과 구성
+    items = []
+    stats = {"no_dg": 0, "zero_cost": 0, "db_miss": 0, "margin_false": 0}
+    for grp, p in all_contents:
+        origin = p.get("originProduct") or {}
+        da = (origin.get("detailAttribute") or {})
+        sci = (da.get("sellerCodeInfo") or {})
+        dg_code = (sci.get("sellerManagementCode") or "").strip()
+        cost = int(da.get("purchasePrice") or da.get("costPrice") or 0)
+        name = (origin.get("name") or p.get("name") or "")
+        sale_price = int(origin.get("salePrice") or p.get("salePrice") or 0)
+        no = str(p.get("originProductNo", ""))
+        db = db_map.get(no, {})
+        margin_ok = db.get("margin_ok") if db else None
+        wholesale = db.get("wholesale_price", db.get("cost_price")) if db else None
+        last_stock = db.get("last_stock", db.get("stock")) if db else None
+
+        if not dg_code: stats["no_dg"] += 1
+        if cost == 0: stats["zero_cost"] += 1
+        if not db: stats["db_miss"] += 1
+        if margin_ok is False: stats["margin_false"] += 1
+
+        items.append({
+            "group": grp, "no": no, "name": name[:40],
+            "sale_price": sale_price, "cost_price": cost,
+            "dg_code": dg_code or None,
+            "margin_ok": margin_ok, "wholesale": wholesale, "last_stock": last_stock,
+        })
+
+    return JSONResponse({
+        "total_sale": total, "sampled": len(items),
+        "db_tables_has_ss_registered": "ss_registered_codes" in ([] if "__db_error__" in db_map else list(db_map.get("__dummy__", {}))),
+        "stats": stats,
+        "items": items,
+    })
+
+
 async def _run_delete_blurry():
     """대표이미지 흐릿/소형 상품 백그라운드 삭제."""
     from main import naver_api, _retry, _check_image_quality
