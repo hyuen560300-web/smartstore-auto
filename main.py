@@ -1372,22 +1372,31 @@ async def _dg_item_detail(item_no: str) -> dict:
     반환: data["domeggook"] 내부 dict (basis/price/qty/thumb 포함). 실패 시 {}."""
     if not DOMEGGOOK_API_KEY:
         return {}
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(DOMEGGOOK_API_URL, params={
-                "ver": "4.5", "mode": "getItemView",
-                "aid": DOMEGGOOK_API_KEY, "no": item_no, "om": "json",
-            })
-            r.raise_for_status()
-            return r.json().get("domeggook", {})
-    except Exception as e:
-        print(f"[DOMEGGOOK] 상세조회 실패({item_no}): {e}", flush=True)
-        if "domeggook.com" not in DOMEGGOOK_API_URL:
-            asyncio.create_task(_tg_notify(
-                f"⚠️ [SS] DG 프록시 연결 실패 — Bridge(ngrok) 꺼진 듯\n"
-                f"URL: {DOMEGGOOK_API_URL}\n오류: {str(e)[:200]}"
-            ))
-        return {}
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(DOMEGGOOK_API_URL, params={
+                    "ver": "4.5", "mode": "getItemView",
+                    "aid": DOMEGGOOK_API_KEY, "no": item_no, "om": "json",
+                })
+                if r.status_code == 429:
+                    wait = int(r.headers.get("Retry-After", 10 * (2 ** attempt)))
+                    print(f"[DOMEGGOOK] 상세조회 429 → {wait}초 대기 (item={item_no})", flush=True)
+                    await asyncio.sleep(wait)
+                    continue
+                r.raise_for_status()
+                return r.json().get("domeggook", {})
+        except Exception as e:
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)
+                continue
+            print(f"[DOMEGGOOK] 상세조회 실패({item_no}): {e}", flush=True)
+            if "domeggook.com" not in DOMEGGOOK_API_URL:
+                asyncio.create_task(_tg_notify(
+                    f"⚠️ [SS] DG 프록시 연결 실패 — Bridge(ngrok) 꺼진 듯\n"
+                    f"URL: {DOMEGGOOK_API_URL}\n오류: {str(e)[:200]}"
+                ))
+    return {}
 
 
 def _dg_to_product(item: dict, detail: dict) -> dict | None:
@@ -1746,10 +1755,12 @@ async def fetch_domeggook_products(
     min_price: int = 3000,
     max_price: int = 150000,
     start_page: int = 0,
+    source: str = "dg",  # "dg"=일반, "special"=스페셜프로모션(sp=Y), "pick"=꾹PICK(pick=Y)
 ) -> list[dict]:
     """도매꾹 키워드 검색 → 상세 병렬 조회 → product dict 리스트 반환.
     pool_size: sourcing manager에게 넘길 후보 수 (limit의 3배 권장).
     start_page: 0이면 등록 코드 수 기반으로 페이지 자동 산출 (중복 회피).
+    source: "dg"=일반검색, "special"=스페셜프로모션(sp=Y, 단기할인/프로모 상품), "pick"=꾹PICK(pick=Y, 도매꾹 자체 추천)
 
     정확한 파라미터명 (오류 발생 주의):
       sz=페이지당수, mnp/mxp=가격범위, who=S(판매자부담=무료배송), org=kr(국산), market=dome
@@ -1771,6 +1782,11 @@ async def fetch_domeggook_products(
         if len(raw_items) >= pool_size:
             break
         try:
+            _extra: dict = {}
+            if source == "special":
+                _extra["sp"] = "Y"
+            elif source == "pick":
+                _extra["pick"] = "Y"
             async with httpx.AsyncClient(timeout=20) as c:
                 r = await c.get(DOMEGGOOK_API_URL, params={
                     "ver": "4.1", "mode": "getItemList",
@@ -1781,6 +1797,7 @@ async def fetch_domeggook_products(
                     "sz": "30",    # 페이지당 30개
                     "pg": str(start_page),
                     "so": "sd",    # 최신순 — 신규상품 우선(기등록 상품 중복 최소화)
+                    **_extra,
                 })
                 r.raise_for_status()
                 data = r.json()
@@ -4620,6 +4637,7 @@ async def pipeline_register_from_domeggook(
     min_price: int = 3000,
     max_price: int = 150000,
     start_page: int = 0,
+    source: str = "dg",  # "dg"=일반, "special"=스페셜프로모션, "pick"=꾹PICK
 ) -> dict:
     """도매꾹 API 소싱 → 전 직원 협업 등록 파이프라인.
     소싱부분만 Excel→도매꾹 API로 교체; 이후 로직은 pipeline_register_products와 동일."""
@@ -4643,7 +4661,8 @@ async def pipeline_register_from_domeggook(
     # ① 도매꾹 API 상품 수집 (pool = max(limit*10, 200) — 후보 고갈 방지)
     products = await fetch_domeggook_products(
         keywords, pool_size=max(limit * 10, 200),
-        min_price=min_price, max_price=max_price, start_page=start_page
+        min_price=min_price, max_price=max_price, start_page=start_page,
+        source=source
     )
     if not products:
         print("[도매꾹파이프라인] DG 응답 없음 → 온채널 폴백 소싱 시도", flush=True)

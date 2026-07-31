@@ -2170,8 +2170,9 @@ async def register_domeggook_sync(request: Request):
     min_price = int(body.get("min_price", 3000))
     max_price = int(body.get("max_price", 150000))
     start_page = int(body.get("start_page", 0))
+    source = str(body.get("source", "dg"))  # "dg"|"special"|"pick"
     try:
-        result = await pipeline_register_from_domeggook(limit, keywords, min_price, max_price, start_page)
+        result = await pipeline_register_from_domeggook(limit, keywords, min_price, max_price, start_page, source)
     except Exception as _e:
         import traceback as _tb
         return JSONResponse({"status": "exception", "error": str(_e), "tb": _tb.format_exc()[-2000:]}, status_code=500)
@@ -2341,9 +2342,10 @@ async def register_from_domeggook(request: Request, background_tasks: Background
     min_price  = int(body.get("min_price", 3000))
     max_price  = int(body.get("max_price", 150000))
     start_page = int(body.get("start_page", 0))
+    source     = str(body.get("source", "dg"))  # "dg"|"special"|"pick"
 
     background_tasks.add_task(
-        pipeline_register_from_domeggook, limit, keywords, min_price, max_price, start_page
+        pipeline_register_from_domeggook, limit, keywords, min_price, max_price, start_page, source
     )
     return JSONResponse({
         "status":     "processing",
@@ -8306,7 +8308,8 @@ async def command_endpoint(request: Request, background_tasks: BackgroundTasks):
         min_price  = int(params.get("min_price", 3000))
         max_price  = int(params.get("max_price", 150000))
         start_page = int(params.get("start_page", 0))
-        background_tasks.add_task(pipeline_register_from_domeggook, limit, keywords, min_price, max_price, start_page)
+        source     = str(params.get("source", "dg"))  # "dg"|"special"|"pick"
+        background_tasks.add_task(pipeline_register_from_domeggook, limit, keywords, min_price, max_price, start_page, source)
         detail = f"limit={limit}, start_page={start_page if start_page > 0 else 'auto'}"
 
     elif cmd == "register_products":
