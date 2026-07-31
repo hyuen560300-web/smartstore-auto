@@ -4639,8 +4639,60 @@ async def force_reduce(request: Request, background_tasks: BackgroundTasks):
 @app.post("/reduce-now")
 async def reduce_now_endpoint():
     """한도초과 즉시 정리 — create_task로 클라이언트 독립적 실행 (연결 끊겨도 계속)."""
-    asyncio.create_task(_auto_reduce_for_limit(100))
+    async def _run_safe():
+        try:
+            await _auto_reduce_for_limit(100)
+        except Exception as e:
+            print(f"[AUTO-REDUCE] TASK ERROR: {e}", flush=True)
+    asyncio.create_task(_run_safe())
     return JSONResponse({"status": "started", "batch": 100, "note": "로그에서 [AUTO-REDUCE] 확인"})
+
+
+@app.post("/reduce-sync")
+async def reduce_sync_endpoint(batch: int = 10):
+    """한도 정리 — 동기 실행, 결과 즉시 반환 (batch 기본 10개, max 20)."""
+    batch = min(batch, 20)
+    suspended = 0
+    from main import naver_api, NAVER_BASE
+    import httpx as _httpx
+    from datetime import datetime, timezone
+    hdrs = await naver_api._headers()
+    now = datetime.now(timezone.utc)
+    errors = []
+    async with _httpx.AsyncClient(timeout=20) as c:
+        try:
+            r = await c.post(
+                f"{NAVER_BASE}/v1/products/search",
+                headers=hdrs,
+                json={
+                    "productStatusTypes": ["SALE"],
+                    "page": 1, "size": batch,
+                    "orderType": "NO",
+                    "periodType": "PROD_REG_DAY",
+                    "fromDate": "2020-01-01",
+                    "toDate": now.strftime("%Y-%m-%d"),
+                }
+            )
+            data = r.json()
+            contents = data.get("contents", [])
+            print(f"[REDUCE-SYNC] 검색결과 {len(contents)}개", flush=True)
+            for item in contents:
+                pno = str(item.get("originProductNo", ""))
+                if not pno:
+                    continue
+                ok = await naver_api.set_product_status(pno, "SUSPENSION")
+                if ok:
+                    suspended += 1
+                    print(f"[REDUCE-SYNC] ✅ {pno}", flush=True)
+                else:
+                    err = f"실패:{pno}"
+                    errors.append(err)
+                    print(f"[REDUCE-SYNC] ❌ {pno}", flush=True)
+        except Exception as e:
+            errors.append(str(e))
+            print(f"[REDUCE-SYNC] 에러: {e}", flush=True)
+    print(f"[REDUCE-SYNC] 완료 — {suspended}개 판매중지", flush=True)
+    return JSONResponse({"status": "done", "suspended": suspended, "errors": errors[:5]})
 
 
 @app.get("/naver-product-count")
