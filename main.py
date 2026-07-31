@@ -4649,9 +4649,10 @@ async def pipeline_register_from_domeggook(
                 else:
                     _op["category"] = "생활용품"
 
-    # ② 소싱팀장 선별
-    products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
-    print(f"[소싱팀장] {len(products)}개 선별", flush=True)
+    # ② 소싱팀장 선별 — 소싱게이트 탈락 대비로 limit*5 이상 선별
+    _mgr_limit = max(limit * 5, 10)
+    products = await employee_sourcing_manager(products, _mgr_limit, ANTHROPIC_API_KEY)
+    print(f"[소싱팀장] {len(products)}개 선별 (목표limit={limit})", flush=True)
 
     season_data  = employee_season_planner()
     season_info  = season_data["upcoming"][0]["event"] if season_data["upcoming"] else ""
@@ -4674,13 +4675,14 @@ async def pipeline_register_from_domeggook(
     registered_codes = load_registered_codes()
     registered_names = load_registered_names()
     print(f"[도매꾹파이프라인] 기등록: {len(registered_codes)}개(코드) / {len(registered_names)}개(이름) 제외", flush=True)
-    _proc_total = len(products[:limit])
+    _scan_limit = max(limit * 5, 10)
+    _proc_total = len(products[:_scan_limit])
     _proc_n = 0
     results = {"success": 0, "fail": 0, "skip": 0, "duplicate": 0,
                "ip_blocked": 0, "errors": [], "source": "domeggook",
                "registered_products": []}
 
-    for p in products[:limit]:
+    for p in products[:_scan_limit]:
         try:
             _proc_n += 1
             code = str(p.get("code", ""))
@@ -4975,6 +4977,8 @@ async def pipeline_register_from_domeggook(
                 final_name, _cat, detail_html, ai, ai.get("tags") or [],
                 {"smartstore": _product_url}))
             await asyncio.sleep(0.5)
+            if results["success"] >= limit:
+                break
 
         except Exception as e:
             results["fail"] += 1
