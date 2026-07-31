@@ -50,6 +50,9 @@ class ApiGateway:
 
     @property
     def circuit_open(self) -> bool:
+        if self._open_until > 0.0 and time.monotonic() >= self._open_until:
+            # circuit 만료 시 자동 reset — SOURCING_PAUSED 런타임 플래그 해제
+            self.reset_circuit()
         return time.monotonic() < self._open_until
 
     def reset_circuit(self) -> None:
