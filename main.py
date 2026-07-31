@@ -1050,16 +1050,43 @@ class NaverCommerceAPI:
             return {}
 
     async def set_product_status(self, product_id: str, status: str) -> bool:
-        """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)"""
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.put(
-                f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
-                headers=await self._headers(),
-                json={"originProduct": {"statusType": status}}
-            )
-            if r.status_code != 200:
-                print(f"[SET-STATUS] ❌ {product_id} HTTP {r.status_code}: {r.text[:300]}", flush=True)
-            return r.status_code == 200
+        """상품 상태 변경: SALE(판매중) / SUSPENSION(판매중지) / CLOSE(판매종료)
+        채널 상품 상태 API 우선 시도, 실패 시 전체 데이터 GET→PUT 방식 폴백."""
+        hdrs = await self._headers()
+        async with httpx.AsyncClient(timeout=20) as c:
+            # 1차: 채널 상품 상태 변경 API (경량)
+            try:
+                r1 = await c.put(
+                    f"{NAVER_BASE}/v2/products/channel-products/{product_id}/status",
+                    headers=hdrs,
+                    json={"statusType": status},
+                )
+                if r1.status_code == 200:
+                    return True
+            except Exception:
+                pass
+            # 2차: 전체 상품 데이터 GET 후 statusType 변경 PUT
+            try:
+                rg = await c.get(
+                    f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
+                    headers=hdrs,
+                )
+                if rg.status_code != 200:
+                    print(f"[SET-STATUS] ❌ GET {product_id} HTTP {rg.status_code}", flush=True)
+                    return False
+                origin = rg.json().get("originProduct", {})
+                origin["statusType"] = status
+                rp = await c.put(
+                    f"{NAVER_BASE}/v2/products/origin-products/{product_id}",
+                    headers=hdrs,
+                    json={"originProduct": origin},
+                )
+                if rp.status_code != 200:
+                    print(f"[SET-STATUS] ❌ PUT {product_id} HTTP {rp.status_code}: {rp.text[:200]}", flush=True)
+                return rp.status_code == 200
+            except Exception as e:
+                print(f"[SET-STATUS] ❌ {product_id} 예외: {e}", flush=True)
+                return False
 
     async def count_sale_products(self) -> int:
         """현재 판매중(SALE) 상품 수 조회.
