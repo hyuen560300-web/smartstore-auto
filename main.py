@@ -4668,17 +4668,25 @@ async def pipeline_register_from_domeggook(
                 results["duplicate"] += 1
                 continue
 
-            # ① DG 실제 공급가(도매가) 조회 — getItemView price.dome 사용
-            # p.get("price")는 DG 소비자 소매가(정가)이므로 원가 계산에 사용하면 안 됨
+            # ① 공급가(도매가) 조회 — 출처별 분기
+            # DG: getItemView price.dome (p.get("price")는 소매가라 사용 금지)
+            # ONCH3: p.get("price")가 곧 도매가
             if int(p.get("price", 0)) <= 0:
                 print(f"[STEP1] ⛔ 도매가미기입: {p.get('name','')[:30]} — 소싱스킵", flush=True)
                 results["skip"] += 1
                 continue
-            _ss_wholesale = await _get_dg_wholesale(code)
-            if _ss_wholesale <= 0:
-                print(f"[STEP1] ⛔ 공급가조회실패: {p.get('name','')[:30]} (DG{code}) — 소싱스킵", flush=True)
-                results["skip"] += 1
-                continue
+            if code.startswith("ONCH3_"):
+                _ss_wholesale = int(p.get("price", 0))
+                if _ss_wholesale <= 0:
+                    print(f"[STEP1] ⛔ 온채널 도매가 없음: {p.get('name','')[:30]} — 소싱스킵", flush=True)
+                    results["skip"] += 1
+                    continue
+            else:
+                _ss_wholesale = await _get_dg_wholesale(code)
+                if _ss_wholesale <= 0:
+                    print(f"[STEP1] ⛔ 공급가조회실패: {p.get('name','')[:30]} (DG{code}) — 소싱스킵", flush=True)
+                    results["skip"] += 1
+                    continue
 
             # 계절 필터: 현재 계절과 맞지 않는 상품 제외
             if _is_season_excluded(p.get("name", "")):
