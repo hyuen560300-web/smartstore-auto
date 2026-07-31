@@ -1778,7 +1778,39 @@ async def fetch_domeggook_products(
     seen: set[str] = set()
     raw_items: list[dict] = []
 
-    for kw in kws:
+    # ── mdpick: 꾹PICK AJAX 엔드포인트 (IP 차단 없이 직접 접근 가능) ──────────
+    if source == "mdpick":
+        try:
+            _ajax_hdrs = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://domeggook.com/main",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(
+                    "https://domeggook.com/main/item/itemGGookDealMobileAjax.php",
+                    params={"type": "ggookpick"},
+                    headers=_ajax_hdrs,
+                )
+                r.raise_for_status()
+                _aj = r.json()
+            _ajax_items = _aj.get("data", {}).get("list", [])
+            for _it in _ajax_items:
+                _no = str(_it.get("itemNo", ""))
+                if _no and _no not in seen:
+                    seen.add(_no)
+                    raw_items.append({"no": _no, "name": _it.get("title", ""),
+                                      "price": _it.get("price", "0"),
+                                      "img": _it.get("thumb", ""),
+                                      "minQty": _it.get("unitQty", "1")})
+            print(f"[DG-MDPICK] 꾹PICK AJAX → {len(raw_items)}개", flush=True)
+        except Exception as _e:
+            print(f"[DG-MDPICK] 오류: {_e}", flush=True)
+        # 상세 조회는 아래 공통 로직(candidates → _dg_item_detail)으로 처리
+        if not raw_items:
+            return []
+    # ── 일반/special/pick: getItemList API ────────────────────────────────────
+    for kw in ([] if source == "mdpick" else kws):
         if len(raw_items) >= pool_size:
             break
         try:
@@ -4637,10 +4669,11 @@ async def pipeline_register_from_domeggook(
     min_price: int = 3000,
     max_price: int = 150000,
     start_page: int = 0,
-    source: str = "dg",  # "dg"=일반, "special"=스페셜프로모션, "pick"=꾹PICK
+    source: str = "dg",  # "dg"=일반, "special"=스페셜프로모션, "pick"=꾹PICK, "mdpick"=꾹PICK AJAX(IP차단우회)
 ) -> dict:
     """도매꾹 API 소싱 → 전 직원 협업 등록 파이프라인.
-    소싱부분만 Excel→도매꾹 API로 교체; 이후 로직은 pipeline_register_products와 동일."""
+    소싱부분만 Excel→도매꾹 API로 교체; 이후 로직은 pipeline_register_products와 동일.
+    source="mdpick": getItemList API 대신 AJAX 엔드포인트로 꾹PICK 목록 직접 조회 (로컬 IP 차단 우회)."""
     from employees import (
         employee_sourcing_manager, employee_ip_guardian,
         employee_season_planner, employee_trend_scout, employee_review_analyst,
