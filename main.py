@@ -4620,11 +4620,34 @@ async def pipeline_register_from_domeggook(
         print("[도매꾹파이프라인] DG 응답 없음 → 온채널 폴백 소싱 시도", flush=True)
         _onch3_kws = keywords or _get_rotating_keywords(15)
         products = await onch3_sourcing.fetch_onch3_products(
-            _onch3_kws, pool_size=limit * 3,
+            _onch3_kws, pool_size=max(limit * 20, 30),
             min_price=min_price, max_price=max_price,
         )
         if not products:
             return {"status": "error", "message": "도매꾹+온채널 모두 상품 없음 — DG IP차단 여부 및 ONCH3_ID/PW 확인"}
+        # 온채널 상품 category 자동추론 (category="" 이면 name 기반 매핑)
+        _ONCH3_CAT_MAP = [
+            (["케이블", "충전", "USB", "전선", "어댑터", "배터리"], "전자기기/스마트기기"),
+            (["마우스", "키보드", "모니터", "노트북"], "컴퓨터/IT기기"),
+            (["의류", "티셔츠", "바지", "셔츠", "자켓", "원피스", "블라우스"], "패션의류"),
+            (["가방", "백팩", "파우치", "지갑"], "가방"),
+            (["주방", "냄비", "프라이팬", "컵", "식기", "조리"], "주방용품"),
+            (["화장", "스킨케어", "마스크팩", "선크림", "클렌징"], "뷰티"),
+            (["운동", "헬스", "요가", "아령", "덤벨", "스포츠"], "스포츠/레저"),
+            (["캠핑", "텐트", "등산", "낚시", "아웃도어"], "캠핑/아웃도어"),
+            (["인테리어", "수납", "정리", "청소", "가구"], "생활/인테리어"),
+            (["반려", "강아지", "고양이", "펫"], "반려동물용품"),
+            (["유아", "아기", "어린이", "장난감", "교육"], "유아동"),
+        ]
+        for _op in products:
+            if not _op.get("category"):
+                _on = str(_op.get("name", "")).lower()
+                for _kws, _cat in _ONCH3_CAT_MAP:
+                    if any(k in _on for k in _kws):
+                        _op["category"] = _cat
+                        break
+                else:
+                    _op["category"] = "생활용품"
 
     # ② 소싱팀장 선별
     products = await employee_sourcing_manager(products, limit, ANTHROPIC_API_KEY)
@@ -4665,6 +4688,7 @@ async def pipeline_register_from_domeggook(
             print(f"\n[STEP1] ({_proc_n}/{_proc_total}) 소싱검증: {str(p.get('name',''))[:30]}", flush=True)
             # ─── STEP 1: 소싱 검증 ───
             if (code and _norm_code(code) in registered_codes) or (name_norm and name_norm in registered_names):
+                print(f"[STEP1] 중복제외: {str(p.get('name',''))[:30]}", flush=True)
                 results["duplicate"] += 1
                 continue
 
