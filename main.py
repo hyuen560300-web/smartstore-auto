@@ -4857,7 +4857,7 @@ async def pipeline_register_from_domeggook(
                 claude_html = ""
             if claude_html:
                 claude_html = _naver_filter_html(claude_html)
-            _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 6
+            _html_ok = bool(claude_html) and len(claude_html) >= 5000 and _count_html_sections(claude_html) >= 4
             if not _html_ok and claude_html:
                 _sec_cnt = _count_html_sections(claude_html)
                 print(f"[STEP3] HTML 재생성 시도 (길이:{len(claude_html)}, 섹션:{_sec_cnt}/17)", flush=True)
@@ -4867,7 +4867,7 @@ async def pipeline_register_from_domeggook(
                     _claude_html2 = ""
                 if _claude_html2:
                     _claude_html2 = _naver_filter_html(_claude_html2)
-                if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 6:
+                if _claude_html2 and len(_claude_html2) >= 5000 and _count_html_sections(_claude_html2) >= 4:
                     claude_html = _claude_html2
                     _html_ok = True
             if _html_ok:
