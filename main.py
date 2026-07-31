@@ -4981,11 +4981,20 @@ async def pipeline_register_from_domeggook(
                 break
 
         except Exception as e:
-            results["fail"] += 1
-            err_msg = str(e)[:80]
-            results["errors"].append(f"{str(p.get('name','?'))[:20]}: {err_msg}")
-            print(f"[도매꾹파이프라인] ❌ {e}", flush=True)
-            asyncio.create_task(_enqueue_retry("smartstore", p, err_msg))
+            err_msg = str(e)
+            if "limitOver" in err_msg or "한도를 초과" in err_msg:
+                print(f"[도매꾹파이프라인] ⚠️ 한도초과 감지 — 자동 정리 시작", flush=True)
+                try:
+                    await _auto_reduce_for_limit(100)
+                except Exception as re:
+                    print(f"[AUTO-REDUCE] 오류: {re}", flush=True)
+                results["fail"] += 1
+                results["errors"].append(f"한도초과(자동정리): {str(p.get('name','?'))[:20]}")
+            else:
+                results["fail"] += 1
+                results["errors"].append(f"{str(p.get('name','?'))[:20]}: {err_msg[:80]}")
+                print(f"[도매꾹파이프라인] ❌ {e}", flush=True)
+                asyncio.create_task(_enqueue_retry("smartstore", p, err_msg[:80]))
 
     print(f"[도매꾹파이프라인] 완료 — 성공:{results['success']} 실패:{results['fail']} "
           f"스킵:{results['skip']} IP차단:{results['ip_blocked']}", flush=True)
@@ -4997,6 +5006,43 @@ async def pipeline_register_from_domeggook(
         f"🚫 IP차단: {results['ip_blocked']}개"))
     asyncio.create_task(_update_obsidian_note(results, limit))
     return results
+
+
+async def _auto_reduce_for_limit(batch: int = 100):
+    """한도초과(1000개) 감지 시 오래된 SALE 상품 batch개 SUSPENSION 처리."""
+    from datetime import timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    page, suspended = 1, 0
+    while suspended < batch:
+        try:
+            resp = await naver_api.list_products(page=page, size=100)
+        except Exception as e:
+            print(f"[AUTO-REDUCE] 목록 조회 실패 p{page}: {e}", flush=True)
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        for prod in contents:
+            if suspended >= batch:
+                break
+            origin = prod.get("originProduct", {})
+            if origin.get("statusType") not in ("SALE", "SALE_WAIT", "OUT_OF_STOCK"):
+                continue
+            try:
+                rd = datetime.fromisoformat(origin.get("regDate", "").replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if rd > cutoff:
+                continue
+            pno = str(prod.get("originProductNo", ""))
+            ok = await naver_api.set_product_status(pno, "SUSPENSION")
+            if ok:
+                suspended += 1
+                print(f"[AUTO-REDUCE] ✅ [{pno}] {origin.get('name','')[:20]}", flush=True)
+        if len(contents) < 100:
+            break
+        page += 1
+    print(f"[AUTO-REDUCE] 완료 — {suspended}개 판매중지", flush=True)
 
 
 async def pipeline_process_orders() -> dict:
