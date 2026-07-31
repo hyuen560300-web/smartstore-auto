@@ -1057,6 +1057,8 @@ class NaverCommerceAPI:
                 headers=await self._headers(),
                 json={"originProduct": {"statusType": status}}
             )
+            if r.status_code != 200:
+                print(f"[SET-STATUS] ❌ {product_id} HTTP {r.status_code}: {r.text[:300]}", flush=True)
             return r.status_code == 200
 
     async def count_sale_products(self) -> int:
