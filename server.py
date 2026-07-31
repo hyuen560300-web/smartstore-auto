@@ -7197,8 +7197,8 @@ async def startup_event():
         _save_drive_index(DRIVE_FILE_IDS_PERMANENT)
         print(f"[STARTUP] Drive 인덱스 자동 복구 완료: {len(DRIVE_FILE_IDS_PERMANENT)}개", flush=True)
 
-    # registered_codes.json 동기화를 백그라운드로 실행 (healthcheck 응답 차단 방지)
-    _asyncio.create_task(_sync_registered_codes())
+    # registered_codes.json 동기화를 백그라운드로 실행 (90초 타임아웃 — 초과 시 강제 완료)
+    _asyncio.create_task(_asyncio.wait_for(_sync_registered_codes(), timeout=90))
 
     # DG 재고 스캔 미완료 자동 재개 (배포 재시작으로 끊긴 경우)
     async def _resume_dg_scan_if_needed():
