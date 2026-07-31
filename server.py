@@ -58,6 +58,7 @@ from main import (
     pipeline_register_from_domeggook,
     fetch_domeggook_products,
     DOMEGGOOK_API_KEY,
+    DOMEGGOOK_API_URL,
     _get_rotating_keywords,
     pipeline_fix_products,
     NAVER_BASE,
