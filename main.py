@@ -1787,7 +1787,8 @@ async def fetch_domeggook_products(
                     })
                     r.raise_for_status()
                     data = r.json()
-                items = data.get("domeggook", {}).get("list", {}).get("item", [])
+                dg_sec = (data or {}).get("domeggook") or {}
+                items = (dg_sec.get("list") or {}).get("item") or []
                 if not isinstance(items, list):
                     items = []
                 added = 0
