@@ -68,6 +68,7 @@ from main import (
     _tg_notify,
     pipeline_reapply_claude_html,
     _save_cost_price_async,
+    _auto_reduce_for_limit,
 )
 from employees import (
     employee_season_planner,
@@ -4633,6 +4634,13 @@ async def force_reduce(request: Request, background_tasks: BackgroundTasks):
     batch_limit  = int(body.get("limit", 300))
     background_tasks.add_task(_run_force_reduce, min_age_days, batch_limit)
     return JSONResponse({"status": "started", "min_age_days": min_age_days, "limit": batch_limit})
+
+
+@app.post("/reduce-now")
+async def reduce_now_endpoint():
+    """한도초과 즉시 정리 — _auto_reduce_for_limit 직접 await (백그라운드 아님)."""
+    await _auto_reduce_for_limit(100)
+    return JSONResponse({"status": "done", "batch": 100})
 
 
 @app.get("/naver-product-count")
