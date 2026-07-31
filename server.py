@@ -4638,9 +4638,9 @@ async def force_reduce(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/reduce-now")
 async def reduce_now_endpoint():
-    """한도초과 즉시 정리 — _auto_reduce_for_limit 직접 await (백그라운드 아님)."""
-    await _auto_reduce_for_limit(100)
-    return JSONResponse({"status": "done", "batch": 100})
+    """한도초과 즉시 정리 — create_task로 클라이언트 독립적 실행 (연결 끊겨도 계속)."""
+    asyncio.create_task(_auto_reduce_for_limit(100))
+    return JSONResponse({"status": "started", "batch": 100, "note": "로그에서 [AUTO-REDUCE] 확인"})
 
 
 @app.get("/naver-product-count")
