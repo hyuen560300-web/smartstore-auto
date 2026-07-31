@@ -22,6 +22,8 @@ import httpx
 
 ONCH3_ID = os.environ.get("ONCH3_ID", "mnm1876@naver.com")
 ONCH3_PW = os.environ.get("ONCH3_PW", "gusdn@5603")
+# Bridge URL: Railway에서 onch3.co.kr ConnectTimeout 우회 (로컬 PC 경유)
+_ONCH3_BRIDGE = os.environ.get("ONCH3_BRIDGE_URL", "https://abiding-iron-saddlebag.ngrok-free.app")
 
 _BASE = "https://www.onch3.co.kr"
 _LOGIN_URL = f"{_BASE}/login/login_web.php"
@@ -196,10 +198,28 @@ async def fetch_onch3_products(
     min_price: int = 2000,
     max_price: int = 150000,
 ) -> list[dict]:
-    """httpx 기반 온채널 비동기 소싱 — Railway urllib 타임아웃 우회."""
+    """온채널 소싱 — Bridge(로컬PC) 우선, 실패 시 직접 httpx."""
     if not ONCH3_ID or not ONCH3_PW:
         print("[ONCH3] ONCH3_ID/PW 미설정 → 스킵", flush=True)
         return []
+
+    # Bridge 경유 (Railway → ngrok → 로컬PC → onch3.co.kr)
+    if _ONCH3_BRIDGE:
+        try:
+            kw_str = ",".join(keywords)
+            async with httpx.AsyncClient(timeout=60) as _bc:
+                _br = await _bc.get(f"{_ONCH3_BRIDGE}/onch3-source", params={
+                    "keywords": kw_str, "pool_size": pool_size,
+                    "min_price": min_price, "max_price": max_price,
+                })
+                _bd = _br.json()
+                if _bd.get("ok"):
+                    print(f"[ONCH3] Bridge 경유 {_bd['count']}개 수집", flush=True)
+                    return _bd.get("products", [])
+                print(f"[ONCH3] Bridge 오류: {_bd.get('error')} → 직접 시도", flush=True)
+        except Exception as _be:
+            print(f"[ONCH3] Bridge 연결 실패: {repr(_be)} → 직접 시도", flush=True)
+
     try:
         async with httpx.AsyncClient(
             headers=_HEADERS, follow_redirects=True, timeout=20
