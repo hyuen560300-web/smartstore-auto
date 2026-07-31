@@ -1819,20 +1819,24 @@ async def fetch_domeggook_products(
                 _extra["sp"] = "Y"
             elif source == "pick":
                 _extra["pick"] = "Y"
-            async with httpx.AsyncClient(timeout=20) as c:
-                r = await c.get(DOMEGGOOK_API_URL, params={
-                    "ver": "4.1", "mode": "getItemList",
-                    "aid": DOMEGGOOK_API_KEY,
-                    "market": "dome",
-                    "kw": kw, "om": "json",
-                    "mnp": str(min_price), "mxp": str(max_price),
-                    "sz": "30",    # 페이지당 30개
-                    "pg": str(start_page),
-                    "so": "sd",    # 최신순 — 신규상품 우선(기등록 상품 중복 최소화)
-                    **_extra,
-                })
-                r.raise_for_status()
-                data = r.json()
+            from api_gateway import dg_gateway as _dg_gw
+            _kw_params = {
+                "ver": "4.1", "mode": "getItemList",
+                "aid": DOMEGGOOK_API_KEY,
+                "market": "dome",
+                "kw": kw, "om": "json",
+                "mnp": str(min_price), "mxp": str(max_price),
+                "sz": "30",
+                "pg": str(start_page),
+                "so": "sd",
+                **_extra,
+            }
+            async def _dg_list_req(_p=_kw_params):
+                async with httpx.AsyncClient(timeout=20) as _c:
+                    _r = await _c.get(DOMEGGOOK_API_URL, params=_p)
+                    _r.raise_for_status()
+                    return _r.json()
+            data = await _dg_gw.call(_dg_list_req)
             # 실제 응답: data["domeggook"]["list"]["item"]
             items = data.get("domeggook", {}).get("list", {}).get("item", [])
             if not isinstance(items, list):
