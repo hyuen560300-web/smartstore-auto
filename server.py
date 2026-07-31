@@ -7277,8 +7277,17 @@ async def startup_event():
             import main as _main_mod
             _proxy_url = _r_dg.json().get("value", "")
             if _proxy_url and isinstance(_proxy_url, str) and _proxy_url.startswith("https://"):
-                _main_mod.DOMEGGOOK_API_URL = _proxy_url
-                print(f"[STARTUP] DOMEGGOOK_API_URL → {_proxy_url}", flush=True)
+                # 실제 ping 체크 — 오프라인 URL 설정 방지
+                try:
+                    async with httpx.AsyncClient(timeout=4) as _ping_c:
+                        _ping_r = await _ping_c.get(_proxy_url.rstrip("/").rsplit("/", 1)[0] + "/health")
+                    if _ping_r.status_code < 500:
+                        _main_mod.DOMEGGOOK_API_URL = _proxy_url
+                        print(f"[STARTUP] DOMEGGOOK_API_URL → {_proxy_url}", flush=True)
+                    else:
+                        print(f"[STARTUP] DG 프록시 ping 실패({_ping_r.status_code}) → 기본 URL 유지", flush=True)
+                except Exception as _ping_e:
+                    print(f"[STARTUP] DG 프록시 ping 오류({_ping_e}) → 기본 URL 유지", flush=True)
     except Exception as _e_dg:
         print(f"[STARTUP] DG 프록시 URL 갱신 스킵: {_e_dg}", flush=True)
 

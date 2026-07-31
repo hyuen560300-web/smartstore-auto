@@ -244,7 +244,7 @@ async def fetch_onch3_products(
                     print(f"[ONCH3] '{kw}' 검색 오류: {e}", flush=True)
             return results
     except Exception as e:
-        print(f"[ONCH3] 소싱 오류: {e}", flush=True)
+        print(f"[ONCH3] 소싱 오류: {type(e).__name__}: {repr(e)}", flush=True)
         return []
 
 
