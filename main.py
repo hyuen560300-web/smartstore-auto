@@ -5030,10 +5030,10 @@ async def _auto_reduce_for_limit(batch: int = 100):
                 continue
             try:
                 rd = datetime.fromisoformat(origin.get("regDate", "").replace("Z", "+00:00"))
+                if rd > cutoff:
+                    continue
             except Exception:
-                continue
-            if rd > cutoff:
-                continue
+                pass  # regDate 없으면 오래됐다고 가정 → SUSPENSION 처리
             pno = str(prod.get("originProductNo", ""))
             ok = await naver_api.set_product_status(pno, "SUSPENSION")
             if ok:
