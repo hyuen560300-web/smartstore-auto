@@ -58,7 +58,7 @@ from main import (
     pipeline_register_from_domeggook,
     fetch_domeggook_products,
     DOMEGGOOK_API_KEY,
-    _DG_KEYWORDS,
+    _get_rotating_keywords,
     pipeline_fix_products,
     NAVER_BASE,
     update_existing_products_seo,
@@ -307,7 +307,7 @@ async def _run_seo_title_refresh(limit: int = 30) -> dict:
 
     if not trend_kws:
         # 폴백: 도매꾹 검색 키워드 사용
-        trend_kws = list(_DG_KEYWORDS)[:15]
+        trend_kws = _get_rotating_keywords(15)
         print("[SEO갱신] 트렌드 수집 실패 — 기본 키워드로 대체", flush=True)
     if not trend_kws:
         return {"ok": False, "reason": "트렌드 키워드 없음"}
@@ -2164,7 +2164,7 @@ async def register_domeggook_sync(request: Request):
     except Exception:
         body = {}
     limit = int(body.get("limit", 1))
-    keywords = body.get("keywords") or _DG_KEYWORDS
+    keywords = body.get("keywords") or _get_rotating_keywords(15)
     min_price = int(body.get("min_price", 3000))
     max_price = int(body.get("max_price", 150000))
     start_page = int(body.get("start_page", 0))
@@ -2335,7 +2335,7 @@ async def register_from_domeggook(request: Request, background_tasks: Background
     except Exception:
         body = {}
     limit      = int(body.get("limit", 10))
-    keywords   = body.get("keywords") or _DG_KEYWORDS
+    keywords   = body.get("keywords") or _get_rotating_keywords(15)
     min_price  = int(body.get("min_price", 3000))
     max_price  = int(body.get("max_price", 150000))
     start_page = int(body.get("start_page", 0))
@@ -2358,7 +2358,7 @@ async def domeggook_preview(limit: int = 10, keyword: str = ""):
     """도매꾹 API 상품 미리보기 — 등록 없이 수집 결과만 확인."""
     if not DOMEGGOOK_API_KEY:
         return JSONResponse({"status": "error", "message": "DOMEGGOOK_API_KEY 없음"}, status_code=400)
-    kws = [keyword] if keyword else _DG_KEYWORDS
+    kws = [keyword] if keyword else _get_rotating_keywords(15)
     products = await fetch_domeggook_products(kws, pool_size=limit * 2)
     return JSONResponse({
         "count": len(products[:limit]),
@@ -8013,7 +8013,7 @@ async def command_endpoint(request: Request, background_tasks: BackgroundTasks):
         if not DOMEGGOOK_API_KEY:
             return JSONResponse({"status": "error", "message": "DOMEGGOOK_API_KEY 미설정"}, status_code=400)
         limit      = int(params.get("limit", 5))
-        keywords   = params.get("keywords") or _DG_KEYWORDS
+        keywords   = params.get("keywords") or _get_rotating_keywords(15)
         min_price  = int(params.get("min_price", 3000))
         max_price  = int(params.get("max_price", 150000))
         start_page = int(params.get("start_page", 0))
