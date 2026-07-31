@@ -197,6 +197,7 @@ async def fetch_onch3_products(
     pool_size: int = 60,
     min_price: int = 2000,
     max_price: int = 150000,
+    start_page: int = 1,
 ) -> list[dict]:
     """온채널 소싱 — Bridge(로컬PC) 우선, 실패 시 직접 httpx."""
     if not ONCH3_ID or not ONCH3_PW:
@@ -211,6 +212,7 @@ async def fetch_onch3_products(
                 _br = await _bc.get(f"{_ONCH3_BRIDGE}/onch3-source", params={
                     "keywords": kw_str, "pool_size": pool_size,
                     "min_price": min_price, "max_price": max_price,
+                    "start_page": start_page,
                 })
                 _bd = _br.json()
                 if _bd.get("ok"):
@@ -242,7 +244,7 @@ async def fetch_onch3_products(
                     break
                 try:
                     r2 = await c.get(
-                        f"{_CATALOG_URL}?keyword={urllib.parse.quote(kw)}&page=1"
+                        f"{_CATALOG_URL}?keyword={urllib.parse.quote(kw)}&page={start_page}"
                     )
                     products = _parse_products(r2.text)
                     for p in products:

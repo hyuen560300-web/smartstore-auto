@@ -4648,9 +4648,11 @@ async def pipeline_register_from_domeggook(
     if not products:
         print("[도매꾹파이프라인] DG 응답 없음 → 온채널 폴백 소싱 시도", flush=True)
         _onch3_kws = keywords or _get_rotating_keywords(15)
+        _onch3_start = max(start_page, 1)
         products = await onch3_sourcing.fetch_onch3_products(
             _onch3_kws, pool_size=max(limit * 20, 30),
             min_price=min_price, max_price=max_price,
+            start_page=_onch3_start,
         )
         if not products:
             return {"status": "error", "message": "도매꾹+온채널 모두 상품 없음 — DG IP차단 여부 및 ONCH3_ID/PW 확인"}
