@@ -196,17 +196,56 @@ async def fetch_onch3_products(
     min_price: int = 2000,
     max_price: int = 150000,
 ) -> list[dict]:
-    """비동기 래퍼 — 동기 함수를 executor에서 실행."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: fetch_onch3_products_sync(
-            keywords=keywords,
-            pool_size=pool_size,
-            min_price=min_price,
-            max_price=max_price,
-        ),
-    )
+    """httpx 기반 온채널 비동기 소싱 — Railway urllib 타임아웃 우회."""
+    if not ONCH3_ID or not ONCH3_PW:
+        print("[ONCH3] ONCH3_ID/PW 미설정 → 스킵", flush=True)
+        return []
+    try:
+        async with httpx.AsyncClient(
+            headers=_HEADERS, follow_redirects=True, timeout=20
+        ) as c:
+            await c.get(_LOGIN_URL)
+            r = await c.post(_LOGIN_URL, data={
+                "referer_url": "/index.php",
+                "username": ONCH3_ID,
+                "password": ONCH3_PW,
+                "login": "",
+            })
+            chk = r.text[:4000]
+            if 'name="username"' in chk or "비밀번호를 잘못" in chk:
+                print("[ONCH3] 로그인 실패 — ID/PW 확인 필요", flush=True)
+                return []
+            seen: set[str] = set()
+            results: list[dict] = []
+            for kw in keywords:
+                if len(results) >= pool_size:
+                    break
+                try:
+                    r2 = await c.get(
+                        f"{_CATALOG_URL}?keyword={urllib.parse.quote(kw)}&page=1"
+                    )
+                    products = _parse_products(r2.text)
+                    for p in products:
+                        if len(results) >= pool_size:
+                            break
+                        code = p["_onch3_code"]
+                        if code in seen:
+                            continue
+                        if not (min_price <= p["price"] <= max_price):
+                            continue
+                        seen.add(code)
+                        results.append(p)
+                    print(
+                        f"[ONCH3] '{kw}' → {len(products)}개 파싱, 누적 {len(results)}개",
+                        flush=True,
+                    )
+                    await asyncio.sleep(_CALL_INTERVAL)
+                except Exception as e:
+                    print(f"[ONCH3] '{kw}' 검색 오류: {e}", flush=True)
+            return results
+    except Exception as e:
+        print(f"[ONCH3] 소싱 오류: {e}", flush=True)
+        return []
 
 
 # ═══════════════════════════════════════════════════════════════════════
