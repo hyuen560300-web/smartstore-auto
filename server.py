@@ -4649,9 +4649,10 @@ async def reduce_now_endpoint():
 
 
 @app.post("/reduce-sync")
-async def reduce_sync_endpoint(batch: int = 10):
-    """한도 정리 — 동기 실행, 결과 즉시 반환 (batch 기본 10개, max 20)."""
-    batch = min(batch, 20)
+async def reduce_sync_endpoint(batch: int = 5):
+    """한도 정리 — 동기 실행, channelProductNo 기반 상태 변경, 상품 간 2초 딜레이."""
+    import asyncio as _asyncio
+    batch = min(batch, 10)
     suspended = 0
     from main import naver_api, NAVER_BASE
     import httpx as _httpx
@@ -4659,7 +4660,7 @@ async def reduce_sync_endpoint(batch: int = 10):
     hdrs = await naver_api._headers()
     now = datetime.now(timezone.utc)
     errors = []
-    async with _httpx.AsyncClient(timeout=20) as c:
+    async with _httpx.AsyncClient(timeout=25) as c:
         try:
             r = await c.post(
                 f"{NAVER_BASE}/v1/products/search",
@@ -4673,24 +4674,61 @@ async def reduce_sync_endpoint(batch: int = 10):
                     "toDate": now.strftime("%Y-%m-%d"),
                 }
             )
+            print(f"[REDUCE-SYNC] 검색 HTTP {r.status_code}", flush=True)
             data = r.json()
             contents = data.get("contents", [])
             print(f"[REDUCE-SYNC] 검색결과 {len(contents)}개", flush=True)
-            for item in contents:
-                pno = str(item.get("originProductNo", ""))
-                if not pno:
-                    continue
-                ok = await naver_api.set_product_status(pno, "SUSPENSION")
-                if ok:
-                    suspended += 1
-                    print(f"[REDUCE-SYNC] ✅ {pno}", flush=True)
-                else:
-                    err = f"실패:{pno}"
-                    errors.append(err)
-                    print(f"[REDUCE-SYNC] ❌ {pno}", flush=True)
         except Exception as e:
-            errors.append(str(e))
-            print(f"[REDUCE-SYNC] 에러: {e}", flush=True)
+            return JSONResponse({"status": "error", "error": str(e), "suspended": 0})
+
+        for item in contents:
+            cpno = str(item.get("channelProductNo", ""))
+            opno = str(item.get("originProductNo", ""))
+            if not cpno and not opno:
+                continue
+            ok = False
+            # 1차: 채널 상품 상태 변경 API
+            if cpno:
+                try:
+                    rc = await c.put(
+                        f"{NAVER_BASE}/v2/products/channel-products/{cpno}/status",
+                        headers=hdrs,
+                        json={"statusType": "SUSPENSION"},
+                    )
+                    if rc.status_code == 200:
+                        ok = True
+                    else:
+                        print(f"[REDUCE-SYNC] 채널API {cpno} HTTP {rc.status_code}: {rc.text[:150]}", flush=True)
+                except Exception as e2:
+                    print(f"[REDUCE-SYNC] 채널API 예외 {cpno}: {e2}", flush=True)
+            # 2차 폴백: 원본 상품 GET → statusType 변경 → PUT
+            if not ok and opno:
+                try:
+                    rg = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{opno}", headers=hdrs)
+                    if rg.status_code == 200:
+                        origin = rg.json().get("originProduct", {})
+                        origin["statusType"] = "SUSPENSION"
+                        rp = await c.put(
+                            f"{NAVER_BASE}/v2/products/origin-products/{opno}",
+                            headers=hdrs,
+                            json={"originProduct": origin},
+                        )
+                        if rp.status_code == 200:
+                            ok = True
+                        else:
+                            print(f"[REDUCE-SYNC] PUT {opno} HTTP {rp.status_code}: {rp.text[:150]}", flush=True)
+                    else:
+                        print(f"[REDUCE-SYNC] GET {opno} HTTP {rg.status_code}", flush=True)
+                except Exception as e3:
+                    print(f"[REDUCE-SYNC] GET→PUT 예외 {opno}: {e3}", flush=True)
+            if ok:
+                suspended += 1
+                print(f"[REDUCE-SYNC] ✅ cpno={cpno} opno={opno}", flush=True)
+            else:
+                errors.append(f"실패:{cpno or opno}")
+                print(f"[REDUCE-SYNC] ❌ cpno={cpno} opno={opno}", flush=True)
+            await _asyncio.sleep(2)  # rate limit 방지
+
     print(f"[REDUCE-SYNC] 완료 — {suspended}개 판매중지", flush=True)
     return JSONResponse({"status": "done", "suspended": suspended, "errors": errors[:5]})
 
