@@ -5009,39 +5009,46 @@ async def pipeline_register_from_domeggook(
 
 
 async def _auto_reduce_for_limit(batch: int = 100):
-    """한도초과(1000개) 감지 시 오래된 SALE 상품 batch개 SUSPENSION 처리."""
-    from datetime import timezone, timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    page, suspended = 1, 0
-    while suspended < batch:
-        try:
-            resp = await naver_api.list_products(page=page, size=100)
-        except Exception as e:
-            print(f"[AUTO-REDUCE] 목록 조회 실패 p{page}: {e}", flush=True)
-            break
-        contents = resp.get("contents", [])
-        if not contents:
-            break
-        for prod in contents:
-            if suspended >= batch:
-                break
-            origin = prod.get("originProduct", {})
-            if origin.get("statusType") not in ("SALE", "SALE_WAIT", "OUT_OF_STOCK"):
-                continue
+    """한도초과(1000개) 감지 시 SALE 상품 batch개 SUSPENSION 처리 (search API만 사용, 빠른 방식)."""
+    import httpx as _httpx
+    hdrs = await naver_api._headers()
+    now = datetime.now(timezone.utc)
+    suspended, page = 0, 1
+    async with _httpx.AsyncClient(timeout=20) as c:
+        while suspended < batch:
             try:
-                rd = datetime.fromisoformat(origin.get("regDate", "").replace("Z", "+00:00"))
-                if rd > cutoff:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=hdrs,
+                    json={
+                        "productStatusTypes": ["SALE"],
+                        "page": page, "size": 50,
+                        "orderType": "NO",
+                        "periodType": "PROD_REG_DAY",
+                        "fromDate": "2020-01-01",
+                        "toDate": now.strftime("%Y-%m-%d"),
+                    }
+                )
+                data = r.json()
+            except Exception as e:
+                print(f"[AUTO-REDUCE] 검색 실패 p{page}: {e}", flush=True)
+                break
+            contents = data.get("contents", [])
+            if not contents:
+                break
+            for item in contents:
+                if suspended >= batch:
+                    break
+                pno = str(item.get("originProductNo", ""))
+                if not pno:
                     continue
-            except Exception:
-                pass  # regDate 없으면 오래됐다고 가정 → SUSPENSION 처리
-            pno = str(prod.get("originProductNo", ""))
-            ok = await naver_api.set_product_status(pno, "SUSPENSION")
-            if ok:
-                suspended += 1
-                print(f"[AUTO-REDUCE] ✅ [{pno}] {origin.get('name','')[:20]}", flush=True)
-        if len(contents) < 100:
-            break
-        page += 1
+                ok = await naver_api.set_product_status(pno, "SUSPENSION")
+                if ok:
+                    suspended += 1
+                    print(f"[AUTO-REDUCE] ✅ [{pno}]", flush=True)
+            if len(contents) < 50:
+                break
+            page += 1
     print(f"[AUTO-REDUCE] 완료 — {suspended}개 판매중지", flush=True)
 
 
