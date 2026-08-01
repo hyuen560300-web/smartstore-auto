@@ -10964,11 +10964,13 @@ async def _run_margin_rank_bg(limit: int = 30):
     _margin_rank_state["total"] = len(nos)
     print(f"[MARGIN-RANK] 수집 완료 총={len(nos)}개 — detail 조회 시작", flush=True)
 
-    # 2. 각 상품 detail → salePrice/DG코드 조회 후 DG search로 도매가 확인
-    # costPrice 필드는 구버그로 전 상품 0이므로 DG search 폴백 사용
+    # 2. 각 상품 detail → salePrice/DG코드 조회 후 getItemView로 도매가 직접 조회
+    # costPrice 필드는 구버그로 전 상품 0 → DG_ prefix 제거 후 getItemView(no=숫자) 사용
     dangerous, optimal, uncompetitive, no_cost = [], [], [], []
 
     _dg_cache: dict = {}  # DG코드별 도매가 캐시 (중복 조회 방지)
+    _dg_url = os.environ.get("DOMEGGOOK_API_URL", "https://domeggook.com/ssl/api/")
+    _dg_key = os.environ.get("DOMEGGOOK_API_KEY", "")
 
     for i, no in enumerate(nos):
         try:
@@ -10991,22 +10993,33 @@ async def _run_margin_rank_bg(limit: int = 30):
                 img_obj = chs[0].get("representativeImage") or {}
                 img = img_obj.get("url", "") if isinstance(img_obj, dict) else ""
 
-            # costPrice=0 이고 DG 코드 있으면 DG search로 실제 도매가 조회
-            if cp == 0 and (dg_code.startswith("DG_") or dg_code.startswith("ONCH3_")):
+            # costPrice=0 이고 DG_ 코드 있으면 getItemView(no=숫자ID)로 실제 도매가 직접 조회
+            # get_real_dg_wholesale()과 동일 로직 — DG_ prefix 제거 후 숫자 ID 추출
+            if cp == 0 and dg_code.startswith("DG_") and _dg_key:
                 if dg_code in _dg_cache:
                     cp = _dg_cache[dg_code]
                 else:
-                    try:
-                        async with _hx.AsyncClient(timeout=8) as cg:
-                            dg_r = await cg.get(
-                                "https://smartstore-auto-production.up.railway.app/dg-search",
-                                params={"keyword": dg_code})
-                        if dg_r.status_code == 200:
-                            dg_items = dg_r.json().get("items", [])
-                            if dg_items:
-                                cp = int(dg_items[0].get("wholesale", 0) or 0)
-                    except Exception:
-                        pass
+                    item_no = dg_code.replace("DG_", "").strip()
+                    # DG_12345678_N 형태에서 _N suffix 제거
+                    if "_" in item_no:
+                        item_no = item_no.split("_")[0]
+                    if item_no.isdigit():
+                        try:
+                            async with _hx.AsyncClient(timeout=20) as cg:
+                                dg_r = await cg.get(_dg_url, params={
+                                    "ver": "4.5", "mode": "getItemView", "aid": _dg_key,
+                                    "no": item_no, "om": "json",
+                                })
+                            raw = dg_r.json().get("domeggook") or {}
+                            price_block = raw.get("price") or {}
+                            dome_raw = price_block.get("dome", 0) if isinstance(price_block, dict) else 0
+                            if isinstance(dome_raw, dict):
+                                dome_raw = dome_raw.get("#text") or dome_raw.get("text") or "0"
+                            cp = int("".join(ch for ch in str(dome_raw) if ch.isdigit()) or "0")
+                            if cp > 10_000_000:  # DG API 비정상값 방어
+                                cp = 0
+                        except Exception:
+                            cp = 0
                     _dg_cache[dg_code] = cp
 
             item = {
