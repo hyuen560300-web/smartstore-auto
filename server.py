@@ -799,12 +799,12 @@ async def _run_rebuild_codes_bg():
         try:
             resp = await asyncio.wait_for(
                 naver_api.list_products(page=page, size=50),
-                timeout=30
+                timeout=180  # 50개 병렬 상세조회 여유 시간
             )
         except asyncio.TimeoutError:
-            print(f"[REBUILD] page {page} 30초 타임아웃 → skip", flush=True)
+            print(f"[REBUILD] page {page} 180초 타임아웃 → skip", flush=True)
             page += 1
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             continue
         except Exception as _e:
             print(f"[REBUILD] page {page} 오류: {_e}", flush=True)
