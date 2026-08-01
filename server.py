@@ -766,6 +766,53 @@ async def myip():
         return r.json()
 
 
+@app.post("/rebuild-registered-codes")
+async def rebuild_registered_codes():
+    """Naver 전체 상품(SALE+SUSPENSION)에서 sellerManagementCode(DG코드)·상품명 추출
+    → ss_registered_codes + ss_registered_names PostgreSQL 재구성."""
+    from main import save_registered_code, save_registered_name, _normalize_name, _norm_code
+    inserted_codes, inserted_names, skipped, pages = 0, 0, 0, 0
+    page = 1
+    while True:
+        try:
+            resp = await naver_api.list_products(page=page, size=50)
+        except Exception as e:
+            break
+        contents = resp.get("contents", [])
+        if not contents:
+            break
+        pages += 1
+        for p in contents:
+            origin = p.get("originProduct", {}) or {}
+            name_raw = (origin.get("name") or p.get("name") or "").strip()
+            dg_raw = (((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
+                      .get("sellerManagementCode", "") or "")
+            # DG 코드 저장
+            if dg_raw:
+                try:
+                    save_registered_code(dg_raw)
+                    inserted_codes += 1
+                except Exception:
+                    skipped += 1
+            # 상품명 저장
+            if name_raw:
+                try:
+                    save_registered_name(name_raw)
+                    inserted_names += 1
+                except Exception:
+                    pass
+        page += 1
+        if page > 30:  # 최대 1500개
+            break
+    return JSONResponse({
+        "status": "done",
+        "pages": pages,
+        "inserted_codes": inserted_codes,
+        "inserted_names": inserted_names,
+        "skipped": skipped,
+    })
+
+
 # ─── POD 상품 등록 ───────────────────────────────────────────────────────────
 @app.post("/register-pod")
 async def register_pod_product(request: Request):
