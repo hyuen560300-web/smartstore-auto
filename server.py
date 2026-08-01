@@ -10739,6 +10739,35 @@ async def top_products_result():
     return JSONResponse(_top_products_state)
 
 
+@app.get("/debug-insight/{channel_no}")
+async def debug_insight(channel_no: str, days: int = 30):
+    """특정 채널상품 insight API 원문 반환 (진단용)."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    from_d = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    to_d = now.strftime("%Y-%m-%d")
+    hdrs = await naver_api._headers()
+    async with httpx.AsyncClient(timeout=12) as c:
+        r = await c.get(
+            f"{NAVER_BASE}/v1/channel-products/{channel_no}/insights",
+            headers=hdrs,
+            params={"searchDateFrom": from_d, "searchDateTo": to_d},
+        )
+    body_text = r.text[:2000]
+    try:
+        body_json = r.json()
+    except Exception:
+        body_json = None
+    return JSONResponse({
+        "status_code": r.status_code,
+        "channel_no": channel_no,
+        "from_date": from_d,
+        "to_date": to_d,
+        "body_text": body_text,
+        "body_json": body_json,
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
