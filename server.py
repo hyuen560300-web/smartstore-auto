@@ -10768,6 +10768,160 @@ async def debug_insight(channel_no: str, days: int = 30):
     })
 
 
+# ── 가격 경쟁력 순위 스캔 ────────────────────────────────────────────────────
+
+_pcomp_state: dict = {"status": "idle", "scanned": 0, "total": 0, "results": [], "error": ""}
+
+
+def _title_issues(name: str, market_titles: list[str]) -> list[str]:
+    """상품명 품질 진단 — 개선 필요 항목 목록 반환."""
+    issues = []
+    clean = name.strip()
+    if len(clean) < 15:
+        issues.append("제목 너무 짧음 (15자 미만)")
+    elif len(clean) < 25:
+        issues.append("제목 짧음 (25자 미만 — 키워드 추가 권장)")
+    has_number = any(c.isdigit() for c in clean)
+    if not has_number:
+        issues.append("수량/사이즈 숫자 없음 — 상세 스펙 추가 권장")
+    _BAD_KW = ["산리오", "bts", "나이키", "nike", "adidas", "disney", "포켓몬",
+               "캐릭터", "브랜드", "정품", "공식"]
+    name_l = clean.lower()
+    for kw in _BAD_KW:
+        if kw in name_l:
+            issues.append(f"IP 위험 키워드: '{kw}'")
+    if market_titles:
+        from collections import Counter
+        words = []
+        for t in market_titles[:5]:
+            words.extend(t.split())
+        freq = Counter(words).most_common(5)
+        top_kws = [w for w, _ in freq if len(w) >= 2 and w not in {"상품", "제품", "배송", "무료"}]
+        missing = [kw for kw in top_kws[:3] if kw not in clean]
+        if missing:
+            issues.append(f"경쟁 키워드 누락: {' / '.join(missing)}")
+    return issues
+
+
+async def _run_pcomp_bg(sample: int, limit: int, start_page: int):
+    global _pcomp_state
+    _pcomp_state = {"status": "running", "scanned": 0, "total": 0, "results": [], "error": ""}
+
+    from main import search_naver_shopping as _search_shop
+
+    # 1. SALE 상품 수집
+    products: list[dict] = []
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        hdrs = await naver_api._headers()
+    except Exception as e:
+        _pcomp_state.update({"status": "error", "error": f"토큰 오류: {str(e)[:80]}"})
+        return
+
+    page = start_page
+    while len(products) < sample:
+        size = min(50, sample - len(products))
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=hdrs,
+                                 json={"productStatusTypes": ["SALE"], "page": page, "size": size,
+                                       "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01",
+                                       "toDate": now_str})
+            body = r.json()
+            contents = body.get("contents", [])
+            if not contents:
+                break
+            for item in contents:
+                chs = item.get("channelProducts") or []
+                ch = chs[0] if chs else {}
+                if ch.get("statusType") != "SALE":
+                    continue
+                name = ch.get("name", "").strip()
+                price = int(ch.get("salePrice") or 0)
+                channel_no = str(ch.get("channelProductNo") or "")
+                origin_no = str(item.get("originProductNo") or "")
+                img = (ch.get("representativeImage") or {})
+                if name and price > 0 and channel_no:
+                    products.append({
+                        "channel_no": channel_no, "origin_no": origin_no,
+                        "name": name, "price": price,
+                        "image": img.get("url", "") if isinstance(img, dict) else "",
+                        "category": ch.get("wholeCategoryName", ""),
+                    })
+            if body.get("last") or len(contents) < size:
+                # 마지막 페이지 → 처음으로 순환 (page 1부터 재시도)
+                if page > 1:
+                    page = 1
+                else:
+                    break
+            else:
+                page += 1
+        except Exception as e:
+            _pcomp_state["error"] = f"수집 오류 p{page}: {str(e)[:80]}"
+            break
+
+    _pcomp_state["total"] = len(products)
+
+    # 2. 네이버 쇼핑 최저가 비교 (세마포어 3개 동시)
+    sem = asyncio.Semaphore(3)
+
+    async def _compare(prod: dict) -> dict:
+        async with sem:
+            query = prod["name"][:20]
+            items = await _search_shop(query, display=5)
+            prices = [it["price"] for it in (items or []) if it.get("price", 0) > 0]
+            titles = [it["title"] for it in (items or []) if it.get("title")]
+            if prices:
+                market_min = min(prices)
+                ratio = round(prod["price"] / market_min, 3)
+            else:
+                market_min = None
+                ratio = None
+            issues = _title_issues(prod["name"], titles)
+            prod.update({
+                "market_min": market_min,
+                "ratio": ratio,
+                "ratio_pct": f"{round((ratio - 1) * 100, 1):+.1f}%" if ratio else "검색없음",
+                "competitive": ratio is not None and ratio <= 1.15,
+                "issues": issues,
+                "url": f"https://smartstore.naver.com/thepick/products/{prod['channel_no']}",
+            })
+            _pcomp_state["scanned"] += 1
+            await asyncio.sleep(0.2)
+        return prod
+
+    enriched = list(await asyncio.gather(*[_compare(p) for p in products]))
+
+    # 3. 정렬: ratio 오름차순 (낮을수록 경쟁력 높음), 검색결과 없는 것 후순위
+    enriched.sort(key=lambda x: (x.get("ratio") is None, x.get("ratio") or 9999))
+    _pcomp_state.update({"status": "done", "results": enriched[:limit]})
+    print(f"[PCOMP] 완료 scanned={len(enriched)} competitive={sum(1 for p in enriched if p.get('competitive'))}", flush=True)
+
+
+@app.post("/price-competition-scan")
+async def price_competition_scan(
+    background_tasks: BackgroundTasks,
+    sample: int = 100,
+    limit: int = 30,
+    start_page: int = 1,
+):
+    """가격 경쟁력 스캔 — SALE 상품 vs 네이버쇼핑 최저가 비율 순위.
+    결과: GET /price-competition-result"""
+    if _pcomp_state.get("status") == "running":
+        return JSONResponse({"status": "already_running",
+                             "scanned": _pcomp_state.get("scanned"),
+                             "total": _pcomp_state.get("total")})
+    background_tasks.add_task(_run_pcomp_bg, sample=sample, limit=limit, start_page=start_page)
+    return {"status": "started", "sample": sample, "limit": limit,
+            "start_page": start_page, "result_url": "/price-competition-result"}
+
+
+@app.get("/price-competition-result")
+async def price_competition_result():
+    """price-competition-scan 결과 조회."""
+    return JSONResponse(_pcomp_state)
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
