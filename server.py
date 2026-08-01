@@ -772,21 +772,50 @@ _rebuild_codes_state: dict = {"running": False, "result": None}
 async def _run_rebuild_codes_bg():
     global _rebuild_codes_state
     from main import save_registered_code, save_registered_name
-    _rebuild_codes_state = {"running": True, "result": None}
+    import httpx as _httpx
+
+    CONTEXT_URL = "https://loving-serenity-production-2635.up.railway.app"
+    RESUME_KEY = "ss.rebuild_last_page"
+
+    # resume: 이전 중단 지점 읽기
+    start_page = 1
+    try:
+        async with _httpx.AsyncClient(timeout=5) as _c:
+            _r = await _c.get(f"{CONTEXT_URL}/context/{RESUME_KEY}")
+            if _r.status_code == 200:
+                _val = (_r.json() or {}).get("value")
+                if _val and str(_val).isdigit() and int(_val) >= 1:
+                    start_page = int(_val) + 1
+                    print(f"[REBUILD] resume: page {start_page}부터 재개", flush=True)
+    except Exception:
+        pass
+
+    _rebuild_codes_state = {"running": True, "result": None, "start_page": start_page}
     inserted_codes, inserted_names, skipped, pages = 0, 0, 0, 0
-    page = 1
+    page = start_page
+    finished = False
+
     while True:
         try:
             resp = await naver_api.list_products(page=page, size=50)
-        except Exception:
+        except Exception as _e:
+            print(f"[REBUILD] page {page} 오류: {_e}", flush=True)
             break
         contents = resp.get("contents", [])
         if not contents:
+            finished = True
+            # 전체 완료 → resume 키 삭제
+            try:
+                async with _httpx.AsyncClient(timeout=5) as _c:
+                    await _c.delete(f"{CONTEXT_URL}/context/{RESUME_KEY}")
+            except Exception:
+                pass
             break
+
         pages += 1
-        for p in contents:
-            origin = p.get("originProduct", {}) or {}
-            name_raw = (origin.get("name") or p.get("name") or "").strip()
+        for _p in contents:
+            origin = _p.get("originProduct", {}) or {}
+            name_raw = (origin.get("name") or _p.get("name") or "").strip()
             dg_raw = (((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
                       .get("sellerManagementCode", "") or "")
             if dg_raw:
@@ -801,14 +830,27 @@ async def _run_rebuild_codes_bg():
                     inserted_names += 1
                 except Exception:
                     pass
+
+        # 5페이지마다 진행 상태 저장 (resume 지원)
+        if page % 5 == 0:
+            try:
+                async with _httpx.AsyncClient(timeout=5) as _c:
+                    await _c.post(f"{CONTEXT_URL}/context",
+                                  json={"key": RESUME_KEY, "value": str(page), "category": "rebuild"})
+                print(f"[REBUILD] checkpoint: page {page} 저장", flush=True)
+            except Exception:
+                pass
+
         page += 1
-        if page > 30:
-            break
+        await asyncio.sleep(1)  # 이벤트 루프 여유 + Naver API rate limit 방지
+
     _rebuild_codes_state = {
         "running": False,
         "result": {
-            "status": "done",
-            "pages": pages,
+            "status": "done" if finished else "partial",
+            "start_page": start_page,
+            "end_page": page - 1,
+            "total_pages": pages,
             "inserted_codes": inserted_codes,
             "inserted_names": inserted_names,
             "skipped": skipped,
