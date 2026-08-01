@@ -821,23 +821,37 @@ async def _run_rebuild_codes_bg():
             break
 
         pages += 1
+        codes_to_save, names_to_save = [], []
         for _p in contents:
             origin = _p.get("originProduct", {}) or {}
             name_raw = (origin.get("name") or _p.get("name") or "").strip()
             dg_raw = (((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
                       .get("sellerManagementCode", "") or "")
             if dg_raw:
-                try:
-                    save_registered_code(dg_raw)
-                    inserted_codes += 1
-                except Exception:
-                    skipped += 1
+                codes_to_save.append(dg_raw)
             if name_raw:
+                names_to_save.append(name_raw)
+
+        # 배치 저장 — asyncio.to_thread로 이벤트 루프 블록 방지
+        def _batch_save(_codes=codes_to_save, _names=names_to_save):
+            _ok, _sk = 0, 0
+            for _c in _codes:
                 try:
-                    save_registered_name(name_raw)
-                    inserted_names += 1
+                    save_registered_code(_c)
+                    _ok += 1
+                except Exception:
+                    _sk += 1
+            for _n in _names:
+                try:
+                    save_registered_name(_n)
                 except Exception:
                     pass
+            return _ok, _sk
+
+        _ok, _sk = await asyncio.to_thread(_batch_save)
+        inserted_codes += _ok
+        skipped += _sk
+        inserted_names += len(names_to_save)
 
         # 5페이지마다 진행 상태 저장 (resume 지원)
         if page % 5 == 0:
