@@ -10605,35 +10605,55 @@ async def _run_top_products_bg(sample: int, limit: int, days: int, sort_by: str)
     global _top_products_state
     _top_products_state = {"status": "running", "scanned": 0, "total": 0, "top": [], "error": ""}
 
-    # 1. SALE 상품 수집
+    # 1. SALE 상품 수집 — search API 직접 사용 (list_products의 개별 detail 조회 우회)
     products: list[dict] = []
     page = 1
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        hdrs = await naver_api._headers()
+    except Exception as e:
+        _top_products_state.update({"status": "error", "error": f"토큰 오류: {str(e)[:100]}"})
+        return
+
     while len(products) < sample:
         size = min(50, sample - len(products))
         try:
-            data = await naver_api.list_products(page=page, size=size)
-            contents = data.get("contents", [])
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search",
+                    headers=hdrs,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": size,
+                          "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now_str},
+                )
+            if r.status_code != 200:
+                _top_products_state["error"] = f"search API {r.status_code}"
+                break
+            body = r.json()
+            contents = body.get("contents", [])
             if not contents:
                 break
             for item in contents:
-                origin = item.get("originProduct") or {}
-                status = origin.get("statusType") or item.get("statusType", "")
-                if status != "SALE":
+                chs = item.get("channelProducts") or []
+                ch = chs[0] if chs else {}
+                if ch.get("statusType") != "SALE":
                     continue
-                channel_no = str(item.get("channelProductNo") or "")
+                channel_no = str(ch.get("channelProductNo") or "")
                 if not channel_no:
                     continue
+                img_obj = ch.get("representativeImage") or {}
                 products.append({
                     "channel_no": channel_no,
                     "origin_no": str(item.get("originProductNo") or ""),
-                    "name": str(origin.get("name") or item.get("name") or ""),
-                    "price": int(origin.get("salePrice") or item.get("salePrice") or 0),
+                    "name": ch.get("name", ""),
+                    "price": int(ch.get("salePrice") or 0),
+                    "image": img_obj.get("url", "") if isinstance(img_obj, dict) else "",
+                    "category": ch.get("wholeCategoryName", ""),
                 })
-            if len(contents) < size:
+            if len(contents) < size or body.get("last"):
                 break
             page += 1
         except Exception as e:
-            _top_products_state["error"] = f"list_products 오류: {str(e)[:100]}"
+            _top_products_state["error"] = f"search 오류: {str(e)[:100]}"
             break
 
     _top_products_state["total"] = len(products)
