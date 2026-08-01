@@ -10597,19 +10597,15 @@ async def ip_suspend_result_endpoint():
 
 # ── 상위 상품 조회 (Naver Insight 기반) ─────────────────────────────────────
 
-@app.get("/top-products")
-async def top_products_endpoint(
-    limit: int = 20,
-    sample: int = 100,
-    days: int = 30,
-    sort_by: str = "wishlist",
-):
-    """
-    Naver channel-product insight 기반 상위 상품 조회.
-    - SALE 상품 최대 sample개 스캔 후 insight(찜수·클릭수·주문수) 병렬 조회
-    - sort_by: wishlist | clicks | orders | composite
-    - 결과: 상위 limit개 + 원본 insight 필드 전체 포함
-    """
+_top_products_state: dict = {"status": "idle", "scanned": 0, "total": 0, "top": [], "error": ""}
+
+
+async def _run_top_products_bg(sample: int, limit: int, days: int, sort_by: str):
+    """백그라운드: SALE 상품 수집 → insight 병렬 조회 → 정렬 저장."""
+    global _top_products_state
+    _top_products_state = {"status": "running", "scanned": 0, "total": 0, "top": [], "error": ""}
+
+    # 1. SALE 상품 수집
     products: list[dict] = []
     page = 1
     while len(products) < sample:
@@ -10637,28 +10633,47 @@ async def top_products_endpoint(
                 break
             page += 1
         except Exception as e:
+            _top_products_state["error"] = f"list_products 오류: {str(e)[:100]}"
             break
 
+    _top_products_state["total"] = len(products)
+
+    # 2. insight 병렬 조회 (동시 5개, 타임아웃 8초, 재시도 없음)
     sem = asyncio.Semaphore(5)
 
-    async def _fetch(prod: dict) -> dict:
+    async def _fetch_insight(prod: dict) -> dict:
         async with sem:
-            insight = await naver_api.get_product_insight(prod["channel_no"], days=days)
-            raw = insight or {}
+            raw: dict = {}
+            try:
+                from datetime import timedelta
+                hdrs = await naver_api._headers()
+                now = datetime.now(timezone.utc)
+                from_d = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+                to_d = now.strftime("%Y-%m-%d")
+                async with httpx.AsyncClient(timeout=8) as c:
+                    r = await c.get(
+                        f"{NAVER_BASE}/v1/channel-products/{prod['channel_no']}/insights",
+                        headers=hdrs,
+                        params={"searchDateFrom": from_d, "searchDateTo": to_d},
+                    )
+                    if r.status_code == 200:
+                        raw = r.json()
+            except Exception:
+                pass
             wishlist = int(raw.get("wishlistCount") or raw.get("keepCount") or 0)
             clicks   = int(raw.get("clickCount")    or raw.get("viewCount")  or 0)
             orders   = int(raw.get("orderCount")    or raw.get("salesQuantity") or 0)
             prod.update({
-                "wishlist": wishlist,
-                "clicks":   clicks,
-                "orders":   orders,
-                "score":    wishlist * 3 + clicks + orders * 5,
+                "wishlist": wishlist, "clicks": clicks, "orders": orders,
+                "score": wishlist * 3 + clicks + orders * 5,
                 "_insight_raw": raw,
             })
+            _top_products_state["scanned"] += 1
         return prod
 
-    enriched = list(await asyncio.gather(*[_fetch(p) for p in products]))
+    enriched = list(await asyncio.gather(*[_fetch_insight(p) for p in products]))
 
+    # 3. 정렬 및 저장
     key_map = {
         "wishlist":  lambda x: x.get("wishlist", 0),
         "clicks":    lambda x: x.get("clicks", 0),
@@ -10667,17 +10682,37 @@ async def top_products_endpoint(
     }
     enriched.sort(key=key_map.get(sort_by, key_map["wishlist"]), reverse=True)
     top = enriched[:limit]
-
     for p in top:
         if p.get("channel_no"):
             p["url"] = f"https://smartstore.naver.com/thepick/products/{p['channel_no']}"
 
-    return {
-        "scanned": len(products),
-        "days": days,
-        "sort_by": sort_by,
-        "top": top,
-    }
+    _top_products_state.update({"status": "done", "top": top})
+
+
+@app.post("/top-products-scan")
+async def top_products_scan(
+    background_tasks: BackgroundTasks,
+    sample: int = 100,
+    limit: int = 20,
+    days: int = 30,
+    sort_by: str = "wishlist",
+):
+    """Naver insight 기반 상위 상품 스캔 시작 (백그라운드). 결과: GET /top-products-result"""
+    if _top_products_state.get("status") == "running":
+        return JSONResponse({"status": "already_running",
+                             "scanned": _top_products_state.get("scanned"),
+                             "total": _top_products_state.get("total")})
+    background_tasks.add_task(_run_top_products_bg, sample=sample, limit=limit,
+                              days=days, sort_by=sort_by)
+    return {"status": "started", "sample": sample, "limit": limit,
+            "days": days, "sort_by": sort_by,
+            "result_url": "/top-products-result"}
+
+
+@app.get("/top-products-result")
+async def top_products_result():
+    """top-products-scan 결과 조회."""
+    return JSONResponse(_top_products_state)
 
 
 if __name__ == "__main__":
