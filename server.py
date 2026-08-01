@@ -10595,6 +10595,91 @@ async def ip_suspend_result_endpoint():
     return JSONResponse(_ip_suspend_result)
 
 
+# ── 상위 상품 조회 (Naver Insight 기반) ─────────────────────────────────────
+
+@app.get("/top-products")
+async def top_products_endpoint(
+    limit: int = 20,
+    sample: int = 100,
+    days: int = 30,
+    sort_by: str = "wishlist",
+):
+    """
+    Naver channel-product insight 기반 상위 상품 조회.
+    - SALE 상품 최대 sample개 스캔 후 insight(찜수·클릭수·주문수) 병렬 조회
+    - sort_by: wishlist | clicks | orders | composite
+    - 결과: 상위 limit개 + 원본 insight 필드 전체 포함
+    """
+    products: list[dict] = []
+    page = 1
+    while len(products) < sample:
+        size = min(50, sample - len(products))
+        try:
+            data = await naver_api.list_products(page=page, size=size)
+            contents = data.get("contents", [])
+            if not contents:
+                break
+            for item in contents:
+                origin = item.get("originProduct") or {}
+                status = origin.get("statusType") or item.get("statusType", "")
+                if status != "SALE":
+                    continue
+                channel_no = str(item.get("channelProductNo") or "")
+                if not channel_no:
+                    continue
+                products.append({
+                    "channel_no": channel_no,
+                    "origin_no": str(item.get("originProductNo") or ""),
+                    "name": str(origin.get("name") or item.get("name") or ""),
+                    "price": int(origin.get("salePrice") or item.get("salePrice") or 0),
+                })
+            if len(contents) < size:
+                break
+            page += 1
+        except Exception as e:
+            break
+
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch(prod: dict) -> dict:
+        async with sem:
+            insight = await naver_api.get_product_insight(prod["channel_no"], days=days)
+            raw = insight or {}
+            wishlist = int(raw.get("wishlistCount") or raw.get("keepCount") or 0)
+            clicks   = int(raw.get("clickCount")    or raw.get("viewCount")  or 0)
+            orders   = int(raw.get("orderCount")    or raw.get("salesQuantity") or 0)
+            prod.update({
+                "wishlist": wishlist,
+                "clicks":   clicks,
+                "orders":   orders,
+                "score":    wishlist * 3 + clicks + orders * 5,
+                "_insight_raw": raw,
+            })
+        return prod
+
+    enriched = list(await asyncio.gather(*[_fetch(p) for p in products]))
+
+    key_map = {
+        "wishlist":  lambda x: x.get("wishlist", 0),
+        "clicks":    lambda x: x.get("clicks", 0),
+        "orders":    lambda x: x.get("orders", 0),
+        "composite": lambda x: x.get("score", 0),
+    }
+    enriched.sort(key=key_map.get(sort_by, key_map["wishlist"]), reverse=True)
+    top = enriched[:limit]
+
+    for p in top:
+        if p.get("channel_no"):
+            p["url"] = f"https://smartstore.naver.com/thepick/products/{p['channel_no']}"
+
+    return {
+        "scanned": len(products),
+        "days": days,
+        "sort_by": sort_by,
+        "top": top,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
