@@ -5,4 +5,4 @@ builder = "dockerfile"
 healthcheckPath = "/health"
 healthcheckTimeout = 600
 restartPolicyType = "always"
-startCommand = "uvicorn server:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 75"
+startCommand = "sh -c 'uvicorn server:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-keep-alive 75'"
