@@ -8210,6 +8210,17 @@ async def startup_event():
             print(f"[STARTUP] HTML 재적용 재개 실패: {_re}", flush=True)
     _asyncio.create_task(_resume_html_reapply_job())
 
+    # 매일 02:00 KST — IP위반 상품 판매중지 (DANGEROUS_KEYWORDS: 산리오/쿠로미 등)
+    async def _job_daily_ip_suspend():
+        try:
+            await _run_ip_suspend_bg()
+        except Exception as e:
+            print(f"[SCHED] IP suspend 오류: {e}", flush=True)
+    scheduler.add_job(_job_daily_ip_suspend, "cron", hour=2, minute=0,
+                      id="daily_ip_suspend", replace_existing=True,
+                      misfire_grace_time=600, coalesce=True)
+    print("[SERVER] 스케줄러 등록: IP위반 판매중지 02:00 KST", flush=True)
+
     try:
         scheduler.start()
         print("[STARTUP] APScheduler 시작 완료 — n8n 워크플로우 3개 대체", flush=True)
