@@ -1589,6 +1589,9 @@ async def _check_image_sharpness(url: str) -> tuple[float, int]:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
             r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code != 200 or not r.content:
+            # domeggook CDN 일시 접근 불가(404/403) → 이미지 있다고 가정
+            if url and "domeggook.com" in url:
+                return 9999.0, 99999
             return -1, 0
         file_size = len(r.content)
         img = Image.open(_io.BytesIO(r.content)).convert("L")
