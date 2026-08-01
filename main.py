@@ -1462,6 +1462,16 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
     _desc_html = str((detail.get("desc", {}) or {}).get("contents", {}).get("item", "") or "") if detail else ""
     extra_images = extract_domeggook_images(_desc_html, main_url=image, max_count=20)
 
+    # 도매가(dome): fetch 시점에 캐시 선행 저장 → 등록 시 _get_dg_wholesale 재호출 방지
+    _price_block = detail.get("price", {}) if detail else {}
+    _dome_raw = _price_block.get("dome", 0) if isinstance(_price_block, dict) else 0
+    if isinstance(_dome_raw, dict):
+        _dome_raw = _dome_raw.get("#text") or _dome_raw.get("text") or "0"
+    _dome_price = int("".join(c for c in str(_dome_raw) if c.isdigit()) or "0")
+    if 0 < _dome_price <= 10_000_000:
+        import time as _time_dp
+        _DG_WHOLESALE_CACHE[f"DG_{no}"] = (_dome_price, _time_dp.time())
+
     return {
         "code":             f"DG_{no}",
         "name":             name,
@@ -1475,6 +1485,7 @@ def _dg_to_product(item: dict, detail: dict) -> dict | None:
         "_dg_img_count":    img_count,
         "_dg_img_use":      img_use_ok,
         "_dg_extra_images": extra_images,
+        "_dg_dome_price":   _dome_price,
     }
 
 
@@ -4538,6 +4549,8 @@ async def pipeline_register_products(excel_path: str, limit: int = 33) -> dict:
             # 실제 도매 공급가 조회 (getItemView price.dome) — p.get("price")는 소매가이므로 사용 금지
             _ss_wholesale_here = await _get_dg_wholesale(code)
             if _ss_wholesale_here <= 0:
+                _ss_wholesale_here = int(p.get("_dg_dome_price", 0))
+            if _ss_wholesale_here <= 0:
                 print(f"[소싱스킵] 공급가조회실패: {p.get('name','')[:30]} (DG{code})", flush=True)
                 results["skip"] += 1
                 continue
@@ -4799,6 +4812,9 @@ async def pipeline_register_from_domeggook(
                     continue
             else:
                 _ss_wholesale = await _get_dg_wholesale(code)
+                if _ss_wholesale <= 0:
+                    # fetch 시점 _dg_to_product에서 저장한 dome 가격 폴백
+                    _ss_wholesale = int(p.get("_dg_dome_price", 0))
                 if _ss_wholesale <= 0:
                     print(f"[STEP1] ⛔ 공급가조회실패: {p.get('name','')[:30]} (DG{code}) — 소싱스킵", flush=True)
                     results["skip"] += 1
