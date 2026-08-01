@@ -10964,8 +10964,11 @@ async def _run_margin_rank_bg(limit: int = 30):
     _margin_rank_state["total"] = len(nos)
     print(f"[MARGIN-RANK] 수집 완료 총={len(nos)}개 — detail 조회 시작", flush=True)
 
-    # 2. 각 상품 detail → costPrice/salePrice 조회 (costPrice는 등록 시 저장된 도매가)
+    # 2. 각 상품 detail → salePrice/DG코드 조회 후 DG search로 도매가 확인
+    # costPrice 필드는 구버그로 전 상품 0이므로 DG search 폴백 사용
     dangerous, optimal, uncompetitive, no_cost = [], [], [], []
+
+    _dg_cache: dict = {}  # DG코드별 도매가 캐시 (중복 조회 방지)
 
     for i, no in enumerate(nos):
         try:
@@ -10988,6 +10991,24 @@ async def _run_margin_rank_bg(limit: int = 30):
                 img_obj = chs[0].get("representativeImage") or {}
                 img = img_obj.get("url", "") if isinstance(img_obj, dict) else ""
 
+            # costPrice=0 이고 DG 코드 있으면 DG search로 실제 도매가 조회
+            if cp == 0 and (dg_code.startswith("DG_") or dg_code.startswith("ONCH3_")):
+                if dg_code in _dg_cache:
+                    cp = _dg_cache[dg_code]
+                else:
+                    try:
+                        async with _hx.AsyncClient(timeout=8) as cg:
+                            dg_r = await cg.get(
+                                "https://smartstore-auto-production.up.railway.app/dg-search",
+                                params={"keyword": dg_code})
+                        if dg_r.status_code == 200:
+                            dg_items = dg_r.json().get("items", [])
+                            if dg_items:
+                                cp = int(dg_items[0].get("wholesale", 0) or 0)
+                    except Exception:
+                        pass
+                    _dg_cache[dg_code] = cp
+
             item = {
                 "no": no,
                 "channel_no": channel_no,
@@ -11000,7 +11021,8 @@ async def _run_margin_rank_bg(limit: int = 30):
             }
 
             if cp == 0 or sp == 0:
-                no_cost.append({"no": no, "name": name[:30], "sale_price": sp, "cost_price": cp})
+                no_cost.append({"no": no, "name": name[:30], "sale_price": sp,
+                                "cost_price": cp, "dg_code": dg_code or "(없음)"})
             else:
                 ratio = round(sp / cp, 2)
                 item["ratio"] = ratio
