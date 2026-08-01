@@ -10600,7 +10600,7 @@ async def ip_suspend_result_endpoint():
 _top_products_state: dict = {"status": "idle", "scanned": 0, "total": 0, "top": [], "error": ""}
 
 
-async def _run_top_products_bg(sample: int, limit: int, days: int, sort_by: str):
+async def _run_top_products_bg(sample: int, limit: int, days: int, sort_by: str, start_page: int = 10):
     """백그라운드: SALE 상품 수집 → insight 병렬 조회 → 정렬 저장."""
     global _top_products_state
     _top_products_state = {"status": "running", "scanned": 0, "total": 0, "top": [], "error": ""}
@@ -10615,6 +10615,7 @@ async def _run_top_products_bg(sample: int, limit: int, days: int, sort_by: str)
         _top_products_state.update({"status": "error", "error": f"토큰 오류: {str(e)[:100]}"})
         return
 
+    page = start_page  # 오래된 상품부터 스캔 (insight 데이터 축적된 상품 대상)
     while len(products) < sample:
         size = min(50, sample - len(products))
         try:
@@ -10716,16 +10717,19 @@ async def top_products_scan(
     limit: int = 20,
     days: int = 30,
     sort_by: str = "wishlist",
+    start_page: int = 10,
 ):
-    """Naver insight 기반 상위 상품 스캔 시작 (백그라운드). 결과: GET /top-products-result"""
+    """Naver insight 기반 상위 상품 스캔 시작 (백그라운드).
+    start_page: 스캔 시작 페이지 (기본 10 — 신규등록 상품 제외, insight 데이터 있는 오래된 상품 우선).
+    결과: GET /top-products-result"""
     if _top_products_state.get("status") == "running":
         return JSONResponse({"status": "already_running",
                              "scanned": _top_products_state.get("scanned"),
                              "total": _top_products_state.get("total")})
     background_tasks.add_task(_run_top_products_bg, sample=sample, limit=limit,
-                              days=days, sort_by=sort_by)
+                              days=days, sort_by=sort_by, start_page=start_page)
     return {"status": "started", "sample": sample, "limit": limit,
-            "days": days, "sort_by": sort_by,
+            "days": days, "sort_by": sort_by, "start_page": start_page,
             "result_url": "/top-products-result"}
 
 
