@@ -3,5 +3,6 @@ builder = "dockerfile"
 
 [deploy]
 healthcheckPath = "/health"
-healthcheckTimeout = 300
+healthcheckTimeout = 600
 restartPolicyType = "always"
+startCommand = "uvicorn server:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 75"

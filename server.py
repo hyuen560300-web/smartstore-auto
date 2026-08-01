@@ -7581,66 +7581,69 @@ async def startup_event():
             print(f"[STARTUP] DG 스캔 재개 체크 실패: {_e3}", flush=True)
     _asyncio.create_task(_resume_dg_scan_if_needed())
 
-    # 오늘 알림된 주문 ID 복원 (재배포 후 중복 알림 방지)
-    global _notified_order_ids
-    try:
-        _today_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
-        async with httpx.AsyncClient(timeout=5) as _c:
-            _r = await _c.get(
-                f"https://loving-serenity-production-2635.up.railway.app/context/ss.order_notified_ids.{_today_kst}"
-            )
-        if _r.status_code == 200:
-            import json as _jj
-            _ids = _r.json().get("value", [])
-            if isinstance(_ids, str):
-                try:
-                    _ids = _jj.loads(_ids)
-                except Exception:
-                    import ast as _ast
-                    _ids = _ast.literal_eval(_ids)
-            _notified_order_ids.update(_ids or [])
-            print(f"[STARTUP] 주문 ID {len(_notified_order_ids)}건 복원 완료", flush=True)
-    except Exception as _e:
-        print(f"[STARTUP] 주문 ID 복원 스킵: {_e}", flush=True)
+    # 주문ID / DG프록시 / Bridge URL — 비blocking 백그라운드 복원 (startup 지연 방지)
+    async def _restore_runtime_state():
+        global _notified_order_ids
+        # 오늘 알림된 주문 ID 복원 (재배포 후 중복 알림 방지)
+        try:
+            _today_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+            async with httpx.AsyncClient(timeout=5) as _c:
+                _r = await _c.get(
+                    f"https://loving-serenity-production-2635.up.railway.app/context/ss.order_notified_ids.{_today_kst}"
+                )
+            if _r.status_code == 200:
+                import json as _jj
+                _ids = _r.json().get("value", [])
+                if isinstance(_ids, str):
+                    try:
+                        _ids = _jj.loads(_ids)
+                    except Exception:
+                        import ast as _ast
+                        _ids = _ast.literal_eval(_ids)
+                _notified_order_ids.update(_ids or [])
+                print(f"[STARTUP] 주문 ID {len(_notified_order_ids)}건 복원 완료", flush=True)
+        except Exception as _e:
+            print(f"[STARTUP] 주문 ID 복원 스킵: {_e}", flush=True)
 
-    # DG 프록시 URL 갱신 (NCP 터널 — context_store dg_proxy.url)
-    try:
-        async with httpx.AsyncClient(timeout=5) as _c_dg:
-            _r_dg = await _c_dg.get(
-                "https://loving-serenity-production-2635.up.railway.app/context/dg_proxy.url"
-            )
-        if _r_dg.status_code == 200:
-            import main as _main_mod
-            _proxy_url = _r_dg.json().get("value", "")
-            if _proxy_url and isinstance(_proxy_url, str) and _proxy_url.startswith("https://"):
-                # 실제 ping 체크 — 오프라인 URL 설정 방지
-                try:
-                    async with httpx.AsyncClient(timeout=4) as _ping_c:
-                        _ping_r = await _ping_c.get(_proxy_url.rstrip("/").rsplit("/", 1)[0] + "/health")
-                    if _ping_r.status_code < 500:
-                        _main_mod.DOMEGGOOK_API_URL = _proxy_url
-                        print(f"[STARTUP] DOMEGGOOK_API_URL → {_proxy_url}", flush=True)
-                    else:
-                        print(f"[STARTUP] DG 프록시 ping 실패({_ping_r.status_code}) → 기본 URL 유지", flush=True)
-                except Exception as _ping_e:
-                    print(f"[STARTUP] DG 프록시 ping 오류({_ping_e}) → 기본 URL 유지", flush=True)
-    except Exception as _e_dg:
-        print(f"[STARTUP] DG 프록시 URL 갱신 스킵: {_e_dg}", flush=True)
+        # DG 프록시 URL 갱신 (NCP 터널 — context_store dg_proxy.url)
+        try:
+            async with httpx.AsyncClient(timeout=5) as _c_dg:
+                _r_dg = await _c_dg.get(
+                    "https://loving-serenity-production-2635.up.railway.app/context/dg_proxy.url"
+                )
+            if _r_dg.status_code == 200:
+                import main as _main_mod
+                _proxy_url = _r_dg.json().get("value", "")
+                if _proxy_url and isinstance(_proxy_url, str) and _proxy_url.startswith("https://"):
+                    # 실제 ping 체크 — 오프라인 URL 설정 방지
+                    try:
+                        async with httpx.AsyncClient(timeout=4) as _ping_c:
+                            _ping_r = await _ping_c.get(_proxy_url.rstrip("/").rsplit("/", 1)[0] + "/health")
+                        if _ping_r.status_code < 500:
+                            _main_mod.DOMEGGOOK_API_URL = _proxy_url
+                            print(f"[STARTUP] DOMEGGOOK_API_URL → {_proxy_url}", flush=True)
+                        else:
+                            print(f"[STARTUP] DG 프록시 ping 실패({_ping_r.status_code}) → 기본 URL 유지", flush=True)
+                    except Exception as _ping_e:
+                        print(f"[STARTUP] DG 프록시 ping 오류({_ping_e}) → 기본 URL 유지", flush=True)
+        except Exception as _e_dg:
+            print(f"[STARTUP] DG 프록시 URL 갱신 스킵: {_e_dg}", flush=True)
 
-    # Bridge onch3 URL 갱신 (cloudflared 임시터널 — context_store bridge.onch3_url)
-    try:
-        async with httpx.AsyncClient(timeout=5) as _cb:
-            _rb = await _cb.get(
-                "https://loving-serenity-production-2635.up.railway.app/context/bridge.onch3_url"
-            )
-        if _rb.status_code == 200:
-            import onch3_sourcing as _onch3_mod
-            _bridge_url = _rb.json().get("value", "")
-            if _bridge_url and isinstance(_bridge_url, str) and _bridge_url.startswith("https://"):
-                _onch3_mod._ONCH3_BRIDGE = _bridge_url
-                print(f"[STARTUP] ONCH3 Bridge URL → {_bridge_url}", flush=True)
-    except Exception as _eb:
-        print(f"[STARTUP] Bridge URL 갱신 스킵: {_eb}", flush=True)
+        # Bridge onch3 URL 갱신 (cloudflared 임시터널 — context_store bridge.onch3_url)
+        try:
+            async with httpx.AsyncClient(timeout=5) as _cb:
+                _rb = await _cb.get(
+                    "https://loving-serenity-production-2635.up.railway.app/context/bridge.onch3_url"
+                )
+            if _rb.status_code == 200:
+                import onch3_sourcing as _onch3_mod
+                _bridge_url = _rb.json().get("value", "")
+                if _bridge_url and isinstance(_bridge_url, str) and _bridge_url.startswith("https://"):
+                    _onch3_mod._ONCH3_BRIDGE = _bridge_url
+                    print(f"[STARTUP] ONCH3 Bridge URL → {_bridge_url}", flush=True)
+        except Exception as _eb:
+            print(f"[STARTUP] Bridge URL 갱신 스킵: {_eb}", flush=True)
+    _asyncio.create_task(_restore_runtime_state())
 
     # ── APScheduler: n8n 워크플로우 3개 대체 ─────────────────────────────────
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
