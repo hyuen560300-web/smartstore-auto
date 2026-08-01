@@ -766,17 +766,19 @@ async def myip():
         return r.json()
 
 
-@app.post("/rebuild-registered-codes")
-async def rebuild_registered_codes():
-    """Naver 전체 상품(SALE+SUSPENSION)에서 sellerManagementCode(DG코드)·상품명 추출
-    → ss_registered_codes + ss_registered_names PostgreSQL 재구성."""
-    from main import save_registered_code, save_registered_name, _normalize_name, _norm_code
+_rebuild_codes_state: dict = {"running": False, "result": None}
+
+
+async def _run_rebuild_codes_bg():
+    global _rebuild_codes_state
+    from main import save_registered_code, save_registered_name
+    _rebuild_codes_state = {"running": True, "result": None}
     inserted_codes, inserted_names, skipped, pages = 0, 0, 0, 0
     page = 1
     while True:
         try:
             resp = await naver_api.list_products(page=page, size=50)
-        except Exception as e:
+        except Exception:
             break
         contents = resp.get("contents", [])
         if not contents:
@@ -787,14 +789,12 @@ async def rebuild_registered_codes():
             name_raw = (origin.get("name") or p.get("name") or "").strip()
             dg_raw = (((origin.get("detailAttribute") or {}).get("sellerCodeInfo") or {})
                       .get("sellerManagementCode", "") or "")
-            # DG 코드 저장
             if dg_raw:
                 try:
                     save_registered_code(dg_raw)
                     inserted_codes += 1
                 except Exception:
                     skipped += 1
-            # 상품명 저장
             if name_raw:
                 try:
                     save_registered_name(name_raw)
@@ -802,14 +802,36 @@ async def rebuild_registered_codes():
                 except Exception:
                     pass
         page += 1
-        if page > 30:  # 최대 1500개
+        if page > 30:
             break
+    _rebuild_codes_state = {
+        "running": False,
+        "result": {
+            "status": "done",
+            "pages": pages,
+            "inserted_codes": inserted_codes,
+            "inserted_names": inserted_names,
+            "skipped": skipped,
+        },
+    }
+
+
+@app.post("/rebuild-registered-codes")
+async def rebuild_registered_codes():
+    """Naver 전체 상품에서 DG코드·상품명 추출 → PostgreSQL 재구성 (백그라운드)."""
+    if _rebuild_codes_state.get("running"):
+        return JSONResponse({"status": "already_running"})
+    asyncio.create_task(_run_rebuild_codes_bg())
+    return JSONResponse({"status": "started", "result_url": "/rebuild-registered-codes/result"})
+
+
+@app.get("/rebuild-registered-codes/result")
+async def rebuild_registered_codes_result():
+    """rebuild-registered-codes 진행 상황 조회."""
+    state = dict(_rebuild_codes_state)
     return JSONResponse({
-        "status": "done",
-        "pages": pages,
-        "inserted_codes": inserted_codes,
-        "inserted_names": inserted_names,
-        "skipped": skipped,
+        "running": state.get("running"),
+        **(state.get("result") or {}),
     })
 
 
