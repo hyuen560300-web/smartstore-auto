@@ -10459,6 +10459,64 @@ async def marketing_priority_result():
     }
 
 
+_ip_suspend_result: dict = {}
+
+async def _run_ip_suspend_bg():
+    global _ip_suspend_result
+    from employees import DANGEROUS_KEYWORDS
+    _ip_suspend_result = {"status": "running", "scanned": 0, "hits": [], "suspended": [], "errors": []}
+    page = 1
+    while True:
+        try:
+            data = await naver_api.list_products(page=page, size=100)
+        except Exception as e:
+            _ip_suspend_result["errors"].append(f"page{page}: {str(e)[:50]}")
+            break
+        items = data.get("contents", [])
+        if not items:
+            break
+        for item in items:
+            op = item.get("originProduct", {})
+            name = op.get("name", "") or item.get("name", "")
+            status = op.get("statusType", "")
+            if status != "SALE":
+                continue
+            pid = str(item.get("originProductNo", ""))
+            name_lower = name.lower()
+            for kw in DANGEROUS_KEYWORDS:
+                if kw.lower() in name_lower:
+                    _ip_suspend_result["hits"].append({"pid": pid, "name": name, "keyword": kw})
+                    try:
+                        ok = await naver_api.set_product_status(pid, "SUSPENSION")
+                        _ip_suspend_result["suspended"].append({"pid": pid, "name": name, "ok": bool(ok)})
+                        print(f"[IP-SUSPEND] 판매중지 {'OK' if ok else 'FAIL'}: {name[:30]} ({kw})", flush=True)
+                    except Exception as e2:
+                        _ip_suspend_result["errors"].append(f"suspend {pid}: {str(e2)[:50]}")
+                    break
+        _ip_suspend_result["scanned"] += len(items)
+        if len(items) < 100:
+            break
+        page += 1
+        await asyncio.sleep(0.5)
+    _ip_suspend_result["status"] = "done"
+    print(f"[IP-SUSPEND] 완료 scanned={_ip_suspend_result['scanned']} hits={len(_ip_suspend_result['hits'])} suspended={len(_ip_suspend_result['suspended'])}", flush=True)
+
+
+@app.post("/ip-suspend")
+async def ip_suspend_endpoint():
+    """DANGEROUS_KEYWORDS 기반 IP 위반 SALE 상품 즉시 판매중지 (백그라운드). 결과: /ip-suspend-result"""
+    if _ip_suspend_result.get("status") == "running":
+        return JSONResponse({"status": "already_running"})
+    asyncio.create_task(_run_ip_suspend_bg())
+    return JSONResponse({"status": "started", "result_url": "/ip-suspend-result"})
+
+
+@app.get("/ip-suspend-result")
+async def ip_suspend_result_endpoint():
+    """IP 판매중지 진행상황 조회."""
+    return JSONResponse(_ip_suspend_result)
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
