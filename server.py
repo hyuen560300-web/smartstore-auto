@@ -7892,6 +7892,9 @@ async def startup_event():
         if not _sync_done:
             print("[SCHED] 상품 등록 건너뜀 — registered_codes 동기화 미완료 (중복 방지)", flush=True)
             return
+        if _rebuild_codes_state.get("running"):
+            print("[SCHED] 상품 등록 건너뜀 — rebuild-registered-codes 실행 중 (Naver API 충돌 방지)", flush=True)
+            return
         from main import _check_claude_credits
         if not await _check_claude_credits():
             print("[SCHED] ⛔ Claude API 크레딧 소진 — 소싱 전체 중단 (HTML 없는 등록 방지)", flush=True)
@@ -7966,7 +7969,7 @@ async def startup_event():
     # 주간 네이버 패션 트렌드 업데이트 (월간→주간 단축)
     scheduler.add_job(job_fashion_trend_update, "interval", weeks=1, id="fashion_trend_update")
     # 09:00 / 13:00 / 20:00 상품 등록
-    scheduler.add_job(job_register_products, "interval", minutes=5, id="register_products_8")
+    scheduler.add_job(job_register_products, "interval", minutes=10, id="register_products_8")
     # 09:00 / 13:00 / 21:00 Pinterest 자동 핀 (상품 등록 1시간 후)
     scheduler.add_job(job_pinterest_pin, "cron", hour="9,13,21", minute=0, id="pinterest_pin")
     # 매주 월요일 00:00 저성과 상품 정리
