@@ -10922,6 +10922,163 @@ async def price_competition_result():
     return JSONResponse(_pcomp_state)
 
 
+# ── 마진 비율 순위 스캔 ───────────────────────────────────────────────────────
+
+_margin_rank_state: dict = {"status": "idle", "scanned": 0, "total": 0, "results": {}, "error": ""}
+
+
+async def _run_margin_rank_bg(limit: int = 30):
+    """SALE 상품 costPrice vs salePrice 마진비율 순위 백그라운드 스캔.
+    ratio = salePrice/costPrice: <1.5=위험 / 1.5~2.5=적정 / >2.5=비경쟁력"""
+    import httpx as _hx
+    from datetime import datetime, timezone
+
+    _margin_rank_state.update({"status": "running", "scanned": 0, "total": 0, "results": {}, "error": ""})
+
+    # 1. SALE 상품 nos 수집 (search API — 개별 detail 없이 빠르게)
+    headers = await naver_api._headers()
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    nos = []
+    page = 1
+    try:
+        while True:
+            async with _hx.AsyncClient(timeout=30) as c:
+                r = await c.post(f"{NAVER_BASE}/v1/products/search", headers=headers,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 50,
+                          "periodType": "PROD_REG_DAY", "fromDate": "2020-01-01", "toDate": now_str})
+            if r.status_code != 200:
+                _margin_rank_state["error"] = f"search API {r.status_code}"
+                break
+            body = r.json()
+            for p in body.get("contents", []):
+                no = str(p.get("originProductNo", ""))
+                if no:
+                    nos.append(no)
+            if body.get("last") or len(body.get("contents", [])) < 50:
+                break
+            page += 1
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        _margin_rank_state["error"] = f"수집 오류: {str(e)[:80]}"
+
+    _margin_rank_state["total"] = len(nos)
+    print(f"[MARGIN-RANK] 수집 완료 총={len(nos)}개 — detail 조회 시작", flush=True)
+
+    # 2. 각 상품 detail → costPrice/salePrice 조회 (costPrice는 등록 시 저장된 도매가)
+    dangerous, optimal, uncompetitive, no_cost = [], [], [], []
+
+    for i, no in enumerate(nos):
+        try:
+            async with _hx.AsyncClient(timeout=15) as c:
+                r2 = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                                 headers=await naver_api._headers())
+            if r2.status_code != 200:
+                await asyncio.sleep(0.8)
+                continue
+            origin = r2.json().get("originProduct", {})
+            name = (origin.get("name") or "").strip()
+            sp = int(origin.get("salePrice") or 0)
+            cp = int(origin.get("costPrice") or 0)
+            chs = origin.get("channelProducts") or []
+            channel_no = str(chs[0].get("channelProductNo", "")) if chs else ""
+            da = origin.get("detailAttribute") or {}
+            dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
+            img = ""
+            if chs:
+                img_obj = chs[0].get("representativeImage") or {}
+                img = img_obj.get("url", "") if isinstance(img_obj, dict) else ""
+
+            item = {
+                "no": no,
+                "channel_no": channel_no,
+                "name": name,
+                "sale_price": sp,
+                "cost_price": cp,
+                "dg_code": dg_code,
+                "image": img,
+                "url": f"https://smartstore.naver.com/thepick/products/{channel_no}" if channel_no else "",
+            }
+
+            if cp == 0 or sp == 0:
+                no_cost.append({"no": no, "name": name[:30], "sale_price": sp, "cost_price": cp})
+            else:
+                ratio = round(sp / cp, 2)
+                item["ratio"] = ratio
+                item["margin_won"] = sp - cp
+                item["margin_pct"] = f"{round((ratio - 1) * 100, 1):.1f}%"
+                if ratio < 1.5:
+                    item["category"] = "위험(저마진)"
+                    dangerous.append(item)
+                elif ratio > 2.5:
+                    item["category"] = "비경쟁력(고마진)"
+                    uncompetitive.append(item)
+                else:
+                    item["category"] = "적정마진"
+                    item["issues"] = _title_issues(name, [])
+                    optimal.append(item)
+
+            _margin_rank_state["scanned"] = i + 1
+            await asyncio.sleep(0.6)
+        except Exception as ex:
+            print(f"[MARGIN-RANK] {no} 오류: {ex}", flush=True)
+            await asyncio.sleep(0.8)
+
+    # 3. 적정마진: ratio 오름차순 (낮을수록 소비자에게 경쟁력), 나머지도 정렬
+    optimal.sort(key=lambda x: x.get("ratio", 9999))
+    dangerous.sort(key=lambda x: x.get("ratio", 0))           # 가장 위험한 것 (최저 ratio) 먼저
+    uncompetitive.sort(key=lambda x: x.get("ratio", 0), reverse=True)  # 가장 비싼 것 먼저
+
+    results = {
+        "total_scanned": len(nos),
+        "with_cost_price": len(dangerous) + len(optimal) + len(uncompetitive),
+        "no_cost_price_count": len(no_cost),
+        "dangerous_count": len(dangerous),
+        "optimal_count": len(optimal),
+        "uncompetitive_count": len(uncompetitive),
+        "optimal_top": optimal[:limit],        # 적정마진 상위 (경쟁력 순)
+        "dangerous_top": dangerous[:10],       # 위험 상품 상위 10개
+        "uncompetitive_top": uncompetitive[:10],  # 비경쟁력 상품 상위 10개
+        "no_cost_sample": no_cost[:5],         # costPrice 미기입 샘플
+    }
+
+    _margin_rank_state.update({"status": "done", "results": results})
+    print(
+        f"[MARGIN-RANK] 완료 — 위험:{len(dangerous)} 적정:{len(optimal)} "
+        f"비경쟁:{len(uncompetitive)} costPrice없음:{len(no_cost)}",
+        flush=True,
+    )
+
+    try:
+        async with _hx.AsyncClient(timeout=10) as cs:
+            await cs.post("https://loving-serenity-production-2635.up.railway.app/context",
+                json={"key": "ss.margin_rank.latest",
+                      "value": json.dumps(results, ensure_ascii=False),
+                      "category": "audit"})
+    except Exception:
+        pass
+
+
+@app.post("/margin-rank-scan")
+async def margin_rank_scan(background_tasks: BackgroundTasks, limit: int = 30):
+    """SALE 상품 마진비율 순위 스캔.
+    ratio = salePrice/costPrice 기준: <1.5=위험 / 1.5~2.5=적정 / >2.5=비경쟁력
+    결과: GET /margin-rank-result (약 8~15분 소요)"""
+    if _margin_rank_state.get("status") == "running":
+        return JSONResponse({"status": "already_running",
+                             "scanned": _margin_rank_state.get("scanned"),
+                             "total": _margin_rank_state.get("total")})
+    background_tasks.add_task(_run_margin_rank_bg, limit=limit)
+    return {"status": "started", "limit": limit,
+            "note": "8~15분 후 /margin-rank-result 조회",
+            "result_url": "/margin-rank-result"}
+
+
+@app.get("/margin-rank-result")
+async def margin_rank_result():
+    """margin-rank-scan 결과 조회."""
+    return JSONResponse(_margin_rank_state)
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
