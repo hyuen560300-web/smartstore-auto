@@ -4695,6 +4695,52 @@ async def list_products(page: int = 1, size: int = 50):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+@app.get("/admin/old-products")
+async def admin_old_products(days: int = 30):
+    """등록 후 N일 이상 경과한 SALE 상품 목록 (무노출 추정 대상).
+    days: 기준 일수 (기본 30). regDate 기준으로 필터링."""
+    import httpx as _hx
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    cutoff = _dt.now(_tz.utc) - _td(days=days)
+    cutoff_str = cutoff.strftime("%Y-%m-%d")
+    headers = await naver_api._headers()
+    old_products = []
+    page = 1
+    try:
+        while True:
+            async with _hx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    f"{NAVER_BASE}/v1/products/search", headers=headers,
+                    json={"productStatusTypes": ["SALE"], "page": page, "size": 100,
+                          "orderType": "NO", "periodType": "PROD_REG_DAY",
+                          "fromDate": "2020-01-01", "toDate": cutoff_str},
+                )
+            if r.status_code != 200:
+                break
+            contents = r.json().get("contents", [])
+            if not contents:
+                break
+            for p in contents:
+                op = p.get("originProduct", {}) or {}
+                ch_no = ((p.get("channelProducts") or [{}])[0].get("channelProductNo")
+                         or p.get("channelProductNo") or "")
+                old_products.append({
+                    "no": str(p.get("originProductNo", "")),
+                    "channel_no": str(ch_no),
+                    "name": op.get("name", ""),
+                    "price": op.get("salePrice", 0),
+                    "reg_date": op.get("regDate", ""),
+                })
+            if len(contents) < 100:
+                break
+            page += 1
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+    return JSONResponse({"days": days, "cutoff": cutoff_str,
+                         "count": len(old_products), "products": old_products})
+
+
 @app.post("/auto-cleanup")
 async def auto_cleanup(request: Request):
     """저성과 상품 자동 판매중지 (수동 트리거 또는 월요일 자정 자동 실행)

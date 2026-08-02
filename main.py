@@ -1627,7 +1627,7 @@ async def _dg_apply_quality_filter(products: list[dict]) -> list[dict]:
     from difflib import SequenceMatcher
     BLUR_THRESHOLD  = 200   # Laplacian variance (FIND_EDGES+np.var 기준)
     MIN_FILE_KB     = 30    # 30KB
-    MIN_IMG_COUNT   = 1     # 최소 이미지 장수 (thumb 구조 다양성으로 1로 조정)
+    MIN_IMG_COUNT   = 3     # 최소 이미지 장수 (3장 미만 소싱 제외)
     SIM_THRESHOLD   = 0.70  # 이름 유사도 상한
 
     before = len(products)
