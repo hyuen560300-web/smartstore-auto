@@ -9155,6 +9155,11 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
                 "재고가 없는 상품" in r_dg.text
                 or r_dg.status_code == 404
             )
+            # 재고<30 추가 감지 (재고 있지만 부족한 경우도 판매중지)
+            if not no_stock:
+                _qty_m = _re.search(r'재고[^0-9]*(\d+)', r_dg.text)
+                if _qty_m and int(_qty_m.group(1)) < 30:
+                    no_stock = True
             if no_stock:
                 _dg_stock_state["no_stock_found"] += 1
                 if not dry_run:
@@ -9205,6 +9210,19 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
 
         # DG 차단 방지 딜레이 (3~5초)
         await _aio.sleep(_rnd.uniform(3.0, 5.0))
+
+    # ── Phase1 완료 후 신규소싱 트리거 (판매중지된 만큼 빈자리 채움) ────────────
+    _phase1_suspended = _dg_stock_state.get("suspended", 0)
+    if _phase1_suspended > 0 and not dry_run:
+        import os as _os_ss
+        if _os_ss.getenv("SOURCING_PAUSED", "false").lower() != "true":
+            _restock_lim = min(_phase1_suspended, 10)
+            try:
+                from main import pipeline_register_from_domeggook as _prfd
+                asyncio.create_task(_prfd(_restock_lim))
+                print(f"[STOCK-RESTOCK] SS Phase1 판매중지 {_phase1_suspended}개 → 신규소싱 {_restock_lim}개 트리거", flush=True)
+            except Exception as _re_err:
+                print(f"[STOCK-RESTOCK] 소싱 트리거 실패: {_re_err}", flush=True)
 
     # ── Phase 2: SUSPENSION → SALE 재입고 감지 ──────────────────────────────
     _dg_stock_state["status"] = "restock_scan"
