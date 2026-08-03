@@ -8356,6 +8356,10 @@ from contextlib import asynccontextmanager as _asynccontextmanager
 @_asynccontextmanager
 async def _app_lifespan(_application):
     await startup_event()
+    try:
+        await _restore_margin_rank_state()
+    except Exception as _e:
+        print(f"[MARGIN-RANK] startup 복원 예외: {_e}", flush=True)
     yield
 
 app.router.lifespan_context = _app_lifespan
@@ -10994,6 +10998,50 @@ async def price_competition_result():
 
 _margin_rank_state: dict = {"status": "idle", "scanned": 0, "total": 0, "results": {}, "error": ""}
 
+_MARGIN_RANK_CTX_KEY = "ss.margin_rank.latest"
+
+
+async def _restore_margin_rank_state() -> bool:
+    """context_store에서 마지막 margin-rank 결과를 복원.
+
+    _margin_rank_state는 인메모리라 재배포/재시작 시 idle로 초기화된다.
+    그 상태에서 숏폼 업로드 슬롯이 돌면 channel_no를 못 찾아 딥링크 대신
+    스토어 홈으로 폴백된다(2026-08-03 18:00 슬롯 실패 원인).
+    스캔 완료 시점에 이미 같은 키로 저장하고 있으므로, 시작 시 되읽어 복구한다.
+    """
+    if _margin_rank_state.get("status") == "running":
+        return False
+    if _margin_rank_state.get("results"):
+        return False
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.get(
+                f"https://loving-serenity-production-2635.up.railway.app/context/{_MARGIN_RANK_CTX_KEY}"
+            )
+        if r.status_code != 200:
+            print(f"[MARGIN-RANK] 복원 스킵 — context_store HTTP {r.status_code}", flush=True)
+            return False
+        raw = (r.json() or {}).get("value")
+        results = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(results, dict) or not results.get("optimal_top"):
+            print("[MARGIN-RANK] 복원 스킵 — 저장된 결과 없음/형식 불일치", flush=True)
+            return False
+        scanned = int(results.get("total_scanned") or 0)
+        _margin_rank_state.update({
+            "status": "done",
+            "scanned": scanned,
+            "total": scanned,
+            "results": results,
+            "error": "",
+            "restored": True,
+        })
+        print(f"[MARGIN-RANK] context_store 복원 완료 — total_scanned={scanned}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[MARGIN-RANK] 복원 실패: {e}", flush=True)
+        return False
+
 
 async def _run_margin_rank_bg(limit: int = 30):
     """SALE 상품 costPrice vs salePrice 마진비율 순위 백그라운드 스캔.
@@ -11182,7 +11230,11 @@ async def margin_rank_scan(background_tasks: BackgroundTasks, limit: int = 30):
 
 @app.get("/margin-rank-result")
 async def margin_rank_result():
-    """margin-rank-scan 결과 조회."""
+    """margin-rank-scan 결과 조회.
+    결과가 비어있으면(재시작 직후 등) context_store 복원을 1회 시도 —
+    숏폼 슬롯이 idle을 만나 딥링크 대신 스토어 홈으로 폴백하는 것을 방지."""
+    if not _margin_rank_state.get("results") and _margin_rank_state.get("status") != "running":
+        await _restore_margin_rank_state()
     return JSONResponse(_margin_rank_state)
 
 
