@@ -9155,11 +9155,6 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
                 "재고가 없는 상품" in r_dg.text
                 or r_dg.status_code == 404
             )
-            # 재고<30 추가 감지 (재고 있지만 부족한 경우도 판매중지)
-            if not no_stock:
-                _qty_m = _re.search(r'재고[^0-9]*(\d+)', r_dg.text)
-                if _qty_m and int(_qty_m.group(1)) < 30:
-                    no_stock = True
             if no_stock:
                 _dg_stock_state["no_stock_found"] += 1
                 if not dry_run:
