@@ -8172,6 +8172,15 @@ async def startup_event():
         print("[SCHED] 마진스캔 일일 자동 시작 (01:00 KST)", flush=True)
     scheduler.add_job(_job_daily_margin_scan, "cron", hour=1, minute=0, id="daily_margin_scan")
 
+    # 매 4시간(08/12/16/20시) — 마진랭크 스캔 자동실행 (딥링크용 최신 데이터 유지)
+    async def _job_margin_rank_scan():
+        if _margin_rank_state.get("status") == "running":
+            print("[SCHED] 마진랭크 스캔 이미 실행 중 — 스킵", flush=True)
+            return
+        asyncio.create_task(_run_margin_rank_bg(limit=30))
+        print("[SCHED] 마진랭크 스캔 자동 시작", flush=True)
+    scheduler.add_job(_job_margin_rank_scan, "cron", hour="8,12,16,20", minute=0, id="margin_rank_scan_auto")
+
     # ── 01:30 KST 과적가 재검증 + 판매중지/가격조정 ─────────────────────────
     async def _job_overpriced_scan_and_fix():
         """매일 01:30 KST — SALE 상품 경쟁가 재검증 → 판매중지(>3x) / 가격조정(1.5~3x)."""
