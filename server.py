@@ -11007,6 +11007,7 @@ async def _run_margin_rank_bg(limit: int = 30):
     headers = await naver_api._headers()
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     nos = []
+    no_to_channel: dict = {}  # origin_no → channel_no (목록 API에서 수집)
     page = 1
     try:
         while True:
@@ -11022,6 +11023,11 @@ async def _run_margin_rank_bg(limit: int = 30):
                 no = str(p.get("originProductNo", ""))
                 if no:
                     nos.append(no)
+                    # channelProductNo는 목록 API에서만 반환됨 (개별 GET에서는 미포함)
+                    ch = str(p.get("channelProductNo") or
+                             ((p.get("channelProducts") or [{}])[0].get("channelProductNo") or "") or "")
+                    if ch:
+                        no_to_channel[no] = ch
             if body.get("last") or len(body.get("contents", [])) < 50:
                 break
             page += 1
@@ -11053,15 +11059,11 @@ async def _run_margin_rank_bg(limit: int = 30):
             name = (origin.get("name") or "").strip()
             sp = int(origin.get("salePrice") or 0)
             cp = int(origin.get("costPrice") or 0)
-            # channelProducts는 originProduct 밖 최상위에 위치
-            chs = resp_json.get("channelProducts") or origin.get("channelProducts") or []
-            channel_no = str(chs[0].get("channelProductNo", "")) if chs else ""
+            # channel_no: 목록 API 수집 맵에서 조회 (개별 GET은 channelProducts 미포함)
+            channel_no = no_to_channel.get(no, "")
             da = origin.get("detailAttribute") or {}
             dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
-            img = ""
-            if chs:
-                img_obj = chs[0].get("representativeImage") or {}
-                img = img_obj.get("url", "") if isinstance(img_obj, dict) else ""
+            img = ((origin.get("images") or {}).get("representativeImage") or {}).get("url", "") or ""
 
             # costPrice=0 이고 DG_ 코드 있으면 getItemView(no=숫자ID)로 실제 도매가 직접 조회
             # get_real_dg_wholesale()과 동일 로직 — DG_ prefix 제거 후 숫자 ID 추출
@@ -11100,7 +11102,7 @@ async def _run_margin_rank_bg(limit: int = 30):
                 "cost_price": cp,
                 "dg_code": dg_code,
                 "image": img,
-                "url": f"https://smartstore.naver.com/thepick/products/{channel_no}" if channel_no else "",
+                "url": f"https://smartstore.naver.com/khww/products/{channel_no}" if channel_no else "",
             }
 
             if cp == 0 or sp == 0:
