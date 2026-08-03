@@ -11048,11 +11048,13 @@ async def _run_margin_rank_bg(limit: int = 30):
             if r2.status_code != 200:
                 await asyncio.sleep(0.8)
                 continue
-            origin = r2.json().get("originProduct", {})
+            resp_json = r2.json()
+            origin = resp_json.get("originProduct", {})
             name = (origin.get("name") or "").strip()
             sp = int(origin.get("salePrice") or 0)
             cp = int(origin.get("costPrice") or 0)
-            chs = origin.get("channelProducts") or []
+            # channelProducts는 originProduct 밖 최상위에 위치
+            chs = resp_json.get("channelProducts") or origin.get("channelProducts") or []
             channel_no = str(chs[0].get("channelProductNo", "")) if chs else ""
             da = origin.get("detailAttribute") or {}
             dg_code = ((da.get("sellerCodeInfo") or {}).get("sellerManagementCode") or "").strip()
