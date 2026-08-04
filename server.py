@@ -11049,7 +11049,10 @@ async def _run_margin_rank_bg(limit: int = 30):
     import httpx as _hx
     from datetime import datetime, timezone
 
-    _margin_rank_state.update({"status": "running", "scanned": 0, "total": 0, "results": {}, "error": ""})
+    # restored: context_store 복원분임을 나타내는 플래그 — 새 스캔 시작 시 반드시 내려야
+    # 신규 스캔 결과가 복원분으로 잘못 표시되지 않는다 (2026-08-04)
+    _margin_rank_state.update({"status": "running", "scanned": 0, "total": 0, "results": {},
+                               "error": "", "restored": False})
 
     # 1. SALE 상품 nos 수집 (search API — 개별 detail 없이 빠르게)
     headers = await naver_api._headers()
