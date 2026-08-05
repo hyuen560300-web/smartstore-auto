@@ -9049,6 +9049,88 @@ async def debug_status_scan():
 _dg_stock_state: dict = {}
 _overpriced_fix_fn = None  # lifespan에서 _job_overpriced_scan_and_fix 참조 저장
 
+# 재고 스캔 안전장치 (2026-08-05 사고 후 추가)
+_DG_SCAN_ABORT_STREAK = 15    # 연속 판정불가 이 횟수면 스캔 중단
+_DG_SCAN_SAMPLE = 50          # 비율 검사 시점 (몇 개 확인한 뒤)
+_DG_SCAN_MAX_RATIO = 0.60     # 표본의 '재고 없음' 비율이 이걸 넘으면 중단
+_DG_ALERT_KEY = "ss.dg_alert.latest"
+
+
+async def _dg_alert(kind: str, message: str, detail: dict | None = None) -> None:
+    """
+    도매꾹 연동 이상을 기록한다.
+
+    ⚠️ 텔레그램으로 보내지 않는다 (대표님 지시, 2026-08-05).
+       context_store에 남기고 로그에 크게 찍는다. /status 와 /dg-alert 에서 보인다.
+       세션 시작 시 이 키를 확인하면 밤사이 사고를 놓치지 않는다.
+    """
+    from main import _ctx_set as _mcs
+    rec = {
+        "kind": kind,
+        "message": message,
+        "detail": detail or {},
+        # server.py 전역에 KST 상수가 없다. 여기서 만들어 쓴다 —
+        # 없는 이름을 쓰면 정작 사고가 났을 때 알림이 NameError로 죽는다.
+        "at_kst": datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S"),
+        "acknowledged": False,
+    }
+    print(f"[DG_ALERT] {kind} — {message}", flush=True)
+    logging.error("[DG_ALERT] %s — %s | %s", kind, message, detail)
+    try:
+        _mcs(_DG_ALERT_KEY, rec)
+    except Exception as e:
+        logging.error("[DG_ALERT] 기록 실패: %s", e)
+
+
+async def _dg_proxy_healthy() -> tuple[bool, str]:
+    """
+    도매가 조회 경로가 살아 있는지 확인. (정상여부, 사유) 반환.
+
+    ⚠️ _get_dg_wholesale()를 쓰지 않는다. 그 함수는 1시간 캐시라서
+       프록시가 죽어도 캐시가 살아 있으면 통과해버린다 — 점검의 의미가 없다.
+       여기서는 캐시를 건너뛰고 실제로 한 번 호출한다.
+    """
+    import httpx as _hx
+    from main import DOMEGGOOK_API_KEY, DOMEGGOOK_API_URL
+    if not DOMEGGOOK_API_KEY:
+        return False, "DOMEGGOOK_API_KEY 미설정"
+    url = DOMEGGOOK_API_URL or "https://domeggook.com/ssl/api/"
+    try:
+        async with _hx.AsyncClient(timeout=20) as c:
+            r = await c.get(url, params={
+                "ver": "4.5", "mode": "getItemView", "aid": DOMEGGOOK_API_KEY,
+                "no": "66737789",          # 투버튼 페달 휴지통 — 판매중인 표본
+                "om": "json",
+            })
+        if r.status_code != 200:
+            return False, f"HTTP {r.status_code} ({url[:60]})"
+        block = (r.json().get("domeggook") or {}).get("price") or {}
+        dome = block.get("dome") if isinstance(block, dict) else None
+        if isinstance(dome, dict):
+            dome = dome.get("#text") or dome.get("text")
+        price = int("".join(ch for ch in str(dome or "") if ch.isdigit()) or "0")
+        if price > 0:
+            return True, f"정상 (표본 도매가 {price:,}원, {url[:50]})"
+        return False, f"도매가 0으로 응답 — 차단 또는 프록시 이상 ({url[:50]})"
+    except Exception as e:
+        return False, f"조회 예외: {str(e)[:120]} ({url[:50]})"
+
+
+@app.get("/dg-alert")
+async def dg_alert_view():
+    """도매꾹 연동 경고 확인 + 현재 상태 즉시 점검."""
+    from main import _ctx_get as _mcg
+    try:
+        last = _mcg(_DG_ALERT_KEY)
+    except Exception:
+        last = None
+    ok, why = await _dg_proxy_healthy()
+    return JSONResponse({
+        "proxy_ok": ok,
+        "proxy_detail": why,
+        "last_alert": last,
+    })
+
 
 async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
                              resume_nos: list | None = None,
@@ -9065,6 +9147,24 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
         # Phase 2: 재입고 감지
         "susp_total": 0, "restocked": 0, "restock_skipped": 0, "restock_items": [],
     }
+    # ── 시작 전 사전 점검 ────────────────────────────────────────────────
+    # 도매가 조회가 죽은 채로 스캔을 시작하면 정상 상품을 대량으로 판매중지시킨다.
+    # 2026-08-05에 824개가 그렇게 내려갔다. 시작 자체를 막는 게 가장 확실하다.
+    if not dry_run:
+        _ok, _why = await _dg_proxy_healthy()
+        if not _ok:
+            msg = f"도매꾹 조회가 정상이 아니라 재고 스캔을 시작하지 않았습니다. ({_why})"
+            print(f"[DG_SCAN] 시작 취소 — {msg}", flush=True)
+            await _dg_alert("scan_precheck_failed", msg, {"dry_run": dry_run})
+            _dg_stock_state.update({"status": "aborted", "done": True,
+                                    "aborted": msg, "checked": 0})
+            try:
+                _mcs("ss.dg_stock_scan.result", dict(_dg_stock_state))
+            except Exception:
+                pass
+            return
+        print(f"[DG_SCAN] 사전 점검 통과 — {_why}", flush=True)
+
     # resume 시 이전 카운터 복원
     if resume_counts:
         _dg_stock_state.update({
@@ -9158,16 +9258,54 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
             continue
 
         # DG 페이지 재고 확인
+        #
+        # ⚠️ 2026-08-05 사고 — 도매가 조회가 죽은 상태로 스캔이 돌아 898개 중 827개를
+        #    '재고 없음'으로 판정하고 824개를 판매중지시켰다. 원인은 응답이 진짜
+        #    상품 페이지인지 확인하지 않고 404/문자열만 보고 단정한 것이다.
+        #    차단 페이지·점검 페이지·빈 응답이 전부 '재고 없음'으로 읽혔다.
+        #    아래 세 가지로 막는다:
+        #      ① 진짜 상품 페이지인지 '양성 확인' 후에만 재고 판정
+        #      ② 연속 실패가 쌓이면 스캔 자체를 중단 (회로 차단기)
+        #      ③ 초반 표본의 '재고 없음' 비율이 비정상이면 중단
         try:
             async with _hx.AsyncClient(timeout=12, follow_redirects=True) as c:
                 r_dg = await c.get(
                     f"https://domeggook.com/main/item/itemView.php?no={item_no}",
                     headers=dg_headers,
                 )
-            no_stock = (
-                "재고가 없는 상품" in r_dg.text
-                or r_dg.status_code == 404
+            body = r_dg.text or ""
+
+            # ① 양성 확인 — 상품 페이지에만 있는 표지가 없으면 판정하지 않는다.
+            #    "없는 걸 못 찾았다"와 "페이지를 못 받았다"는 완전히 다른 상태다.
+            looks_like_item = (
+                r_dg.status_code == 200
+                and len(body) > 3000
+                and any(k in body for k in ("itemView", "상품정보", "판매단가", "도매꾹"))
             )
+            explicit_gone = ("재고가 없는 상품" in body) or (r_dg.status_code == 404
+                                                            and len(body) < 3000)
+
+            if not looks_like_item and not explicit_gone:
+                # 판정 불가 — 건드리지 않고 넘어간다
+                _dg_stock_state["undecidable"] = _dg_stock_state.get("undecidable", 0) + 1
+                _dg_stock_state["consec_undecidable"] = \
+                    _dg_stock_state.get("consec_undecidable", 0) + 1
+                _dg_stock_state["errors"].append(
+                    f"{item_no} 판정불가 http={r_dg.status_code} len={len(body)}")
+                if _dg_stock_state["consec_undecidable"] >= _DG_SCAN_ABORT_STREAK:
+                    _dg_stock_state["aborted"] = (
+                        f"도매꾹 응답을 {_DG_SCAN_ABORT_STREAK}회 연속 판정할 수 없어 중단했습니다. "
+                        f"프록시/차단 여부를 확인해주세요.")
+                    print(f"[DG_SCAN] 중단 — {_dg_stock_state['aborted']}", flush=True)
+                    await _dg_alert("scan_abort", _dg_stock_state["aborted"],
+                                    {"checked": _dg_stock_state["checked"],
+                                     "undecidable": _dg_stock_state["undecidable"]})
+                    break
+                _dg_stock_state["checked"] += 1
+                continue
+            _dg_stock_state["consec_undecidable"] = 0
+
+            no_stock = explicit_gone
             if no_stock:
                 _dg_stock_state["no_stock_found"] += 1
                 if not dry_run:
@@ -9199,6 +9337,23 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
             _dg_stock_state["errors"].append(f"{dg_code} DG: {str(e)[:60]}")
 
         _dg_stock_state["checked"] += 1
+
+        # ③ 비율 가드 — 초반 표본에서 '재고 없음'이 비정상적으로 많으면
+        #    데이터가 아니라 조회가 깨진 것이다. 2026-08-05에는 92%가 나왔다.
+        _chk = _dg_stock_state["checked"]
+        if _chk == _DG_SCAN_SAMPLE and not _dg_stock_state.get("aborted"):
+            _ratio = _dg_stock_state["no_stock_found"] / max(1, _chk)
+            if _ratio >= _DG_SCAN_MAX_RATIO:
+                _dg_stock_state["aborted"] = (
+                    f"처음 {_chk}개 중 {_dg_stock_state['no_stock_found']}개"
+                    f"({_ratio:.0%})가 '재고 없음'으로 나와 중단했습니다. "
+                    f"정상 범위를 크게 벗어납니다 — 도매꾹 조회가 깨졌을 가능성이 큽니다.")
+                print(f"[DG_SCAN] 중단 — {_dg_stock_state['aborted']}", flush=True)
+                await _dg_alert("scan_abort_ratio", _dg_stock_state["aborted"],
+                                {"checked": _chk,
+                                 "no_stock_found": _dg_stock_state["no_stock_found"],
+                                 "suspended": _dg_stock_state["suspended"]})
+                break
 
         # 50개마다 중간 저장 (resume 재개를 위해 last_index + all_nos 포함)
         if _dg_stock_state["checked"] % 50 == 0:
@@ -9452,6 +9607,9 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
             "susp_total": _dg_stock_state["susp_total"],
             "restocked": _dg_stock_state["restocked"],
             "restock_items": _dg_stock_state["restock_items"],
+            # 안전장치 결과 (2026-08-05 추가) — 중단됐는지 한눈에 보이게
+            "aborted": _dg_stock_state.get("aborted"),
+            "undecidable": _dg_stock_state.get("undecidable", 0),
         })
     except Exception:
         pass
