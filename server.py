@@ -9112,6 +9112,10 @@ _dg_stock_state: dict = {}
 _overpriced_fix_fn = None  # lifespan에서 _job_overpriced_scan_and_fix 참조 저장
 
 # 재고 스캔 안전장치 (2026-08-05 사고 후 추가)
+# 도매꾹 요청 간격 — 없어서 차단당했다. 898개면 약 1.2시간 소요된다.
+# 어차피 하루 1회 새벽 배치라 속도보다 안전이 중요하다.
+_DG_SCAN_DELAY = 4.0          # 기본 간격(초)
+_DG_SCAN_JITTER = 2.0         # 0~2초 랜덤 추가 (일정 간격 패턴 회피)
 _DG_SCAN_ABORT_STREAK = 15    # 연속 판정불가 이 횟수면 스캔 중단
 _DG_SCAN_SAMPLE = 50          # 비율 검사 시점 (몇 개 확인한 뒤)
 _DG_SCAN_MAX_RATIO = 0.60     # 표본의 '재고 없음' 비율이 이걸 넘으면 중단
@@ -9330,6 +9334,12 @@ async def _scan_dg_stock_bg(dry_run: bool = False, resume_from: int = 0,
         #      ② 연속 실패가 쌓이면 스캔 자체를 중단 (회로 차단기)
         #      ③ 초반 표본의 '재고 없음' 비율이 비정상이면 중단
         try:
+            # ⚠️ 2026-08-05 근본원인 — 이 루프에 간격이 전혀 없었다.
+            #    898개를 연속으로 요청해 도매꾹에 차단당했고, 그 차단 페이지가
+            #    '재고 없음'으로 읽혀 824개가 판매중지됐다.
+            #    NCP 프록시·터널은 오류 0건·재시작 0회였다(로그 확인). 속도가 문제였다.
+            await _aio.sleep(_DG_SCAN_DELAY + _rnd.uniform(0, _DG_SCAN_JITTER))
+
             async with _hx.AsyncClient(timeout=12, follow_redirects=True) as c:
                 r_dg = await c.get(
                     f"https://domeggook.com/main/item/itemView.php?no={item_no}",
