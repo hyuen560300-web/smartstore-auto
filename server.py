@@ -8879,6 +8879,68 @@ async def _run_restore_all_sale() -> None:
     print(f"[RESTORE-SALE] 완료 — restored:{restored} failed:{failed}", flush=True)
 
 
+@app.post("/restore-one")
+async def restore_one(request: Request):
+    """
+    지정한 상품 1개만 SUSPENSION → SALE로 복원. Body {product_no}
+
+    /restore-all-sale은 판매중지 전체를 한꺼번에 올린다. 진짜 품절이라
+    정당하게 내려간 상품까지 되살아나 주문 사고가 난다.
+    2026-08-05 스캔 오판 복구처럼 '검증된 목록만 1건씩' 되돌릴 때 쓴다.
+
+    도매꾹 재고 확인은 하지 않는다 — 호출 전에 대조를 끝내고 부를 것.
+    """
+    import httpx as _hx
+    from main import NAVER_BASE
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"status": "error", "error": "JSON 파싱 실패"}, status_code=400)
+
+    no = str(data.get("product_no", "")).strip()
+    if not no.isdigit():
+        return JSONResponse({"status": "error", "error": "product_no 필수(숫자)"},
+                            status_code=400)
+    try:
+        headers = await naver_api._headers()
+        async with _hx.AsyncClient(timeout=30) as c:
+            rd = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                             headers=headers)
+        if rd.status_code != 200:
+            return JSONResponse({"status": "error", "product_no": no,
+                                 "error": f"상품 조회 실패 {rd.status_code}: {rd.text[:200]}"},
+                                status_code=400)
+        origin = rd.json().get("originProduct", {})
+        before = origin.get("statusType")
+        name = str(origin.get("name", ""))[:40]
+
+        if before == "SALE":
+            return JSONResponse({"status": "skipped", "product_no": no, "name": name,
+                                 "before": before, "after": before,
+                                 "message": "이미 판매중이라 변경하지 않았습니다"})
+
+        payload = {k: v for k, v in origin.items() if k not in _READONLY_KEYS}
+        payload["statusType"] = "SALE"
+        ok, msg = await naver_api.update_product(no, payload)
+        if not ok:
+            return JSONResponse({"status": "error", "product_no": no, "name": name,
+                                 "before": before, "error": msg}, status_code=502)
+
+        # 실제로 바뀌었는지 되읽어 확인 — update가 200이어도 반영 안 되는 경우가 있다
+        async with _hx.AsyncClient(timeout=30) as c:
+            rv = await c.get(f"{NAVER_BASE}/v2/products/origin-products/{no}",
+                             headers=headers)
+        after = (rv.json().get("originProduct", {}).get("statusType")
+                 if rv.status_code == 200 else "?")
+        print(f"[RESTORE_ONE] {no} {name} {before} -> {after}", flush=True)
+        return JSONResponse({"status": "ok" if after == "SALE" else "unverified",
+                             "product_no": no, "name": name,
+                             "before": before, "after": after})
+    except Exception as e:
+        return JSONResponse({"status": "error", "product_no": no, "error": str(e)[:200]},
+                            status_code=500)
+
+
 @app.post("/restore-all-sale")
 async def restore_all_sale(background_tasks: BackgroundTasks):
     """판매중지 상품 전체를 판매중으로 복구."""
