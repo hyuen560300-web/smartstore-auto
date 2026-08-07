@@ -426,6 +426,43 @@ REGISTERED_CODES_FILE = os.path.join(EXCEL_FOLDER, "registered_codes.json")
 REGISTERED_NAMES_FILE = os.path.join(EXCEL_FOLDER, "registered_names.json")
 CLEANUP_LOG_FILE      = os.path.join(EXCEL_FOLDER, "auto_cleanup.jsonl")
 
+# ─── context_store 인증 ──────────────────────────────────────────────────────
+# 저장소 REST가 2026-08-08까지 인증 없이 열려 있었다. 주소만 알면 누구나
+# 전체 키(비밀번호 해시·이메일·전화번호)를 읽고 아무 키나 덮어쓸 수 있었다.
+#
+# 호출부가 여러 파일에 흩어져 있어(헬퍼도 있고 주소를 직접 박은 곳도 있다)
+# 한 곳씩 고치면 빠뜨린다. httpx 요청 조립 지점에 한 번만 걸어, 저장소로
+# 가는 요청에만 키를 얹는다. 다른 호스트 요청은 건드리지 않는다.
+#
+# CTX_API_KEY가 없으면 아무 일도 하지 않는다 — 지금까지와 똑같이 동작한다.
+_CTX_AUTH_HOST = "loving-serenity-production-2635.up.railway.app"
+_CTX_AUTH_KEY = os.environ.get("CTX_API_KEY", "").strip()
+
+if _CTX_AUTH_KEY:
+    def _ctx_auth_patch() -> None:
+        import httpx as _hx
+
+        def _wrap(cls):
+            original = cls.build_request
+
+            def build_request(self, method, url, **kwargs):
+                request = original(self, method, url, **kwargs)
+                if request.url.host == _CTX_AUTH_HOST:
+                    request.headers["x-api-key"] = _CTX_AUTH_KEY
+                return request
+
+            cls.build_request = build_request
+
+        for _cls in (_hx.Client, _hx.AsyncClient):
+            if not getattr(_cls.build_request, "_ctx_wrapped", False):
+                _wrap(_cls)
+                _cls.build_request._ctx_wrapped = True
+
+    try:
+        _ctx_auth_patch()
+    except Exception as _e:   # 패치 실패가 서비스를 막아서는 안 된다
+        print(f"[CTX-AUTH] 헤더 자동첨부 실패: {_e}", flush=True)
+
 _CONTEXT_STORE_URL = os.environ.get(
     "CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app"
 )
