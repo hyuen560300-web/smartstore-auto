@@ -458,10 +458,50 @@ if _CTX_AUTH_KEY:
                 _wrap(_cls)
                 _cls.build_request._ctx_wrapped = True
 
-    try:
-        _ctx_auth_patch()
-    except Exception as _e:   # 패치 실패가 서비스를 막아서는 안 된다
-        print(f"[CTX-AUTH] 헤더 자동첨부 실패: {_e}", flush=True)
+    def _ctx_auth_patch_requests() -> None:
+        """requests로 부르는 곳도 잡는다."""
+        import requests as _rq
+        _orig = _rq.sessions.Session.request
+
+        def request(self, method, url, **kwargs):
+            if _CTX_AUTH_HOST in str(url):
+                headers = dict(kwargs.get("headers") or {})
+                headers["x-api-key"] = _CTX_AUTH_KEY
+                kwargs["headers"] = headers
+            return _orig(self, method, url, **kwargs)
+
+        if not getattr(_rq.sessions.Session.request, "_ctx_wrapped", False):
+            _rq.sessions.Session.request = request
+            _rq.sessions.Session.request._ctx_wrapped = True
+
+    def _ctx_auth_patch_urllib() -> None:
+        """urllib.request로 부르는 곳도 잡는다."""
+        import urllib.request as _ur
+        _orig = _ur.OpenerDirector.open
+
+        def open_(self, fullurl, data=None, timeout=None):
+            try:
+                url = fullurl if isinstance(fullurl, str) else fullurl.full_url
+                if _CTX_AUTH_HOST in str(url):
+                    if isinstance(fullurl, str):
+                        fullurl = _ur.Request(fullurl, data=data)
+                        data = None
+                    fullurl.add_header("x-api-key", _CTX_AUTH_KEY)
+            except Exception:
+                pass
+            if timeout is None:
+                return _orig(self, fullurl, data)
+            return _orig(self, fullurl, data, timeout)
+
+        if not getattr(_ur.OpenerDirector.open, "_ctx_wrapped", False):
+            _ur.OpenerDirector.open = open_
+            _ur.OpenerDirector.open._ctx_wrapped = True
+
+    for _fn in (_ctx_auth_patch, _ctx_auth_patch_requests, _ctx_auth_patch_urllib):
+        try:
+            _fn()
+        except Exception as _e:   # 패치 실패가 서비스를 막아서는 안 된다
+            print(f"[CTX-AUTH] 헤더 자동첨부 실패({_fn.__name__}): {_e}", flush=True)
 
 _CONTEXT_STORE_URL = os.environ.get(
     "CONTEXT_STORE_URL", "https://loving-serenity-production-2635.up.railway.app"
